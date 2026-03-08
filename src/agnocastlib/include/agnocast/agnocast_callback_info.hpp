@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agnocast/agnocast_executable.hpp"
 #include "agnocast/agnocast_smart_pointer.hpp"
 
 #include <mutex>
@@ -7,8 +8,6 @@
 
 namespace agnocast
 {
-
-struct AgnocastExecutable;
 
 // Base class for a type-erased object
 class AnyObject
