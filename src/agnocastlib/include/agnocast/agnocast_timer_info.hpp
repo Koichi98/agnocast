@@ -34,6 +34,7 @@ struct TimerInfo
   std::atomic<int64_t> next_call_time_ns;
   std::atomic<int64_t> time_credit{0};  // Credit for time elapsed before ROS time is activated
   std::chrono::nanoseconds period;
+  std::atomic<bool> is_canceled{false};
   bool need_epoll_update = true;
 
   rclcpp::Clock::SharedPtr clock;
@@ -58,5 +59,13 @@ void register_timer_info(
   const rclcpp::CallbackGroup::SharedPtr & callback_group, const rclcpp::Clock::SharedPtr & clock);
 
 void unregister_timer_info(uint32_t timer_id);
+
+void cancel_timer(uint32_t timer_id);
+
+void reset_timer(uint32_t timer_id);
+
+bool is_timer_canceled(uint32_t timer_id);
+
+void set_timer_period(uint32_t timer_id, std::chrono::nanoseconds period);
 
 }  // namespace agnocast

@@ -245,7 +245,9 @@ void register_timer_info(
 
 void handle_timer_event(TimerInfo & timer_info)
 {
-  // TODO(Koichi98): Add canceled check here
+  if (timer_info.is_canceled.load(std::memory_order_relaxed)) {
+    return;
+  }
 
   auto timer = timer_info.timer.lock();
   if (!timer) {
@@ -282,6 +284,93 @@ void unregister_timer_info(uint32_t timer_id)
 {
   std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
   id2_timer_info.erase(timer_id);
+}
+
+void cancel_timer(uint32_t timer_id)
+{
+  std::shared_ptr<TimerInfo> timer_info;
+  {
+    std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
+    auto it = id2_timer_info.find(timer_id);
+    if (it == id2_timer_info.end()) {
+      return;
+    }
+    timer_info = it->second;
+  }
+  timer_info->is_canceled.store(true, std::memory_order_relaxed);
+}
+
+void reset_timer(uint32_t timer_id)
+{
+  std::shared_ptr<TimerInfo> timer_info;
+  {
+    std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
+    auto it = id2_timer_info.find(timer_id);
+    if (it == id2_timer_info.end()) {
+      return;
+    }
+    timer_info = it->second;
+  }
+
+  const int64_t now_ns = timer_info->clock->now().nanoseconds();
+  timer_info->last_call_time_ns.store(now_ns, std::memory_order_relaxed);
+  timer_info->next_call_time_ns.store(
+    now_ns + timer_info->period.count(), std::memory_order_relaxed);
+  timer_info->is_canceled.store(false, std::memory_order_relaxed);
+}
+
+bool is_timer_canceled(uint32_t timer_id)
+{
+  std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
+  auto it = id2_timer_info.find(timer_id);
+  if (it == id2_timer_info.end()) {
+    return false;
+  }
+  return it->second->is_canceled.load(std::memory_order_relaxed);
+}
+
+void set_timer_period(uint32_t timer_id, std::chrono::nanoseconds period)
+{
+  std::shared_ptr<TimerInfo> timer_info;
+  {
+    std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
+    auto it = id2_timer_info.find(timer_id);
+    if (it == id2_timer_info.end()) {
+      return;
+    }
+    timer_info = it->second;
+  }
+
+  const auto old_period = timer_info->period;
+  timer_info->period = period;
+
+  // Adjust next_call_time_ns to reflect the period change relative to last_call_time_ns
+  const int64_t last_call_ns = timer_info->last_call_time_ns.load(std::memory_order_relaxed);
+  timer_info->next_call_time_ns.store(last_call_ns + period.count(), std::memory_order_relaxed);
+
+  // Update the timerfd interval if it exists
+  {
+    std::shared_lock lock(timer_info->fd_mutex);
+    if (timer_info->timer_fd >= 0) {
+      struct itimerspec spec = {};
+      const auto period_count = period.count();
+      if (period_count == 0) {
+        spec.it_interval.tv_sec = 0;
+        spec.it_interval.tv_nsec = 1;
+      } else {
+        spec.it_interval.tv_sec = period_count / NANOSECONDS_PER_SECOND;
+        spec.it_interval.tv_nsec = period_count % NANOSECONDS_PER_SECOND;
+      }
+      spec.it_value = spec.it_interval;
+
+      if (timerfd_settime(timer_info->timer_fd, 0, &spec, nullptr) == -1) {
+        RCLCPP_ERROR(
+          rclcpp::get_logger("Agnocast"),
+          "timerfd_settime failed in set_period for timer_id=%u: %s", timer_id,
+          std::strerror(errno));
+      }
+    }
+  }
 }
 
 }  // namespace agnocast
