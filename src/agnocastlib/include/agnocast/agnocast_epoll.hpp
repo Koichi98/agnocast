@@ -12,8 +12,6 @@
 namespace agnocast
 {
 
-struct AgnocastExecutable;
-
 extern std::atomic<bool> need_epoll_updates;
 
 constexpr uint32_t TIMER_EVENT_FLAG = 0x80000000;
