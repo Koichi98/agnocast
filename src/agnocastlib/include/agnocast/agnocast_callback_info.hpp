@@ -47,7 +47,7 @@ struct CallbackInfo
   rclcpp::CallbackGroup::SharedPtr callback_group;
   TypeErasedCallback callback;
   std::function<std::unique_ptr<AnyObject>(
-    const void *, const std::string &, const topic_local_id_t, const uint64_t)>
+    const void *, const std::string &, const topic_local_id_t, const int64_t)>
     message_creator;
   bool need_epoll_update = true;
 };
