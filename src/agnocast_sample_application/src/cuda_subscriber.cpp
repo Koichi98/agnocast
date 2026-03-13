@@ -29,8 +29,7 @@ class CudaSubscriber : public agnocast::Node
     uint8_t host_buf[16]{};
     const size_t copy_size = std::min(gpu_size, sizeof(host_buf));
     if (cudaMemcpy(host_buf, gpu_ptr, copy_size, cudaMemcpyDeviceToHost) != cudaSuccess) {
-      RCLCPP_ERROR(
-        get_logger(), "cudaMemcpy failed: %s", cudaGetErrorString(cudaGetLastError()));
+      RCLCPP_ERROR(get_logger(), "cudaMemcpy failed: %s", cudaGetErrorString(cudaGetLastError()));
       return;
     }
 
