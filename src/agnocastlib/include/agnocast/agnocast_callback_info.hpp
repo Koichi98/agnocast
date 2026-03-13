@@ -66,7 +66,7 @@ uint32_t allocate_callback_info_id();
 
 // Creates an ipc_shared_ptr for a subscriber-received message.
 // For CUDA messages: imports the GPU handle, stores the subscriber-local GPU pointer in
-// control_block->local_gpu_ptr, and registers a gpu_cleanup callback to release the mapping
+// control_block->local_gpu_ptr, and registers a gpu_release_fn to release the mapping
 // on last reference. The pointer is accessed via ipc_shared_ptr::get_local_gpu_ptr().
 // For non-CUDA messages: simply wraps the pointer.
 template <typename MessageT>
@@ -92,8 +92,8 @@ agnocast::ipc_shared_ptr<MessageT> create_subscriber_ipc_ptr(
 
     auto ipc_ptr = agnocast::ipc_shared_ptr<MessageT>(msg, topic_name, subscriber_id, entry_id);
     ipc_ptr.set_local_gpu_ptr(local_gpu_ptr);
-    ipc_ptr.set_gpu_cleanup(
-      [local_gpu_ptr]() { agnocast::cuda::get_backend().release_handle(local_gpu_ptr); });
+    ipc_ptr.set_gpu_release_fn(
+      [](void * ptr) { agnocast::cuda::get_backend().release_handle(ptr); });
     return ipc_ptr;
   } else {
     return agnocast::ipc_shared_ptr<MessageT>(msg, topic_name, subscriber_id, entry_id);

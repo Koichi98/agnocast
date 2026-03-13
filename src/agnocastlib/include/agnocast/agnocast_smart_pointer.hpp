@@ -15,7 +15,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <functional>
 #include <memory>
 #include <type_traits>
 
@@ -69,10 +68,12 @@ struct control_block
   topic_local_id_t pubsub_id;           // 4-byte alignment
   std::atomic<bool> valid{true};        // 1-byte alignment
 
-  // Optional GPU cleanup callback. Null for non-CUDA messages.
-  // Called before bitmap release in reset() to ensure GPU mappings are released
-  // before the publisher can free the underlying GPU buffer.
-  std::function<void()> gpu_cleanup;
+  // Optional GPU cleanup function pointer. Null for non-CUDA messages.
+  // Called as gpu_release_fn(local_gpu_ptr) before bitmap release in reset() to ensure GPU
+  // mappings are released before the publisher can free the underlying GPU buffer.
+  // Uses a plain function pointer instead of std::function to avoid heap allocation and
+  // minimize overhead for non-CUDA messages (16 bytes for two pointers vs ~40+ bytes).
+  void (*gpu_release_fn)(void *) = nullptr;
 
   // Subscriber-local GPU device pointer obtained via import_handle().
   // Stored here because the shared memory message is mapped read-only by the subscriber,
@@ -111,7 +112,7 @@ class ipc_shared_ptr
   template <typename MessageT, typename BridgeRequestPolicy>
   friend class BasicPublisher;
 
-  // Allow create_subscriber_ipc_ptr to call set_gpu_cleanup() and set_local_gpu_ptr()
+  // Allow create_subscriber_ipc_ptr to call set_gpu_release_fn() and set_local_gpu_ptr()
   template <typename MessageT>
   friend ipc_shared_ptr<MessageT> create_subscriber_ipc_ptr(
     MessageT *, const std::string &, const topic_local_id_t, const int64_t);
@@ -144,12 +145,12 @@ class ipc_shared_ptr
     }
   }
 
-  // Sets a GPU cleanup callback to be invoked when the last reference is released.
-  // Private: only create_subscriber_ipc_ptr() should call this.
-  void set_gpu_cleanup(std::function<void()> fn)
+  // Sets a GPU release function to be invoked as fn(local_gpu_ptr) when the last reference
+  // is released. Private: only create_subscriber_ipc_ptr() should call this.
+  void set_gpu_release_fn(void (*fn)(void *))
   {
     if (control_) {
-      control_->gpu_cleanup = std::move(fn);
+      control_->gpu_release_fn = fn;
     }
   }
 
@@ -330,8 +331,8 @@ public:
     if (was_last) {
       // GPU cleanup must run BEFORE bitmap release: unmapping the GPU buffer before
       // the publisher is allowed to cudaFree the underlying allocation.
-      if (control_->gpu_cleanup) {
-        control_->gpu_cleanup();
+      if (control_->gpu_release_fn) {
+        control_->gpu_release_fn(control_->local_gpu_ptr);
       }
 
       if (control_->entry_id != ENTRY_ID_NOT_ASSIGNED) {
