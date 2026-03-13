@@ -42,9 +42,13 @@ void request_bridge_core(
 {
   // CUDA message types cannot be bridged to ROS 2 directly (GPU pointers are not serializable).
   // Bridge support for CUDA types (via cudaMemcpy D2H) is future work.
-  // TODO(agnocast): Log a one-time warning so users know the bridge was skipped for this topic.
   if constexpr (is_cuda_message_v<MessageT>) {
-    (void)topic_name;
+    static const auto logger = rclcpp::get_logger("agnocast_bridge_requester");
+    RCLCPP_WARN(
+      logger,
+      "Bridge skipped for CUDA topic '%s': GPU message types cannot be bridged to ROS 2. "
+      "Use cudaMemcpy to a standard ROS message if DDS bridging is needed.",
+      topic_name.c_str());
     (void)id;
     (void)direction;
     return;
