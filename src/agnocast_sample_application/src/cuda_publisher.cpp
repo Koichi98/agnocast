@@ -35,13 +35,23 @@ class CudaPublisher : public agnocast::Node
 
     // Allocate and fill GPU data
     const size_t gpu_size = msg->height * msg->width * msg->point_step;
-    cudaMalloc(&msg->data, gpu_size);
+    if (cudaMalloc(&msg->data, gpu_size) != cudaSuccess) {
+      RCLCPP_ERROR(get_logger(), "cudaMalloc failed: %s", cudaGetErrorString(cudaGetLastError()));
+      return;
+    }
 
     const int threads = 256;
     const int blocks = (gpu_size + threads - 1) / threads;
     // cppcheck-suppress shiftTooManyBits  // false positive: <<< >>> is CUDA kernel launch syntax
     fill_kernel<<<blocks, threads>>>(msg->data, gpu_size, static_cast<uint8_t>(count_));
-    cudaStreamSynchronize(nullptr);
+
+    if (cudaStreamSynchronize(nullptr) != cudaSuccess) {
+      RCLCPP_ERROR(
+        get_logger(), "kernel launch failed: %s", cudaGetErrorString(cudaGetLastError()));
+      cudaFree(msg->data);
+      msg->data = nullptr;
+      return;
+    }
 
     pub_->publish(std::move(msg));
     RCLCPP_INFO(

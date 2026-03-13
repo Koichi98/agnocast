@@ -20,11 +20,19 @@ class CudaSubscriber : public agnocast::Node
 
     // Get subscriber-local GPU pointer (mapped via CUDA IPC)
     auto * gpu_ptr = static_cast<uint8_t *>(msg.gpu_data());
+    if (!gpu_ptr) {
+      RCLCPP_ERROR(get_logger(), "gpu_data() returned nullptr");
+      return;
+    }
 
     // Read first few bytes from GPU to verify data
     uint8_t host_buf[16]{};
     const size_t copy_size = std::min(gpu_size, sizeof(host_buf));
-    cudaMemcpy(host_buf, gpu_ptr, copy_size, cudaMemcpyDeviceToHost);
+    if (cudaMemcpy(host_buf, gpu_ptr, copy_size, cudaMemcpyDeviceToHost) != cudaSuccess) {
+      RCLCPP_ERROR(
+        get_logger(), "cudaMemcpy failed: %s", cudaGetErrorString(cudaGetLastError()));
+      return;
+    }
 
     RCLCPP_INFO(
       get_logger(),
