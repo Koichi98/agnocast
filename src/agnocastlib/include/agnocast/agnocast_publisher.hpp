@@ -195,8 +195,24 @@ public:
     // NOTE: Assumes MessageT has a public `data` member (uint8_t*) pointing to the GPU allocation.
     // All CUDA message types must provide this by shadowing the base ROS message's data field.
     if constexpr (is_cuda_message_v<MessageT>) {
-      auto & backend = agnocast::cuda::get_backend();
+      if (!raw_ptr->data) {
+        std::fprintf(
+          stderr,
+          "[agnocast] FATAL: CUDA message on topic '%s' has null data pointer. "
+          "Did you forget to cudaMalloc(&msg->data, size) before publish()?\n",
+          topic_name_.c_str());
+        std::abort();
+      }
       const size_t gpu_size = get_cuda_gpu_data_size(*raw_ptr);
+      if (gpu_size == 0) {
+        std::fprintf(
+          stderr,
+          "[agnocast] FATAL: CUDA message on topic '%s' has gpu_data_size == 0. "
+          "Ensure message fields (height, width, point_step, etc.) are set before publish().\n",
+          topic_name_.c_str());
+        std::abort();
+      }
+      auto & backend = agnocast::cuda::get_backend();
       auto * meta = new GpuMetadata();
       meta->publisher_gpu_ptr = raw_ptr->data;
       meta->gpu_data_size = gpu_size;
