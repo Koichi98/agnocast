@@ -16,7 +16,8 @@ struct cuda_message_tag
 };
 
 template <typename T>
-inline constexpr bool is_cuda_message_v = std::is_base_of_v<cuda_message_tag, std::remove_const_t<T>>;
+inline constexpr bool is_cuda_message_v =
+  std::is_base_of_v<cuda_message_tag, std::remove_const_t<T>>;
 
 // Returns the GPU data size for a CUDA message. Must be specialized by each CUDA message type
 // in the agnocast_cuda package (e.g., for PointCloud2: height * width * point_step).

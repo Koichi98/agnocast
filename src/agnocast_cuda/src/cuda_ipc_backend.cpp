@@ -44,8 +44,7 @@ void * CudaIpcBackend::import_handle(const GpuHandle & handle, size_t /*size*/)
   std::memcpy(&ipc_handle, handle.opaque, sizeof(ipc_handle));
   void * ptr = nullptr;
   check_cuda_error(
-    cudaIpcOpenMemHandle(&ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess),
-    "cudaIpcOpenMemHandle");
+    cudaIpcOpenMemHandle(&ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess), "cudaIpcOpenMemHandle");
   return ptr;
 }
 

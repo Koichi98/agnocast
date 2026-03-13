@@ -39,11 +39,13 @@ class CudaPublisher : public agnocast::Node
 
     const int threads = 256;
     const int blocks = (gpu_size + threads - 1) / threads;
+    // cppcheck-suppress shiftTooManyBits  // false positive: <<< >>> is CUDA kernel launch syntax
     fill_kernel<<<blocks, threads>>>(msg->data, gpu_size, static_cast<uint8_t>(count_));
     cudaStreamSynchronize(nullptr);
 
     pub_->publish(std::move(msg));
-    RCLCPP_INFO(get_logger(), "published CUDA PointCloud2: seq=%ld, gpu_size=%zu", count_++, gpu_size);
+    RCLCPP_INFO(
+      get_logger(), "published CUDA PointCloud2: seq=%ld, gpu_size=%zu", count_++, gpu_size);
   }
 
 public:

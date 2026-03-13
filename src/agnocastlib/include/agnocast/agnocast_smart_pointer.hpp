@@ -316,10 +316,7 @@ public:
   T * get() const noexcept { return is_invalidated_() ? nullptr : ptr_; }
 
   // Returns the subscriber-local GPU device pointer, or nullptr for non-CUDA messages.
-  void * get_local_gpu_ptr() const noexcept
-  {
-    return control_ ? control_->local_gpu_ptr : nullptr;
-  }
+  void * get_local_gpu_ptr() const noexcept { return control_ ? control_->local_gpu_ptr : nullptr; }
 
   // Thread-safe: atomically decrements ref count and performs cleanup if last reference.
   void reset()
