@@ -66,8 +66,8 @@ uint32_t allocate_callback_info_id();
 
 // Creates an ipc_shared_ptr for a subscriber-received message.
 // For CUDA messages: imports the GPU handle, stores the subscriber-local GPU pointer in
-// control_block->local_gpu_ptr, and registers a gpu_release_fn to release the mapping
-// on last reference. The pointer is accessed via ipc_shared_ptr::get_local_gpu_ptr().
+// control_block->gpu_data_ptr, and registers a gpu_release_fn to release the mapping
+// on last reference. The pointer is accessed via ipc_shared_ptr::gpu_data().
 // For non-CUDA messages: simply wraps the pointer.
 template <typename MessageT>
 agnocast::ipc_shared_ptr<MessageT> create_subscriber_ipc_ptr(
@@ -84,14 +84,14 @@ agnocast::ipc_shared_ptr<MessageT> create_subscriber_ipc_ptr(
         topic_name.c_str());
       std::abort();
     }
-    void * local_gpu_ptr =
+    void * gpu_data_ptr =
       agnocast::cuda::get_backend().import_handle(meta->handle, meta->gpu_data_size);
     // NOTE: If import_handle() fails, the backend aborts (fail-fast). If a future backend
     // returns nullptr instead, the subscriber would get a null gpu pointer. Callers should
-    // check get_local_gpu_ptr() != nullptr before use.
+    // check gpu_data() != nullptr before use.
 
     auto ipc_ptr = agnocast::ipc_shared_ptr<MessageT>(msg, topic_name, subscriber_id, entry_id);
-    ipc_ptr.set_local_gpu_ptr(local_gpu_ptr);
+    ipc_ptr.set_gpu_data_ptr(gpu_data_ptr);
     ipc_ptr.set_gpu_release_fn(
       [](void * ptr) { agnocast::cuda::get_backend().release_handle(ptr); });
     return ipc_ptr;

@@ -19,7 +19,7 @@ class CudaSubscriber : public agnocast::Node
     const size_t gpu_size = msg->height * width * point_step;
 
     // Get subscriber-local GPU pointer (mapped via CUDA IPC)
-    auto * gpu_ptr = static_cast<uint8_t *>(msg.get_local_gpu_ptr());
+    auto * gpu_ptr = static_cast<uint8_t *>(msg.gpu_data());
 
     // Read first few bytes from GPU to verify data
     uint8_t host_buf[16]{};

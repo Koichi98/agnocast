@@ -69,7 +69,7 @@ struct control_block
   std::atomic<bool> valid{true};        // 1-byte alignment
 
   // Optional GPU cleanup function pointer. Null for non-CUDA messages.
-  // Called as gpu_release_fn(local_gpu_ptr) before bitmap release in reset() to ensure GPU
+  // Called as gpu_release_fn(gpu_data_ptr) before bitmap release in reset() to ensure GPU
   // mappings are released before the publisher can free the underlying GPU buffer.
   // Uses a plain function pointer instead of std::function to avoid heap allocation and
   // minimize overhead for non-CUDA messages (16 bytes for two pointers vs ~40+ bytes).
@@ -78,7 +78,7 @@ struct control_block
   // Subscriber-local GPU device pointer obtained via import_handle().
   // Stored here because the shared memory message is mapped read-only by the subscriber,
   // so we cannot inject the local pointer into msg->data.
-  void * local_gpu_ptr = nullptr;
+  void * gpu_data_ptr = nullptr;
 
   control_block(std::string topic, topic_local_id_t pubsub, int64_t entry)
   : topic_name(std::move(topic)), entry_id(entry), pubsub_id(pubsub)
@@ -112,7 +112,7 @@ class ipc_shared_ptr
   template <typename MessageT, typename BridgeRequestPolicy>
   friend class BasicPublisher;
 
-  // Allow create_subscriber_ipc_ptr to call set_gpu_release_fn() and set_local_gpu_ptr()
+  // Allow create_subscriber_ipc_ptr to call set_gpu_release_fn() and set_gpu_data_ptr()
   template <typename MessageT>
   friend ipc_shared_ptr<MessageT> create_subscriber_ipc_ptr(
     MessageT *, const std::string &, const topic_local_id_t, const int64_t);
@@ -145,7 +145,7 @@ class ipc_shared_ptr
     }
   }
 
-  // Sets a GPU release function to be invoked as fn(local_gpu_ptr) when the last reference
+  // Sets a GPU release function to be invoked as fn(gpu_data_ptr) when the last reference
   // is released. Private: only create_subscriber_ipc_ptr() should call this.
   void set_gpu_release_fn(void (*fn)(void *))
   {
@@ -156,10 +156,10 @@ class ipc_shared_ptr
 
   // Sets the subscriber-local GPU pointer (obtained via import_handle).
   // Private: only create_subscriber_ipc_ptr() should call this.
-  void set_local_gpu_ptr(void * ptr)
+  void set_gpu_data_ptr(void * ptr)
   {
     if (control_) {
-      control_->local_gpu_ptr = ptr;
+      control_->gpu_data_ptr = ptr;
     }
   }
 
@@ -317,7 +317,7 @@ public:
   T * get() const noexcept { return is_invalidated_() ? nullptr : ptr_; }
 
   // Returns the subscriber-local GPU device pointer, or nullptr for non-CUDA messages.
-  void * get_local_gpu_ptr() const noexcept { return control_ ? control_->local_gpu_ptr : nullptr; }
+  void * gpu_data() const noexcept { return control_ ? control_->gpu_data_ptr : nullptr; }
 
   // Thread-safe: atomically decrements ref count and performs cleanup if last reference.
   void reset()
@@ -332,7 +332,7 @@ public:
       // GPU cleanup must run BEFORE bitmap release: unmapping the GPU buffer before
       // the publisher is allowed to cudaFree the underlying allocation.
       if (control_->gpu_release_fn) {
-        control_->gpu_release_fn(control_->local_gpu_ptr);
+        control_->gpu_release_fn(control_->gpu_data_ptr);
       }
 
       if (control_->entry_id != ENTRY_ID_NOT_ASSIGNED) {
