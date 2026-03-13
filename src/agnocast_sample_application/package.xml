@@ -31,6 +31,13 @@
   <depend>agnocast_components</depend>
   <depend>agnocast_sample_interfaces</depend>
 
+  <!-- Optional: CUDA sample applications (built only when CUDAToolkit and agnocast_cuda are found).
+       These are unconditional in package.xml because ROS 2 package format 3 does not support
+       conditional build_depend. On non-CUDA systems, rosdep may warn about agnocast_cuda being
+       unavailable, but the CMakeLists.txt uses find_package(... QUIET) so the build still succeeds. -->
+  <build_depend>agnocast_cuda</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>

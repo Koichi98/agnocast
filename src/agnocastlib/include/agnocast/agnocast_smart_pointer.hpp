@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <memory>
 #include <type_traits>
 
@@ -40,9 +41,17 @@ extern int agnocast_fd;
 // Sentinel value indicating entry_id has not been assigned (publisher-side, before publish).
 constexpr int64_t ENTRY_ID_NOT_ASSIGNED = -1;
 
-// Forward declaration for friend access
+// Forward declarations for friend access
+template <typename T>
+class ipc_shared_ptr;
+
 template <typename MessageT, typename BridgeRequestPolicy>
 class BasicPublisher;
+
+template <typename MessageT>
+ipc_shared_ptr<MessageT> create_subscriber_ipc_ptr(
+  MessageT * msg, const std::string & topic_name, const topic_local_id_t subscriber_id,
+  const int64_t entry_id);
 
 namespace detail
 {
@@ -59,6 +68,16 @@ struct control_block
   std::atomic<uint32_t> ref_count{1U};  // 4-byte alignment
   topic_local_id_t pubsub_id;           // 4-byte alignment
   std::atomic<bool> valid{true};        // 1-byte alignment
+
+  // Optional GPU cleanup callback. Null for non-CUDA messages.
+  // Called before bitmap release in reset() to ensure GPU mappings are released
+  // before the publisher can free the underlying GPU buffer.
+  std::function<void()> gpu_cleanup;
+
+  // Subscriber-local GPU device pointer obtained via import_handle().
+  // Stored here because the shared memory message is mapped read-only by the subscriber,
+  // so we cannot inject the local pointer into msg->data.
+  void * local_gpu_ptr = nullptr;
 
   control_block(std::string topic, topic_local_id_t pubsub, int64_t entry)
   : topic_name(std::move(topic)), entry_id(entry), pubsub_id(pubsub)
@@ -92,6 +111,11 @@ class ipc_shared_ptr
   template <typename MessageT, typename BridgeRequestPolicy>
   friend class BasicPublisher;
 
+  // Allow create_subscriber_ipc_ptr to call set_gpu_cleanup() and set_local_gpu_ptr()
+  template <typename MessageT>
+  friend ipc_shared_ptr<MessageT> create_subscriber_ipc_ptr(
+    MessageT *, const std::string &, const topic_local_id_t, const int64_t);
+
   // Allow converting constructors to access private members of ipc_shared_ptr<U>
   template <typename U>
   friend class ipc_shared_ptr;
@@ -117,6 +141,24 @@ class ipc_shared_ptr
   {
     if (control_) {
       control_->valid.store(false, std::memory_order_release);
+    }
+  }
+
+  // Sets a GPU cleanup callback to be invoked when the last reference is released.
+  // Private: only create_subscriber_ipc_ptr() should call this.
+  void set_gpu_cleanup(std::function<void()> fn)
+  {
+    if (control_) {
+      control_->gpu_cleanup = std::move(fn);
+    }
+  }
+
+  // Sets the subscriber-local GPU pointer (obtained via import_handle).
+  // Private: only create_subscriber_ipc_ptr() should call this.
+  void set_local_gpu_ptr(void * ptr)
+  {
+    if (control_) {
+      control_->local_gpu_ptr = ptr;
     }
   }
 
@@ -273,6 +315,12 @@ public:
 
   T * get() const noexcept { return is_invalidated_() ? nullptr : ptr_; }
 
+  // Returns the subscriber-local GPU device pointer, or nullptr for non-CUDA messages.
+  void * get_local_gpu_ptr() const noexcept
+  {
+    return control_ ? control_->local_gpu_ptr : nullptr;
+  }
+
   // Thread-safe: atomically decrements ref count and performs cleanup if last reference.
   void reset()
   {
@@ -283,6 +331,12 @@ public:
     const bool was_last = control_->decrement_and_check();
 
     if (was_last) {
+      // GPU cleanup must run BEFORE bitmap release: unmapping the GPU buffer before
+      // the publisher is allowed to cudaFree the underlying allocation.
+      if (control_->gpu_cleanup) {
+        control_->gpu_cleanup();
+      }
+
       if (control_->entry_id != ENTRY_ID_NOT_ASSIGNED) {
         // Subscriber side: notify kmod that all references are released.
         release_subscriber_reference(control_->topic_name, control_->pubsub_id, control_->entry_id);

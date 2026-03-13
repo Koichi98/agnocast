@@ -1,0 +1,52 @@
+#include "agnocast/agnocast.hpp"
+#include "agnocast/cuda/types.hpp"
+
+#include <cuda_runtime.h>
+
+#include <algorithm>
+
+using std::placeholders::_1;
+
+class CudaSubscriber : public agnocast::Node
+{
+  agnocast::Subscription<agnocast::cuda::PointCloud2>::SharedPtr sub_;
+
+  void callback(agnocast::ipc_shared_ptr<const agnocast::cuda::PointCloud2> msg)
+  {
+    // Read CPU metadata from shared memory
+    const uint32_t width = msg->width;
+    const uint32_t point_step = msg->point_step;
+    const size_t gpu_size = msg->height * width * point_step;
+
+    // Get subscriber-local GPU pointer (mapped via CUDA IPC)
+    auto * gpu_ptr = static_cast<uint8_t *>(msg.get_local_gpu_ptr());
+
+    // Read first few bytes from GPU to verify data
+    uint8_t host_buf[16]{};
+    const size_t copy_size = std::min(gpu_size, sizeof(host_buf));
+    cudaMemcpy(host_buf, gpu_ptr, copy_size, cudaMemcpyDeviceToHost);
+
+    RCLCPP_INFO(
+      get_logger(),
+      "received CUDA PointCloud2: width=%u, point_step=%u, gpu_size=%zu, "
+      "first_bytes=[%u,%u,%u,%u]",
+      width, point_step, gpu_size, host_buf[0], host_buf[1], host_buf[2], host_buf[3]);
+  }
+
+public:
+  CudaSubscriber() : Node("cuda_subscriber")
+  {
+    sub_ = this->create_subscription<agnocast::cuda::PointCloud2>(
+      "/cuda_pointcloud", 1, std::bind(&CudaSubscriber::callback, this, _1));
+  }
+};
+
+int main(int argc, char ** argv)
+{
+  agnocast::init(argc, argv);
+  agnocast::AgnocastOnlySingleThreadedExecutor executor;
+  auto node = std::make_shared<CudaSubscriber>();
+  executor.add_node(node);
+  executor.spin();
+  return 0;
+}

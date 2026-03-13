@@ -5,6 +5,9 @@
 #include "agnocast/agnocast_smart_pointer.hpp"
 #include "agnocast/agnocast_tracepoint_wrapper.h"
 #include "agnocast/agnocast_utils.hpp"
+#include "agnocast/cuda_message_tag.hpp"
+#include "agnocast/gpu_metadata.hpp"
+#include "agnocast/gpu_transfer_backend.hpp"
 #include "rclcpp/detail/qos_parameters.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -184,7 +187,22 @@ public:
     }
 
     // Capture raw pointer BEFORE invalidation (get() returns nullptr after invalidation).
-    const uint64_t msg_virtual_address = reinterpret_cast<uint64_t>(message.get());
+    MessageT * raw_ptr = message.get();
+    const uint64_t msg_virtual_address = reinterpret_cast<uint64_t>(raw_ptr);
+
+    // CUDA publish hook: export GPU handle and allocate GpuMetadata in shared memory.
+    // Runs while heaphook is still active, so GpuMetadata lands in the publisher's shared memory.
+    // NOTE: Assumes MessageT has a public `data` member (uint8_t*) pointing to the GPU allocation.
+    // All CUDA message types must provide this by shadowing the base ROS message's data field.
+    if constexpr (is_cuda_message_v<MessageT>) {
+      auto & backend = agnocast::cuda::get_backend();
+      const size_t gpu_size = get_cuda_gpu_data_size(*raw_ptr);
+      auto * meta = new GpuMetadata();
+      meta->publisher_gpu_ptr = raw_ptr->data;
+      meta->gpu_data_size = gpu_size;
+      meta->handle = backend.export_handle(raw_ptr->data, gpu_size);
+      raw_ptr->gpu_metadata_ = meta;
+    }
 
     // Invalidate all references sharing this handle's control block.
     // Any remaining copies held elsewhere will fail-fast on dereference.
@@ -197,6 +215,16 @@ public:
 
     for (uint32_t i = 0; i < publish_msg_args.ret_released_num; i++) {
       MessageT * release_ptr = reinterpret_cast<MessageT *>(publish_msg_args.ret_released_addrs[i]);
+      // CUDA reclaim hook: free GPU buffer before deleting the message.
+      // On abnormal publisher exit, free_device_memory() is never called, but GPU device
+      // memory is reclaimed by the CUDA driver when the process exits.
+      if constexpr (is_cuda_message_v<MessageT>) {
+        if (release_ptr->gpu_metadata_) {
+          auto * meta = static_cast<GpuMetadata *>(release_ptr->gpu_metadata_);
+          agnocast::cuda::get_backend().free_device_memory(meta->publisher_gpu_ptr);
+          delete meta;
+        }
+      }
       delete release_ptr;
     }
 

@@ -1,6 +1,9 @@
 #pragma once
 
 #include "agnocast/agnocast_smart_pointer.hpp"
+#include "agnocast/cuda_message_tag.hpp"
+#include "agnocast/gpu_metadata.hpp"
+#include "agnocast/gpu_transfer_backend.hpp"
 
 #include <mutex>
 #include <type_traits>
@@ -61,6 +64,42 @@ extern std::atomic<bool> need_epoll_updates;
 
 uint32_t allocate_callback_info_id();
 
+// Creates an ipc_shared_ptr for a subscriber-received message.
+// For CUDA messages: imports the GPU handle, stores the subscriber-local GPU pointer in
+// control_block->local_gpu_ptr, and registers a gpu_cleanup callback to release the mapping
+// on last reference. The pointer is accessed via ipc_shared_ptr::get_local_gpu_ptr().
+// For non-CUDA messages: simply wraps the pointer.
+template <typename MessageT>
+agnocast::ipc_shared_ptr<MessageT> create_subscriber_ipc_ptr(
+  MessageT * msg, const std::string & topic_name, const topic_local_id_t subscriber_id,
+  const int64_t entry_id)
+{
+  if constexpr (is_cuda_message_v<MessageT>) {
+    auto * meta = static_cast<GpuMetadata *>(msg->gpu_metadata_);
+    if (!meta) {
+      std::fprintf(
+        stderr,
+        "[agnocast] FATAL: CUDA message on topic '%s' has null gpu_metadata_. "
+        "The publisher may have failed to set GpuMetadata during publish().\n",
+        topic_name.c_str());
+      std::abort();
+    }
+    void * local_gpu_ptr =
+      agnocast::cuda::get_backend().import_handle(meta->handle, meta->gpu_data_size);
+    // NOTE: If import_handle() fails, the backend aborts (fail-fast). If a future backend
+    // returns nullptr instead, the subscriber would get a null gpu pointer. Callers should
+    // check get_local_gpu_ptr() != nullptr before use.
+
+    auto ipc_ptr = agnocast::ipc_shared_ptr<MessageT>(msg, topic_name, subscriber_id, entry_id);
+    ipc_ptr.set_local_gpu_ptr(local_gpu_ptr);
+    ipc_ptr.set_gpu_cleanup(
+      [local_gpu_ptr]() { agnocast::cuda::get_backend().release_handle(local_gpu_ptr); });
+    return ipc_ptr;
+  } else {
+    return agnocast::ipc_shared_ptr<MessageT>(msg, topic_name, subscriber_id, entry_id);
+  }
+}
+
 template <typename T, typename Func>
 TypeErasedCallback get_erased_callback(Func && callback)
 {
@@ -95,9 +134,9 @@ uint32_t register_callback(
   auto message_creator = [](
                            const void * ptr, const std::string & topic_name,
                            const topic_local_id_t subscriber_id, const int64_t entry_id) {
-    return std::make_unique<TypedMessagePtr<MessageT>>(agnocast::ipc_shared_ptr<MessageT>(
-      const_cast<MessageT *>(static_cast<const MessageT *>(ptr)), topic_name, subscriber_id,
-      entry_id));
+    auto * msg = const_cast<MessageT *>(static_cast<const MessageT *>(ptr));
+    return std::make_unique<TypedMessagePtr<MessageT>>(
+      create_subscriber_ipc_ptr(msg, topic_name, subscriber_id, entry_id));
   };
 
   uint32_t callback_info_id = allocate_callback_info_id();
