@@ -8,6 +8,7 @@
 #include "agnocast/agnocast_service.hpp"
 #include "agnocast/agnocast_single_threaded_executor.hpp"
 #include "agnocast/agnocast_subscription.hpp"
+#include "agnocast/agnocast_tracepoint_wrapper.h"
 #include "agnocast/bridge/agnocast_bridge_node.hpp"
 #include "agnocast/bridge/performance/agnocast_performance_bridge_plugin_api.hpp"
 #include "agnocast/node/agnocast_context.hpp"
