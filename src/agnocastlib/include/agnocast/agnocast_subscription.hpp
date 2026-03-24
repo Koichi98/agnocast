@@ -339,7 +339,7 @@ public:
 
         MessageT * ptr = reinterpret_cast<MessageT *>(take_args.ret_addr);
         auto result =
-          agnocast::ipc_shared_ptr<const MessageT>(ptr, topic_name_, id_, take_args.ret_entry_id);
+          create_subscriber_ipc_ptr<const MessageT>(ptr, topic_name_, id_, take_args.ret_entry_id);
         old_ptr = std::move(last_taken_ptr_);
         last_taken_ptr_ = result;
         return result;
@@ -347,7 +347,7 @@ public:
     }
 
     MessageT * ptr = reinterpret_cast<MessageT *>(take_args.ret_addr);
-    return agnocast::ipc_shared_ptr<const MessageT>(ptr, topic_name_, id_, take_args.ret_entry_id);
+    return create_subscriber_ipc_ptr<const MessageT>(ptr, topic_name_, id_, take_args.ret_entry_id);
   }
 };
 

@@ -31,6 +31,10 @@
   <depend>agnocast_components</depend>
   <depend>agnocast_sample_interfaces</depend>
 
+  <!-- Note: agnocast_cuda and sensor_msgs are intentionally omitted here.
+       CUDA sample apps are conditionally built via find_package(... QUIET) in CMakeLists.txt.
+       Declaring them as build_depend would force rosdep to require CUDA on non-CUDA systems. -->
+
   <export>
     <build_type>ament_cmake</build_type>
   </export>
