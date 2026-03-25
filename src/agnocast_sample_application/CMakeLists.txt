@@ -165,6 +165,34 @@ install(TARGETS no_rclcpp_client
 install(TARGETS sim_time_timer
   DESTINATION lib/${PROJECT_NAME})
 
+# CUDA sample applications (only built when CUDA and agnocast_cuda are available)
+find_package(CUDAToolkit QUIET)
+find_package(agnocast_cuda QUIET)
+if(CUDAToolkit_FOUND AND agnocast_cuda_FOUND)
+  enable_language(CUDA)
+
+  add_executable(cuda_talker src/cuda_publisher.cpp)
+  set_source_files_properties(src/cuda_publisher.cpp PROPERTIES LANGUAGE CUDA)
+  ament_target_dependencies(cuda_talker agnocastlib agnocast_cuda sensor_msgs)
+  target_link_libraries(cuda_talker CUDA::cudart)
+  target_include_directories(cuda_talker PRIVATE
+    ${agnocastlib_INCLUDE_DIRS}
+    ${agnocast_cuda_INCLUDE_DIRS}
+  )
+
+  add_executable(cuda_listener src/cuda_subscriber.cpp)
+  set_source_files_properties(src/cuda_subscriber.cpp PROPERTIES LANGUAGE CUDA)
+  ament_target_dependencies(cuda_listener agnocastlib agnocast_cuda sensor_msgs)
+  target_link_libraries(cuda_listener CUDA::cudart)
+  target_include_directories(cuda_listener PRIVATE
+    ${agnocastlib_INCLUDE_DIRS}
+    ${agnocast_cuda_INCLUDE_DIRS}
+  )
+
+  install(TARGETS cuda_talker cuda_listener
+    DESTINATION lib/${PROJECT_NAME})
+endif()
+
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}/
 )

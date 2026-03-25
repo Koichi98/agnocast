@@ -1,0 +1,20 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>agnocast_cuda</name>
+  <version>0.1.0</version>
+  <description>
+    CUDA IPC support for Agnocast. Provides GPU message types and cross-process GPU buffer sharing.
+  </description>
+  <maintainer email="sykwer@gmail.com">Takahiro Ishikawa-Aso</maintainer>
+  <license>Apache License 2.0</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>agnocastlib</depend>
+  <depend>sensor_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

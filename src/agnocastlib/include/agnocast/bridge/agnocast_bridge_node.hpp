@@ -4,6 +4,7 @@
 #include "agnocast/agnocast_publisher.hpp"
 #include "agnocast/agnocast_subscription.hpp"
 #include "agnocast/bridge/agnocast_bridge_utils.hpp"
+#include "agnocast/cuda_message_tag.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 #include <dlfcn.h>
@@ -39,11 +40,25 @@ template <typename MessageT>
 void request_bridge_core(
   const std::string & topic_name, topic_local_id_t id, BridgeDirection direction)
 {
-  auto bridge_mode = get_bridge_mode();
-  if (bridge_mode == BridgeMode::Standard) {
-    send_bridge_request<MessageT>(topic_name, id, direction);
-  } else if (bridge_mode == BridgeMode::Performance) {
-    send_performance_bridge_request<MessageT>(topic_name, id, direction);
+  // CUDA message types cannot be bridged to ROS 2 directly (GPU pointers are not serializable).
+  // Bridge support for CUDA types (via cudaMemcpy D2H) is future work.
+  if constexpr (is_cuda_message_v<MessageT>) {
+    static const auto logger = rclcpp::get_logger("agnocast_bridge_requester");
+    RCLCPP_WARN(
+      logger,
+      "Bridge skipped for CUDA topic '%s': GPU message types cannot be bridged to ROS 2. "
+      "Use cudaMemcpy to a standard ROS message if DDS bridging is needed.",
+      topic_name.c_str());
+    (void)id;
+    (void)direction;
+    return;
+  } else {
+    auto bridge_mode = get_bridge_mode();
+    if (bridge_mode == BridgeMode::Standard) {
+      send_bridge_request<MessageT>(topic_name, id, direction);
+    } else if (bridge_mode == BridgeMode::Performance) {
+      send_performance_bridge_request<MessageT>(topic_name, id, direction);
+    }
   }
 }
 
