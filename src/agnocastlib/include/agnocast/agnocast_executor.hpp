@@ -2,6 +2,7 @@
 
 #include "agnocast/agnocast_epoll.hpp"
 #include "agnocast/agnocast_executable.hpp"
+#include "agnocast/agnocast_public_api.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 namespace agnocast
@@ -11,6 +12,9 @@ extern std::mutex mmap_mtx;
 
 void map_read_only_area(const pid_t pid, const uint64_t shm_addr, const uint64_t shm_size);
 
+/** @brief Base class for Stage 1 executors that handle both ROS 2 (RMW) and Agnocast callbacks.
+ * Inherits from rclcpp::Executor. */
+AGNOCAST_PUBLIC
 class AgnocastExecutor : public rclcpp::Executor
 {
   std::mutex ready_agnocast_executables_mutex_;
@@ -33,12 +37,16 @@ protected:
   static void execute_agnocast_executable(AgnocastExecutable & agnocast_executable);
 
 public:
-  RCLCPP_PUBLIC
+  /// Construct the executor.
+  /// @param options Executor options.
+  AGNOCAST_PUBLIC
   explicit AgnocastExecutor(const rclcpp::ExecutorOptions & options = rclcpp::ExecutorOptions());
 
-  RCLCPP_PUBLIC
   virtual ~AgnocastExecutor();
 
+  /// Block the calling thread and process callbacks in a loop until rclcpp::shutdown() is called or
+  /// the executor is cancelled.
+  AGNOCAST_PUBLIC
   virtual void spin() override = 0;
 };
 
