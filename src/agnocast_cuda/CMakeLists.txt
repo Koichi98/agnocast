@@ -16,13 +16,12 @@ find_package(sensor_msgs REQUIRED)
 # CUDA is optional: if not available, headers are still installed but no library is built.
 # Downstream packages that use CUDA message types must check if the agnocast_cuda library
 # target exists (e.g., via find_package + if(TARGET agnocast_cuda::agnocast_cuda)).
-include(CheckLanguage)
-check_language(CUDA)
-
-if(CMAKE_CUDA_COMPILER)
-  enable_language(CUDA)
-  find_package(CUDAToolkit QUIET)
-endif()
+#
+# We use find_package(CUDAToolkit) instead of check_language(CUDA) + enable_language(CUDA)
+# because all sources are .cpp (no .cu files) — we only need to link against cudart, not
+# invoke nvcc. This also avoids the common issue where check_language(CUDA) fails because
+# nvcc is not on PATH even though the CUDA toolkit is installed.
+find_package(CUDAToolkit QUIET)
 
 if(CUDAToolkit_FOUND)
   add_library(agnocast_cuda SHARED
