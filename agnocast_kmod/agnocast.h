@@ -303,7 +303,7 @@ struct ioctl_set_ros2_publisher_num_args
 // ================================================
 // ros2cli ioctls
 
-#define MAX_TOPIC_NUM 1024
+#define MAX_TOPIC_NUM 4096
 
 union ioctl_topic_list_args {
   struct
