@@ -27,6 +27,8 @@ public:
 
   void set_period(std::chrono::nanoseconds period);
 
+  std::chrono::nanoseconds time_until_trigger() const;
+
   virtual bool is_steady() const { return true; }
 
   virtual rclcpp::Clock::SharedPtr get_clock() const = 0;

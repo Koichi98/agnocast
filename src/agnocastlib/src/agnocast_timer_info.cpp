@@ -373,4 +373,25 @@ void set_timer_period(uint32_t timer_id, std::chrono::nanoseconds period)
   }
 }
 
+std::chrono::nanoseconds time_until_trigger(uint32_t timer_id)
+{
+  std::shared_ptr<TimerInfo> timer_info;
+  {
+    std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
+    auto it = id2_timer_info.find(timer_id);
+    if (it == id2_timer_info.end()) {
+      return std::chrono::nanoseconds::max();
+    }
+    timer_info = it->second;
+  }
+
+  if (timer_info->is_canceled.load(std::memory_order_relaxed)) {
+    return std::chrono::nanoseconds::max();
+  }
+
+  const int64_t now_ns = timer_info->clock->now().nanoseconds();
+  const int64_t next_call_ns = timer_info->next_call_time_ns.load(std::memory_order_relaxed);
+  return std::chrono::nanoseconds(next_call_ns - now_ns);
+}
+
 }  // namespace agnocast

@@ -31,4 +31,9 @@ void TimerBase::set_period(std::chrono::nanoseconds period)
   period_ = period;
 }
 
+std::chrono::nanoseconds TimerBase::time_until_trigger() const
+{
+  return agnocast::time_until_trigger(timer_id_);
+}
+
 }  // namespace agnocast

@@ -68,4 +68,6 @@ bool is_timer_canceled(uint32_t timer_id);
 
 void set_timer_period(uint32_t timer_id, std::chrono::nanoseconds period);
 
+std::chrono::nanoseconds time_until_trigger(uint32_t timer_id);
+
 }  // namespace agnocast
