@@ -18,7 +18,7 @@
 Please add **exactly one** of the following labels to this PR:
 
 - `need-major-update`: User API breaking changes
-- `need-minor-update`: Internal API breaking changes (heaphook/kmod/agnocastlib compatibility)
+- `need-minor-update`: Internal API breaking changes (kmod/agnocastlib compatibility)
 - `need-patch-update`: Bug fixes and other changes
 
 **Important notes:**

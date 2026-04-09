@@ -9,7 +9,7 @@ Thank you for your interest in contributing to Agnocast!
 Every pull request **must** have exactly one of the following labels:
 
 - **`need-major-update`**: User API breaking changes - requires MAJOR version update
-- **`need-minor-update`**: Internal API breaking changes (heaphook/kmod/agnocastlib compatibility) - requires MINOR version update
+- **`need-minor-update`**: Internal API breaking changes (kmod/agnocastlib compatibility) - requires MINOR version update
 - **`need-patch-update`**: Bug fixes and other changes - requires PATCH version update
 
 **Important notes:**
@@ -40,7 +40,6 @@ Increment when you make **breaking changes to internal APIs or component compati
 
 This includes changes that affect compatibility between:
 
-- heaphook
 - kmod
 - agnocastlib
 
@@ -48,7 +47,6 @@ Examples:
 
 - Removing or renaming ioctl commands
 - Modifying data structures used in ioctl interfaces
-- Changing shared data structures between heaphook/kmod/agnocastlib
 - Breaking changes to internal APIs not exposed to end users
 
 ### PATCH version (`need-patch-update`)
