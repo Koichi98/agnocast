@@ -27,7 +27,7 @@
 //   - cudaError_t is a C enum (int-sized). cudaSuccess has been 0 since CUDA 1.0.
 //   - cudaIpcMemHandle_t is a 64-byte opaque struct (CUDA_IPC_HANDLE_SIZE = 64).
 //   - cudaIpcMemLazyEnablePeerAccess is a flag constant (0x01).
-//   - cudaDevAttrIntegrated is enum value 73 in cudaDeviceAttr (append-only enum).
+//   - cudaDevAttrIntegrated is enum value 18 in cudaDeviceAttr (append-only enum).
 // If NVIDIA ever breaks this ABI (extremely unlikely), the static_assert in
 // cuda_ipc_backend.cpp will catch size mismatches at compile time.
 //
@@ -125,6 +125,7 @@ private:
   CudartLoader()
   {
     // Try library names in order. See "LIBRARY NAME FALLBACK CHAIN" in the file header.
+    dlerror();  // Clear any stale error before the dlopen loop.
     const char * names[] = {"libcudart.so", "libcudart.so.12", "libcudart.so.11.0"};
     for (const char * name : names) {
       handle_ = dlopen(name, RTLD_NOW | RTLD_LOCAL);

@@ -33,6 +33,8 @@
 
   <!-- agnocast_cuda has no build-time CUDA dependency (it dlopen's libcudart.so at runtime),
        so it is safe to declare as a build_depend on all systems including non-CUDA ones.
+       Note: linking against agnocast_cuda does NOT mean CUDA is available at runtime.
+       Packages that compile .cu files must also check for CUDAToolkit in CMakeLists.txt.
        sensor_msgs is pulled in transitively via agnocast_cuda. -->
   <build_depend>agnocast_cuda</build_depend>
 
