@@ -1,4 +1,5 @@
 #include "cuda_ipc_backend.hpp"
+
 #include "cudart_loader.hpp"
 
 #include <cstdio>
@@ -45,8 +46,7 @@ void * CudaIpcBackend::import_handle(const GpuHandle & handle, size_t /*size*/)
   std::memcpy(&ipc_handle, handle.opaque, sizeof(ipc_handle));
   void * ptr = nullptr;
   check_cuda_error(
-    CudartLoader::instance().cudaIpcOpenMemHandle(
-      &ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess),
+    CudartLoader::instance().cudaIpcOpenMemHandle(&ptr, ipc_handle, cudaIpcMemLazyEnablePeerAccess),
     "cudaIpcOpenMemHandle");
   return ptr;
 }
