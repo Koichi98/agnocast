@@ -169,6 +169,8 @@ install(TARGETS sim_time_timer
 # agnocast_cuda are all available). Note: agnocast_cuda itself has no build-time CUDA
 # dependency (it dlopen's libcudart.so at runtime), but these sample apps compile .cu
 # files with CUDA kernels, so they need the full CUDA toolchain.
+# These binaries are NOT included in the pre-built deb from the ROS build farm (which
+# has no CUDA). Users who want to try the CUDA samples must build from source with CUDA.
 include(CheckLanguage)
 check_language(CUDA)
 find_package(agnocast_cuda QUIET)

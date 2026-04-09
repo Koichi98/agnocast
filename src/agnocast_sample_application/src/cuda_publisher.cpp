@@ -34,9 +34,12 @@ class CudaPublisher : public agnocast::Node
     msg->is_dense = true;
 
     // Allocate and fill GPU data
-    const size_t gpu_size = msg->height * msg->width * msg->point_step;
-    if (cudaMalloc(&msg->data, gpu_size) != cudaSuccess) {
-      RCLCPP_ERROR(get_logger(), "cudaMalloc failed: %s", cudaGetErrorString(cudaGetLastError()));
+    const size_t gpu_size =
+      static_cast<size_t>(msg->height) * static_cast<size_t>(msg->width) *
+      static_cast<size_t>(msg->point_step);
+    const cudaError_t malloc_result = cudaMalloc(&msg->data, gpu_size);
+    if (malloc_result != cudaSuccess) {
+      RCLCPP_ERROR(get_logger(), "cudaMalloc failed: %s", cudaGetErrorString(malloc_result));
       return;
     }
 
@@ -45,9 +48,9 @@ class CudaPublisher : public agnocast::Node
     // cppcheck-suppress shiftTooManyBits  // false positive: <<< >>> is CUDA kernel launch syntax
     fill_kernel<<<blocks, threads>>>(msg->data, gpu_size, static_cast<uint8_t>(count_));
 
-    if (cudaStreamSynchronize(nullptr) != cudaSuccess) {
-      RCLCPP_ERROR(
-        get_logger(), "kernel launch failed: %s", cudaGetErrorString(cudaGetLastError()));
+    const cudaError_t sync_result = cudaStreamSynchronize(nullptr);
+    if (sync_result != cudaSuccess) {
+      RCLCPP_ERROR(get_logger(), "kernel launch failed: %s", cudaGetErrorString(sync_result));
       cudaFree(msg->data);
       msg->data = nullptr;
       return;
@@ -55,7 +58,8 @@ class CudaPublisher : public agnocast::Node
 
     pub_->publish(std::move(msg));
     RCLCPP_INFO(
-      get_logger(), "published CUDA PointCloud2: seq=%ld, gpu_size=%zu", count_++, gpu_size);
+      get_logger(), "published CUDA PointCloud2: seq=%lld, gpu_size=%zu",
+      static_cast<long long>(count_++), gpu_size);
   }
 
 public:

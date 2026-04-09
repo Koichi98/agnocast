@@ -1,10 +1,12 @@
 #pragma once
 
 #include "agnocast/agnocast_smart_pointer.hpp"
+#include "agnocast/agnocast_utils.hpp"
 #include "agnocast/cuda_message_tag.hpp"
 #include "agnocast/gpu_metadata.hpp"
 #include "agnocast/gpu_transfer_backend.hpp"
 
+#include <cstdlib>
 #include <mutex>
 #include <type_traits>
 
@@ -77,10 +79,10 @@ agnocast::ipc_shared_ptr<MessageT> create_subscriber_ipc_ptr(
   if constexpr (is_cuda_message_v<MessageT>) {
     auto * meta = static_cast<GpuMetadata *>(msg->gpu_metadata_);
     if (!meta) {
-      std::fprintf(
-        stderr,
-        "[agnocast] FATAL: CUDA message on topic '%s' has null gpu_metadata_. "
-        "The publisher may have failed to set GpuMetadata during publish().\n",
+      RCLCPP_ERROR(
+        logger,
+        "CUDA message on topic '%s' has null gpu_metadata_. "
+        "The publisher may have failed to set GpuMetadata during publish().",
         topic_name.c_str());
       std::abort();
     }

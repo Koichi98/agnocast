@@ -22,6 +22,7 @@
 #include <unistd.h>
 
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -219,19 +220,19 @@ public:
     // All CUDA message types must provide this by shadowing the base ROS message's data field.
     if constexpr (is_cuda_message_v<MessageT>) {
       if (!raw_ptr->data) {
-        std::fprintf(
-          stderr,
-          "[agnocast] FATAL: CUDA message on topic '%s' has null data pointer. "
-          "Did you forget to cudaMalloc(&msg->data, size) before publish()?\n",
+        RCLCPP_ERROR(
+          logger,
+          "CUDA message on topic '%s' has null data pointer. "
+          "Did you forget to cudaMalloc(&msg->data, size) before publish()?",
           topic_name_.c_str());
         std::abort();
       }
       const size_t gpu_size = get_cuda_gpu_data_size(*raw_ptr);
       if (gpu_size == 0) {
-        std::fprintf(
-          stderr,
-          "[agnocast] FATAL: CUDA message on topic '%s' has gpu_data_size == 0. "
-          "Ensure message fields (height, width, point_step, etc.) are set before publish().\n",
+        RCLCPP_ERROR(
+          logger,
+          "CUDA message on topic '%s' has gpu_data_size == 0. "
+          "Ensure message fields (height, width, point_step, etc.) are set before publish().",
           topic_name_.c_str());
         std::abort();
       }
