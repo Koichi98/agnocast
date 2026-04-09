@@ -1,5 +1,5 @@
 #include "agnocast/agnocast.hpp"
-#include "agnocast/cuda/types.hpp"
+#include "agnocast/cuda/message_types.hpp"
 
 #include <cuda_runtime.h>
 
