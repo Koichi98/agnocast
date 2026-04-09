@@ -16,8 +16,8 @@ class CudaSubscriber : public agnocast::Node
     // Read CPU metadata from shared memory
     const uint32_t width = msg->width;
     const uint32_t point_step = msg->point_step;
-    const size_t gpu_size =
-      static_cast<size_t>(msg->height) * static_cast<size_t>(width) * static_cast<size_t>(point_step);
+    const size_t gpu_size = static_cast<size_t>(msg->height) * static_cast<size_t>(width) *
+                            static_cast<size_t>(point_step);
 
     // Get subscriber-local GPU pointer (mapped via CUDA IPC)
     auto * gpu_ptr = static_cast<uint8_t *>(msg.gpu_data());

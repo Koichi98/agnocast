@@ -34,9 +34,8 @@ class CudaPublisher : public agnocast::Node
     msg->is_dense = true;
 
     // Allocate and fill GPU data
-    const size_t gpu_size =
-      static_cast<size_t>(msg->height) * static_cast<size_t>(msg->width) *
-      static_cast<size_t>(msg->point_step);
+    const size_t gpu_size = static_cast<size_t>(msg->height) * static_cast<size_t>(msg->width) *
+                            static_cast<size_t>(msg->point_step);
     const cudaError_t malloc_result = cudaMalloc(&msg->data, gpu_size);
     if (malloc_result != cudaSuccess) {
       RCLCPP_ERROR(get_logger(), "cudaMalloc failed: %s", cudaGetErrorString(malloc_result));
