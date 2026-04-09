@@ -2,6 +2,16 @@
 Changelog for package agnocast_components
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
+2.3.3 (2026-04-02)
+------------------
+* feat(agnocastlib): enable file logging for `agnocast::Node` (`#1204 <https://github.com/autowarefoundation/agnocast/issues/1204>`_)
+
+2.3.2 (2026-03-24)
+------------------
+
+2.3.1 (2026-03-17)
+------------------
+
 2.3.0 (2026-03-09)
 ------------------
 * fix(components): move tests for component container in `agnocast_components` (`#1126 <https://github.com/autowarefoundation/agnocast/issues/1126>`_)

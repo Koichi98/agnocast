@@ -1,6 +1,6 @@
 #pragma once
 
-#include "agnocast/agnocast_multi_threaded_executor.hpp"
+#include "agnocast/agnocast_callback_isolated_executor.hpp"
 #include "agnocast/bridge/standard/agnocast_standard_bridge_ipc_event_loop.hpp"
 #include "agnocast/bridge/standard/agnocast_standard_bridge_loader.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -50,10 +50,10 @@ private:
   std::atomic_bool shutdown_requested_ = false;
 
   rclcpp::Node::SharedPtr container_node_;
-  std::shared_ptr<agnocast::MultiThreadedAgnocastExecutor> executor_;
+  std::shared_ptr<agnocast::CallbackIsolatedAgnocastExecutor> executor_;
   std::thread executor_thread_;
 
-  std::map<std::string, std::shared_ptr<void>> active_bridges_;
+  std::map<std::string, std::shared_ptr<BridgeBase>> active_bridges_;
   std::map<std::string, BridgeInfo> managed_bridges_;
 
   void start_ros_execution();
@@ -69,14 +69,12 @@ private:
   void send_delegation(const MqMsgBridge & req, pid_t owner_pid);
   void process_managed_bridge(
     const std::string & topic_name, const std::optional<MqMsgBridge> & req);
+  std::pair<bool, bool> should_remove_bridge(const std::string & topic_name, bool is_r2a);
 
   void check_parent_alive();
   void check_active_bridges();
   void check_managed_bridges();
   void check_should_exit();
-
-  void remove_active_bridge(
-    const std::string & topic_name_with_direction, bool keep_managed = false);
 
   static std::pair<std::string, std::string> extract_topic_info(const MqMsgBridge & req);
 };

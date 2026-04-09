@@ -7,12 +7,18 @@
 #include <linux/kernel.h>
 #include <linux/kthread.h>
 #include <linux/mm.h>  // kvzalloc, kvfree
+#include <linux/module.h>
 #include <linux/rwsem.h>
 #include <linux/slab.h>  // kmalloc, kfree
 #include <linux/tracepoint.h>
 #include <linux/version.h>
 
+#ifndef VERSION
+#define VERSION "unknown"
+#endif
+
 MODULE_LICENSE("Dual BSD/GPL");
+MODULE_VERSION(VERSION);
 
 static int major;
 static struct class * agnocast_class;
@@ -33,10 +39,6 @@ static struct device * agnocast_device;
 // - Read lock (down_read): when searching hashtables and operating within a topic
 // - Write lock (down_write): when adding/removing entries from hashtables
 static DECLARE_RWSEM(global_htables_rwsem);
-
-#ifndef VERSION
-#define VERSION "unknown"
-#endif
 
 // =========================================
 // data structure
