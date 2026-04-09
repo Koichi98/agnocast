@@ -28,8 +28,17 @@ AgnocastExecutor::AgnocastExecutor(const rclcpp::ExecutorOptions & options)
     my_pid_, &ready_agnocast_executables_mutex_, &ready_agnocast_executables_);
   sources[static_cast<uint32_t>(EpollEventType::Shutdown)] =
     std::make_unique<ShutdownEventSource>();
+  sources[static_cast<uint32_t>(EpollEventType::EpollUpdate)] =
+    std::make_unique<EpollUpdateEventSource>(epoll_update_tracker_.get_tracker_context());
 
   epoll_manager_ = std::make_unique<EpollManager>(std::move(sources));
+
+  if (
+    epoll_manager_->add_event(
+      epoll_update_tracker_.get_event_fd(), EpollEventType::EpollUpdate, 0) == -1) {
+    RCLCPP_ERROR(logger, "epoll_ctl for epoll_update_event_fd failed: %s", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
 }
 
 AgnocastExecutor::~AgnocastExecutor() = default;

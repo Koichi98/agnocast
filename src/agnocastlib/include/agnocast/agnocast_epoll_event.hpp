@@ -10,6 +10,7 @@ enum class EpollEventType : uint32_t {
   Subscription = 0,
   Timer = 1,
   Shutdown = 2,
+  EpollUpdate = 3,
   NrEventType,
 };
 
