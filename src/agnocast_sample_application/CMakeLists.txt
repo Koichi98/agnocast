@@ -165,11 +165,16 @@ install(TARGETS no_rclcpp_client
 install(TARGETS sim_time_timer
   DESTINATION lib/${PROJECT_NAME})
 
-# CUDA sample applications (only built when CUDA and agnocast_cuda are available)
-find_package(CUDAToolkit QUIET)
+# CUDA sample applications (only built when the CUDA compiler, CUDA toolkit, and
+# agnocast_cuda are all available). Note: agnocast_cuda itself has no build-time CUDA
+# dependency (it dlopen's libcudart.so at runtime), but these sample apps compile .cu
+# files with CUDA kernels, so they need the full CUDA toolchain.
+include(CheckLanguage)
+check_language(CUDA)
 find_package(agnocast_cuda QUIET)
-if(CUDAToolkit_FOUND AND agnocast_cuda_FOUND)
+if(CMAKE_CUDA_COMPILER AND agnocast_cuda_FOUND)
   enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
 
   add_executable(cuda_talker src/cuda_publisher.cpp)
   set_source_files_properties(src/cuda_publisher.cpp PROPERTIES LANGUAGE CUDA)

@@ -31,9 +31,10 @@
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
 
-  <!-- Note: agnocast_cuda and sensor_msgs are intentionally omitted here.
-       CUDA sample apps are conditionally built via find_package(... QUIET) in CMakeLists.txt.
-       Declaring them as build_depend would force rosdep to require CUDA on non-CUDA systems. -->
+  <!-- agnocast_cuda has no build-time CUDA dependency (it dlopen's libcudart.so at runtime),
+       so it is safe to declare as a build_depend on all systems including non-CUDA ones.
+       sensor_msgs is pulled in transitively via agnocast_cuda. -->
+  <build_depend>agnocast_cuda</build_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

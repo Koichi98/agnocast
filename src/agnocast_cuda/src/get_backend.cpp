@@ -1,10 +1,9 @@
 #include "agnocast/gpu_transfer_backend.hpp"
 #include "cuda_ipc_backend.hpp"
+#include "cudart_loader.hpp"
 #include "nvscibuf_backend.hpp"
 #include "unified_memory_backend.hpp"
 #include "vmm_backend.hpp"
-
-#include <cuda_runtime.h>
 
 #include <cstdio>
 #include <cstdlib>
@@ -18,20 +17,22 @@ namespace
 
 std::unique_ptr<GpuTransferBackend> select_backend()
 {
+  const auto & api = CudartLoader::instance();
+
   int device = 0;
-  cudaError_t err = cudaGetDevice(&device);
+  cudaError_t err = api.cudaGetDevice(&device);
   if (err != cudaSuccess) {
     std::fprintf(
-      stderr, "[agnocast_cuda] FATAL: cudaGetDevice failed: %s\n", cudaGetErrorString(err));
+      stderr, "[agnocast_cuda] FATAL: cudaGetDevice failed: %s\n", api.cudaGetErrorString(err));
     std::abort();
   }
 
   int is_integrated = 0;
-  err = cudaDeviceGetAttribute(&is_integrated, cudaDevAttrIntegrated, device);
+  err = api.cudaDeviceGetAttribute(&is_integrated, cudaDevAttrIntegrated, device);
   if (err != cudaSuccess) {
     std::fprintf(
       stderr, "[agnocast_cuda] FATAL: cudaDeviceGetAttribute failed: %s\n",
-      cudaGetErrorString(err));
+      api.cudaGetErrorString(err));
     std::abort();
   }
 
