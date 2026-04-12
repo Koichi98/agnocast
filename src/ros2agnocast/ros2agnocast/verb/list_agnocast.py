@@ -21,6 +21,86 @@ class TopicInfoRet(ctypes.Structure):
         ("qos_is_reliable", ctypes.c_bool),
         ("is_bridge", ctypes.c_bool),
     ]
+
+def remove_service_topic(topic_names):
+    return [name for name in topic_names if not name.startswith('/AGNOCAST_SRV_')]
+
+def determine_bridge_status(sub_nodes, pub_nodes):
+    """Determine bridge status and agnocast endpoint presence from node info lists.
+
+    Args:
+        sub_nodes: list of objects with `is_bridge` attribute (subscriber nodes)
+        pub_nodes: list of objects with `is_bridge` attribute (publisher nodes)
+
+    Returns:
+        (BridgeStatus, has_agnocast_pub, has_agnocast_sub)
+    """
+    has_sub_bridge = False
+    has_pub_bridge = False
+    has_agnocast_sub = False
+    has_agnocast_pub = False
+
+    for n in sub_nodes:
+        if n.is_bridge:
+            has_sub_bridge = True
+        else:
+            has_agnocast_sub = True
+    for n in pub_nodes:
+        if n.is_bridge:
+            has_pub_bridge = True
+        else:
+            has_agnocast_pub = True
+
+    mapping = {
+        (True, True):   BridgeStatus.BIDIRECTION,
+        (True, False):  BridgeStatus.AGNOCAST_TO_ROS2,
+        (False, True):  BridgeStatus.ROS2_TO_AGNOCAST,
+        (False, False): BridgeStatus.NONE,
+    }
+
+    return mapping[(has_sub_bridge, has_pub_bridge)], has_agnocast_pub, has_agnocast_sub
+
+def get_topic_suffix(topic, agnocast_topics_set, ros2_topics_set, ros2_pub_topics, ros2_sub_topics, bridge_status_func):
+    """Determine the display suffix for a topic.
+
+    Args:
+        topic: topic name
+        agnocast_topics_set: set of agnocast topic names
+        ros2_topics_set: set of ros2 topic names (pub | sub)
+        ros2_pub_topics: list of ros2 pub topic names
+        ros2_sub_topics: list of ros2 sub topic names
+        bridge_status_func: callable(topic_name) -> (BridgeStatus, has_agnocast_pub, has_agnocast_sub)
+
+    Returns:
+        suffix string
+    """
+    if topic in agnocast_topics_set and topic not in ros2_topics_set:
+        return " (Agnocast enabled)"
+    elif topic in ros2_topics_set and topic not in agnocast_topics_set:
+        return ""
+    else:
+        bridge_status, has_agnocast_pub, has_agnocast_sub = bridge_status_func(topic)
+        needs_r2a = has_agnocast_sub and topic in ros2_pub_topics
+        needs_a2r = has_agnocast_pub and topic in ros2_sub_topics
+        match bridge_status:
+            case BridgeStatus.BIDIRECTION:
+                return " (Agnocast enabled, bridged)"
+            case BridgeStatus.ROS2_TO_AGNOCAST:
+                if needs_a2r:
+                    return " (WARN: Agnocast and ROS2 endpoints exist but bridge is not active)"
+                else:
+                    return " (Agnocast enabled, bridged)"
+            case BridgeStatus.AGNOCAST_TO_ROS2:
+                if needs_r2a:
+                    return " (WARN: Agnocast and ROS2 endpoints exist but bridge is not active)"
+                else:
+                    return " (Agnocast enabled, bridged)"
+            case BridgeStatus.NONE:
+                if needs_r2a or needs_a2r:
+                    return " (WARN: Agnocast and ROS2 endpoints exist but bridge is not active)"
+                else:
+                    return " (Agnocast enabled)"
+
 class ListAgnocastVerb(VerbExtension):
     "Output a list of available topics including Agnocast"
 
@@ -52,34 +132,10 @@ class ListAgnocastVerb(VerbExtension):
 
             def get_bridge_status(topic_name):
                 name_b = topic_name.encode('utf-8')
+                with agnocast_info_array(lib.get_agnocast_sub_nodes, name_b) as sub_nodes:
+                    with agnocast_info_array(lib.get_agnocast_pub_nodes, name_b) as pub_nodes:
+                        return determine_bridge_status(sub_nodes, pub_nodes)
 
-                has_sub_bridge = False
-                has_pub_bridge = False
-                has_agnocast_sub = False
-                has_agnocast_pub = False
-
-                with agnocast_info_array(lib.get_agnocast_sub_nodes, name_b) as nodes:
-                    for n in nodes:
-                        if n.is_bridge:
-                            has_sub_bridge = True
-                        else:
-                            has_agnocast_sub = True
-                with agnocast_info_array(lib.get_agnocast_pub_nodes, name_b) as nodes:
-                    for n in nodes:
-                        if n.is_bridge:
-                            has_pub_bridge = True
-                        else:
-                            has_agnocast_pub = True
-
-                mapping = {
-                    (True, True):   BridgeStatus.BIDIRECTION,
-                    (True, False):  BridgeStatus.AGNOCAST_TO_ROS2,
-                    (False, True):  BridgeStatus.ROS2_TO_AGNOCAST,
-                    (False, False): BridgeStatus.NONE,
-                }
-
-                return mapping[(has_sub_bridge, has_pub_bridge)], has_agnocast_pub, has_agnocast_sub
-            
             def divide_ros2_topic_into_pubsub(topic_names):
                 pub_topics = []
                 sub_topics = []
@@ -96,10 +152,7 @@ class ListAgnocastVerb(VerbExtension):
                     if subs_info:
                         sub_topics.append(name)
                 return pub_topics, sub_topics
-            
-            def remove_service_topic(topic_names):
-                return [name for name in topic_names if not name.startswith('/AGNOCAST_SRV_')]
-            
+
             # Get Agnocast topics
             topic_count = ctypes.c_int()
             agnocast_topic_array = lib.get_agnocast_topics(ctypes.byref(topic_count))
@@ -112,7 +165,7 @@ class ListAgnocastVerb(VerbExtension):
                 lib.free_agnocast_topics(agnocast_topic_array, topic_count)
 
             agnocast_topics = remove_service_topic(agnocast_topics)
-            
+
             # Get ros2 topics
             ros2_topics_data = get_topic_names_and_types(node=node)
             ros2_topics = [name for name, _ in ros2_topics_data]
@@ -125,30 +178,7 @@ class ListAgnocastVerb(VerbExtension):
             ros2_topics_set = set(ros2_pub_topics) | set(ros2_sub_topics)
 
             for topic in sorted(agnocast_topics_set | ros2_topics_set):
-                if topic in agnocast_topics_set and topic not in ros2_topics_set:
-                    suffix = " (Agnocast enabled)"
-                elif topic in ros2_topics_set and topic not in agnocast_topics_set:
-                    suffix = ""
-                else:
-                    bridge_status, has_agnocast_pub, has_agnocast_sub = get_bridge_status(topic)
-                    needs_r2a = has_agnocast_sub and topic in ros2_pub_topics
-                    needs_a2r = has_agnocast_pub and topic in ros2_sub_topics
-                    match bridge_status:
-                        case BridgeStatus.BIDIRECTION:
-                            suffix = " (Agnocast enabled, bridged)"
-                        case BridgeStatus.ROS2_TO_AGNOCAST:
-                            if needs_a2r:
-                                suffix = " (WARN: Agnocast and ROS2 endpoints exist but bridge is not active)"
-                            else:
-                                suffix = " (Agnocast enabled, bridged)"
-                        case BridgeStatus.AGNOCAST_TO_ROS2:
-                            if needs_r2a:
-                                suffix = " (WARN: Agnocast and ROS2 endpoints exist but bridge is not active)"
-                            else:
-                                suffix = " (Agnocast enabled, bridged)"
-                        case BridgeStatus.NONE:
-                            if needs_r2a or needs_a2r:
-                                suffix = " (WARN: Agnocast and ROS2 endpoints exist but bridge is not active)"
-                            else:
-                                suffix = " (Agnocast enabled)"
+                suffix = get_topic_suffix(
+                    topic, agnocast_topics_set, ros2_topics_set,
+                    ros2_pub_topics, ros2_sub_topics, get_bridge_status)
                 print(f"{topic}{suffix}")
