@@ -133,8 +133,10 @@ class ListAgnocastVerb(VerbExtension):
             def get_bridge_status(topic_name):
                 name_b = topic_name.encode('utf-8')
                 with agnocast_info_array(lib.get_agnocast_sub_nodes, name_b) as sub_nodes:
-                    with agnocast_info_array(lib.get_agnocast_pub_nodes, name_b) as pub_nodes:
-                        return determine_bridge_status(sub_nodes, pub_nodes)
+                    sub_nodes_list = list(sub_nodes)
+                with agnocast_info_array(lib.get_agnocast_pub_nodes, name_b) as pub_nodes:
+                    pub_nodes_list = list(pub_nodes)
+                return determine_bridge_status(sub_nodes_list, pub_nodes_list)
 
             def divide_ros2_topic_into_pubsub(topic_names):
                 pub_topics = []
