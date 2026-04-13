@@ -59,6 +59,7 @@ union ioctl_add_subscriber_args {
     bool is_take_sub;
     bool ignore_local_publications;
     bool is_bridge;
+    int32_t eventfd;  // eventfd created by userspace, passed to kernel for publish notification
   };
   struct
   {
@@ -115,11 +116,6 @@ union ioctl_publish_msg_args {
     struct name_info topic_name;
     topic_local_id_t publisher_id;
     uint64_t msg_virtual_address;
-    // Unlike ret_* fields which are returned via the union copy, subscriber IDs are written
-    // directly to this user-space buffer via copy_to_user. The caller must ensure the buffer
-    // remains valid until the ioctl returns.
-    uint64_t subscriber_ids_buffer_addr;
-    uint32_t subscriber_ids_buffer_size;
   };
   struct
   {
@@ -370,7 +366,7 @@ int agnocast_ioctl_add_subscriber(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const char * node_name,
   const pid_t subscriber_pid, const uint32_t qos_depth, const bool qos_is_transient_local,
   const bool qos_is_reliable, const bool is_take_sub, const bool ignore_local_publications,
-  const bool is_bridge, union ioctl_add_subscriber_args * ioctl_ret);
+  const bool is_bridge, const int32_t eventfd, union ioctl_add_subscriber_args * ioctl_ret);
 
 int agnocast_ioctl_add_publisher(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const char * node_name,
@@ -388,8 +384,7 @@ int agnocast_ioctl_receive_msg(
 
 int agnocast_ioctl_publish_msg(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const topic_local_id_t publisher_id,
-  const uint64_t msg_virtual_address, topic_local_id_t * subscriber_ids_out,
-  uint32_t subscriber_ids_buffer_size, union ioctl_publish_msg_args * ioctl_ret);
+  const uint64_t msg_virtual_address, union ioctl_publish_msg_args * ioctl_ret);
 
 int agnocast_ioctl_take_msg(
   const char * topic_name, const struct ipc_namespace * ipc_ns,

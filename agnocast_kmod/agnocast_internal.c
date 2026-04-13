@@ -57,6 +57,9 @@ static void pre_handler_subscriber_exit(
     }
 
     hash_del(&sub_info->node);
+    if (sub_info->notify_ctx) {
+      eventfd_ctx_put(sub_info->notify_ctx);
+    }
     kfree(sub_info->node_name);
     kfree(sub_info);
 

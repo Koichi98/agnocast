@@ -28,7 +28,7 @@ void test_case_get_topic_sub_info_one_subscriber(struct kunit * test)
 
   ret = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, PID, QOS_DEPTH, false, false, false, false,
-    IS_BRIDGE, &add_sub_args);
+    IS_BRIDGE, -1, &add_sub_args);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
   // copy_to_user inside agnocast_ioctl_get_topic_subscriber_info returns -EFAULT in KUnit

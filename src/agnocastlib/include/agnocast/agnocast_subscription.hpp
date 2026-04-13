@@ -2,7 +2,6 @@
 
 #include "agnocast/agnocast_callback_info.hpp"
 #include "agnocast/agnocast_ioctl.hpp"
-#include "agnocast/agnocast_mq.hpp"
 #include "agnocast/agnocast_public_api.hpp"
 #include "agnocast/agnocast_smart_pointer.hpp"
 #include "agnocast/agnocast_tracepoint_wrapper.h"
@@ -11,7 +10,6 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include <fcntl.h>
-#include <mqueue.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -55,10 +53,7 @@ struct SubscriptionOptions
 };
 
 // These are cut out of the class for information hiding.
-mqd_t open_mq_for_subscription(
-  const std::string & topic_name, const topic_local_id_t subscriber_id,
-  std::pair<mqd_t, std::string> & mq_subscription);
-void remove_mq(const std::pair<mqd_t, std::string> & mq_subscription);
+void close_notify_eventfd(int eventfd);
 uint32_t get_publisher_count_core(const std::string & topic_name);
 
 template <typename NodeT>
@@ -85,6 +80,7 @@ class SubscriptionBase
 protected:
   topic_local_id_t id_;
   const std::string topic_name_;
+  int notify_eventfd_ = -1;
   union ioctl_add_subscriber_args initialize(
     const rclcpp::QoS & qos, const bool is_take_sub, const bool ignore_local_publications,
     const bool is_bridge, const std::string & node_name);
@@ -116,7 +112,6 @@ public:
 template <typename MessageT, typename BridgeRequestPolicy>
 class BasicSubscription : public SubscriptionBase
 {
-  std::pair<mqd_t, std::string> mq_subscription_;
   uint32_t callback_info_id_;
 
   template <typename NodeT, typename Func>
@@ -142,12 +137,11 @@ class BasicSubscription : public SubscriptionBase
     id_ = add_subscriber_args.ret_id;
     BridgeRequestPolicy::template request_bridge<MessageT>(topic_name_, id_);
 
-    mqd_t mq = open_mq_for_subscription(topic_name_, id_, mq_subscription_);
-
     const bool is_transient_local =
       actual_qos.durability() == rclcpp::DurabilityPolicy::TransientLocal;
     callback_info_id_ = agnocast::register_callback<MessageT>(
-      std::forward<Func>(callback), topic_name_, id_, is_transient_local, mq, callback_group);
+      std::forward<Func>(callback), topic_name_, id_, is_transient_local, notify_eventfd_,
+      callback_group);
 
     return actual_qos;
   }
@@ -207,15 +201,15 @@ public:
   ~BasicSubscription()
   {
     // Remove from callback info map to prevent stale references on re-subscription and to avoid
-    // fd reuse conflicts. When mq_close() is called in remove_mq(), the OS may later reuse the
-    // same fd number for a new subscription. If the old entry remains in id2_callback_info,
-    // adding the new fd to epoll (EPOLL_CTL_ADD) can fail with EEXIST because epoll still
-    // associates that fd number with the stale entry.
+    // fd reuse conflicts. When close() is called on the eventfd, the OS may later reuse the same
+    // fd number for a new subscription. If the old entry remains in id2_callback_info, adding the
+    // new fd to epoll (EPOLL_CTL_ADD) can fail with EEXIST because epoll still associates that fd
+    // number with the stale entry.
     {
       std::lock_guard<std::mutex> lock(id2_callback_info_mtx);
       id2_callback_info.erase(callback_info_id_);
     }
-    remove_mq(mq_subscription_);
+    close_notify_eventfd(notify_eventfd_);
   }
 };
 

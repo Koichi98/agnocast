@@ -4,6 +4,7 @@
 #include "agnocast_memory_allocator.h"
 
 #include <linux/device.h>
+#include <linux/eventfd.h>
 #include <linux/fs.h>
 #include <linux/hashtable.h>
 #include <linux/kernel.h>
@@ -98,6 +99,7 @@ struct subscriber_info
   bool ignore_local_publications;
   bool need_mmap_update;
   bool is_bridge;
+  struct eventfd_ctx * notify_ctx;  // eventfd for publish notifications (NULL for take_sub)
   struct hlist_node node;
 };
 

@@ -19,10 +19,6 @@ inline constexpr const char * MAIN_EXECUTABLE_SYMBOL = "__MAIN_EXECUTABLE__";
 
 enum class BridgeDirection : uint32_t { ROS2_TO_AGNOCAST = 0, AGNOCAST_TO_ROS2 = 1 };
 
-struct MqMsgAgnocast
-{
-};
-
 struct MqMsgROS2Publish
 {
   bool should_terminate;

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "agnocast/agnocast_ioctl.hpp"
-#include "agnocast/agnocast_mq.hpp"
 #include "agnocast/agnocast_public_api.hpp"
 #include "agnocast/agnocast_smart_pointer.hpp"
 #include "agnocast/agnocast_tracepoint_wrapper.h"
@@ -10,7 +9,6 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include <fcntl.h>
-#include <mqueue.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -37,8 +35,7 @@ topic_local_id_t initialize_publisher(
   const bool is_bridge);
 union ioctl_publish_msg_args publish_core(
   [[maybe_unused]] const void * publisher_handle, /* for CARET */ const std::string & topic_name,
-  const topic_local_id_t publisher_id, const uint64_t msg_virtual_address,
-  std::unordered_map<topic_local_id_t, std::tuple<mqd_t, bool>> & opened_mqs);
+  const topic_local_id_t publisher_id, const uint64_t msg_virtual_address);
 uint32_t get_subscription_count_core(const std::string & topic_name);
 uint32_t get_intra_subscription_count_core(const std::string & topic_name);
 void increment_borrowed_publisher_num();
@@ -65,7 +62,6 @@ class BasicPublisher
 {
   topic_local_id_t id_ = -1;
   std::string topic_name_;
-  std::unordered_map<topic_local_id_t, std::tuple<mqd_t, bool>> opened_mqs_;
   rmw_gid_t gid_;
 
   void generate_gid()
@@ -154,14 +150,6 @@ public:
 
   ~BasicPublisher()
   {
-    for (auto & [_, t] : opened_mqs_) {
-      mqd_t mq = std::get<0>(t);
-      if (mq_close(mq) == -1) {
-        RCLCPP_ERROR_STREAM(
-          logger, "mq_close failed for topic '" << topic_name_ << "': " << strerror(errno));
-      }
-    }
-
     // NOTE: When a publisher is destroyed, subscribers should unmap its memory, but this is not yet
     // implemented. Since multiple publishers in the same process share a mempool, process-level
     // reference counting in kmod is needed. Leaving memory mapped causes no functional issues, so
@@ -216,7 +204,7 @@ public:
     decrement_borrowed_publisher_num();
 
     const union ioctl_publish_msg_args publish_msg_args =
-      publish_core(this, topic_name_, id_, msg_virtual_address, opened_mqs_);
+      publish_core(this, topic_name_, id_, msg_virtual_address);
 
     for (uint32_t i = 0; i < publish_msg_args.ret_released_num; i++) {
       MessageT * release_ptr = reinterpret_cast<MessageT *>(publish_msg_args.ret_released_addrs[i]);

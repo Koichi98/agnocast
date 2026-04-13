@@ -1,5 +1,8 @@
 #include "node_for_executor_test.hpp"
 
+#include <sys/eventfd.h>
+#include <unistd.h>
+
 NodeForExecutorTest::NodeForExecutorTest(
   const int64_t num_agnocast_sub_cbs, const int64_t num_ros2_sub_cbs,
   const int64_t num_agnocast_cbs_to_be_added, const std::chrono::milliseconds pub_period,
@@ -51,63 +54,43 @@ NodeForExecutorTest::NodeForExecutorTest(
 
 NodeForExecutorTest::~NodeForExecutorTest()
 {
-  for (auto & mq_sender : mq_senders_) {
-    if (mq_close(mq_sender.second) == -1) {
-      std::cerr << "mq_close failed for mq_name='" << mq_sender.first << "': " << strerror(errno)
-                << std::endl;
-    }
-  }
-
-  for (auto & mq_receiver : mq_receivers_) {
-    if (mq_close(mq_receiver.first) == -1) {
-      std::cerr << "mq_close failed for mq_name='" << mq_receiver.second << "': " << strerror(errno)
-                << std::endl;
-    }
-    if (mq_unlink(mq_receiver.second.c_str()) == -1) {
-      std::cerr << "mq_unlink failed for mq_name='" << mq_receiver.second
-                << "': " << strerror(errno) << std::endl;
+  for (auto & efd : eventfds_) {
+    if (efd >= 0) {
+      close(efd);
     }
   }
 }
 
 void NodeForExecutorTest::add_agnocast_sub_cb()
 {
-  int64_t cb_i = mq_receivers_.size();
+  int64_t cb_i = eventfds_.size();
   rclcpp::SubscriptionOptions options;
   auto cbg = (agnocast_common_cbg_)
                ? agnocast_common_cbg_
                : create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
   options.callback_group = cbg;
-  auto mq = open_mq_for_receiver(cb_i);
+  auto efd = open_eventfd_for_receiver();
   std::function<void(const agnocast::ipc_shared_ptr<std_msgs::msg::Bool> &)> callback =
     [this, cb_i](const agnocast::ipc_shared_ptr<std_msgs::msg::Bool> & msg) {
       agnocast_sub_cb(msg, cb_i);
     };
   const bool is_transient_local = false;
   agnocast::register_callback<std_msgs::msg::Bool>(
-    callback, agnocast_topic_name_, cb_i, is_transient_local, mq, cbg);
+    callback, agnocast_topic_name_, cb_i, is_transient_local, efd, cbg);
 }
 
 // NOTE: If the implementation of agnocast is changed, this function does not
 // necessarily have to be changed as well, because this test is for the Executor.
-mqd_t NodeForExecutorTest::open_mq_for_receiver(const int64_t cb_i)
+int NodeForExecutorTest::open_eventfd_for_receiver()
 {
-  std::string mq_name = agnocast_topic_name_ + "@" + std::to_string(cb_i);
-  struct mq_attr attr = {};
-  attr.mq_flags = 0;                                  // Blocking queue
-  attr.mq_msgsize = sizeof(agnocast::MqMsgAgnocast);  // Maximum message size
-  attr.mq_curmsgs = 0;  // Number of messages currently in the queue (not set by mq_open)
-  attr.mq_maxmsg = 1;
-
-  const int mq_mode = 0666;
-  mqd_t mq = mq_open(mq_name.c_str(), O_CREAT | O_RDONLY | O_NONBLOCK, mq_mode, &attr);
-  if (mq == -1) {
-    std::cerr << "mq_open failed for mq_name='" << mq_name << "': " << strerror(errno) << std::endl;
+  int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  if (efd == -1) {
+    std::cerr << "eventfd creation failed: " << strerror(errno) << std::endl;
     exit(EXIT_FAILURE);
   }
-  mq_receivers_.push_back(std::make_pair(mq, mq_name));
+  eventfds_.push_back(efd);
 
-  return mq;
+  return efd;
 }
 
 void NodeForExecutorTest::dummy_work(std::chrono::milliseconds exec_time)
@@ -121,33 +104,19 @@ void NodeForExecutorTest::dummy_work(std::chrono::milliseconds exec_time)
 // necessarily have to be changed as well, because this test is for the Executor.
 void NodeForExecutorTest::agnocast_timer_cb()
 {
-  // mq_send()
-  for (auto & mq_receiver : mq_receivers_) {
-    mqd_t mq = 0;
-    if (mq_senders_.find(mq_receiver.second) != mq_senders_.end()) {
-      mq = mq_senders_[mq_receiver.second];
-    } else {
-      mq = mq_open(mq_receiver.second.c_str(), O_WRONLY | O_NONBLOCK);
-      if (mq == -1) {
-        std::cerr << "mq_open failed for mq_name='" << mq_receiver.second
-                  << "': " << strerror(errno) << std::endl;
-        exit(EXIT_FAILURE);
-      }
-      mq_senders_.insert({mq_receiver.second, mq});
-    }
-
-    agnocast::MqMsgAgnocast mq_msg = {};
-    if (mq_send(mq, reinterpret_cast<char *>(&mq_msg), 0 /*msg_len*/, 0) == -1) {
+  // Write to eventfds to trigger callbacks
+  for (auto & efd : eventfds_) {
+    uint64_t val = 1;
+    if (write(efd, &val, sizeof(val)) == -1) {
       if (errno != EAGAIN) {
-        std::cerr << "mq_send failed for mq_name='" << mq_receiver.second
-                  << "': " << strerror(errno) << std::endl;
+        std::cerr << "eventfd write failed: " << strerror(errno) << std::endl;
         exit(EXIT_FAILURE);
       }
     }
   }
 
   // Add new agnocast sub callbacks
-  if (mq_receivers_.size() < num_total_agnocast_sub_cbs_) {
+  if (eventfds_.size() < num_total_agnocast_sub_cbs_) {
     add_agnocast_sub_cb();
   }
 }

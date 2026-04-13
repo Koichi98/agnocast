@@ -166,17 +166,17 @@ bool wait_and_handle_epoll_event(
       callback_info = it->second;
     }
 
-    MqMsgAgnocast mq_msg = {};
-
-    // non-blocking
-    auto ret =
-      mq_receive(callback_info.mqdes, reinterpret_cast<char *>(&mq_msg), sizeof(mq_msg), nullptr);
+    // Read the eventfd to clear the notification. The read is non-blocking (EFD_NONBLOCK).
+    // NOTE: There is a TOCTOU race between epoll_wait reporting the fd as readable and
+    // this read, but eventfd semantics guarantee that a spurious EAGAIN is the worst case.
+    uint64_t eventfd_val = 0;
+    auto ret = read(callback_info.notify_eventfd, &eventfd_val, sizeof(eventfd_val));
     if (ret < 0) {
       if (errno != EAGAIN) {
         RCLCPP_ERROR_STREAM(
-          logger, "mq_receive failed for topic '" << callback_info.topic_name << "' (subscriber_id="
-                                                  << callback_info.subscriber_id
-                                                  << "): " << strerror(errno));
+          logger, "eventfd read failed for topic '"
+                    << callback_info.topic_name << "' (subscriber_id="
+                    << callback_info.subscriber_id << "): " << strerror(errno));
         close(agnocast_fd);
         exit(EXIT_FAILURE);
       }

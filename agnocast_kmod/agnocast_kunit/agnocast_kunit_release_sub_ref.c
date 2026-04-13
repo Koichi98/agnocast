@@ -12,8 +12,6 @@ static const bool IGNORE_LOCAL_PUBLICATIONS = false;
 static const uint32_t QOS_DEPTH = 1;
 static const bool IS_BRIDGE = false;
 
-static topic_local_id_t subscriber_ids_buf[MAX_SUBSCRIBER_NUM];
-
 // Small buffer size for KUnit tests to avoid exceeding kernel stack frame limits.
 #define KUNIT_PUB_SHM_BUF_SIZE 4
 
@@ -74,8 +72,7 @@ void test_case_release_sub_ref_no_pubsub_id(struct kunit * test)
 
   union ioctl_publish_msg_args publish_msg_args;
   int ret0 = agnocast_ioctl_publish_msg(
-    TOPIC_NAME, current->nsproxy->ipc_ns, ret_publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &publish_msg_args);
+    TOPIC_NAME, current->nsproxy->ipc_ns, ret_publisher_id, ret_addr, &publish_msg_args);
   KUNIT_ASSERT_EQ(test, ret0, 0);
 
   // Act: Attempt to release a reference using the publisher's local ID.
@@ -99,8 +96,7 @@ void test_case_release_sub_ref_last_reference(struct kunit * test)
 
   union ioctl_publish_msg_args publish_msg_args;
   int ret = agnocast_ioctl_publish_msg(
-    TOPIC_NAME, current->nsproxy->ipc_ns, ret_publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &publish_msg_args);
+    TOPIC_NAME, current->nsproxy->ipc_ns, ret_publisher_id, ret_addr, &publish_msg_args);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
   const pid_t subscriber_pid = 1000;
@@ -112,7 +108,7 @@ void test_case_release_sub_ref_last_reference(struct kunit * test)
   union ioctl_add_subscriber_args add_subscriber_args;
   int ret3 = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, QOS_DEPTH,
-    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, false, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
+    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, false, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, -1,
     &add_subscriber_args);
   KUNIT_ASSERT_EQ(test, ret3, 0);
 
@@ -147,8 +143,7 @@ void test_case_release_sub_ref_multi_reference(struct kunit * test)
 
   union ioctl_publish_msg_args publish_msg_args;
   int ret1 = agnocast_ioctl_publish_msg(
-    TOPIC_NAME, current->nsproxy->ipc_ns, ret_publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &publish_msg_args);
+    TOPIC_NAME, current->nsproxy->ipc_ns, ret_publisher_id, ret_addr, &publish_msg_args);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   // First subscriber
@@ -161,7 +156,7 @@ void test_case_release_sub_ref_multi_reference(struct kunit * test)
   union ioctl_add_subscriber_args add_subscriber_args1;
   int ret3 = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid1, QOS_DEPTH,
-    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, false, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
+    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, false, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, -1,
     &add_subscriber_args1);
   KUNIT_ASSERT_EQ(test, ret3, 0);
 
@@ -180,7 +175,7 @@ void test_case_release_sub_ref_multi_reference(struct kunit * test)
   union ioctl_add_subscriber_args add_subscriber_args2;
   int ret6 = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid2, QOS_DEPTH,
-    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, false, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
+    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, false, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, -1,
     &add_subscriber_args2);
   KUNIT_ASSERT_EQ(test, ret6, 0);
 
@@ -225,8 +220,7 @@ void test_case_increment_rc_already_referenced(struct kunit * test)
 
   union ioctl_publish_msg_args publish_msg_args;
   int ret1 = agnocast_ioctl_publish_msg(
-    TOPIC_NAME, current->nsproxy->ipc_ns, ret_publisher_id, ret_addr, subscriber_ids_buf,
-    ARRAY_SIZE(subscriber_ids_buf), &publish_msg_args);
+    TOPIC_NAME, current->nsproxy->ipc_ns, ret_publisher_id, ret_addr, &publish_msg_args);
   KUNIT_ASSERT_EQ(test, ret1, 0);
 
   const pid_t subscriber_pid = 1000;
@@ -238,7 +232,7 @@ void test_case_increment_rc_already_referenced(struct kunit * test)
   union ioctl_add_subscriber_args add_subscriber_args;
   int ret3 = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, QOS_DEPTH,
-    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, false, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
+    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, false, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, -1,
     &add_subscriber_args);
   KUNIT_ASSERT_EQ(test, ret3, 0);
 

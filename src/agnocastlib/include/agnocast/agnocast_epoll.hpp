@@ -53,7 +53,7 @@ void prepare_epoll_impl(
       ev.events = EPOLLIN;
       ev.data.u32 = callback_info_id;
 
-      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, callback_info.mqdes, &ev) == -1) {
+      if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, callback_info.notify_eventfd, &ev) == -1) {
         RCLCPP_ERROR(logger, "epoll_ctl failed: %s", strerror(errno));
         close(agnocast_fd);
         exit(EXIT_FAILURE);
