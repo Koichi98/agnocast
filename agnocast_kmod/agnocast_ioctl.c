@@ -816,6 +816,12 @@ int agnocast_ioctl_publish_msg(
     goto unlock_all;
   }
 
+  // Signal subscriber eventfds directly from kernel (replaces userspace mq_send loop).
+  // NOTE: eventfd_signal() is called under topic_rwsem write lock. Each call is ~100-200 ns
+  // (spin_lock + counter increment + wake_up). For the current max subscriber count (~6-7),
+  // this adds ~1 us which is acceptable. If subscriber count grows significantly, consider
+  // copying notify_ctx pointers (with eventfd_ctx_get) under lock, releasing the lock, then
+  // signaling and putting outside the lock.
   uint32_t subscriber_num = 0;
   struct subscriber_info * sub_info;
   int bkt_sub_info;
