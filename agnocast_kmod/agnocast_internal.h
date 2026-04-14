@@ -113,6 +113,20 @@ static inline long copy_name_from_user(char * dst, size_t dst_size, const struct
   return 0;
 }
 
+// eventfd_signal API changed in 6.8: single-arg (before: two-arg with count)
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6, 8, 0)
+static inline void agnocast_eventfd_signal(struct eventfd_ctx * ctx)
+{
+  eventfd_signal(ctx, 1);
+}
+#else
+#define agnocast_eventfd_signal(ctx) eventfd_signal(ctx)
+#endif
+
+// Stack buffer size for notify_ctx pointer collection in publish_msg.
+// Heap allocation is used as fallback when subscriber count exceeds this.
+#define NOTIFY_CTX_STACK_SIZE 64
+
 struct topic_struct
 {
   struct rb_root entries;

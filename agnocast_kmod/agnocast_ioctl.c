@@ -816,13 +816,21 @@ int agnocast_ioctl_publish_msg(
     goto unlock_all;
   }
 
-  // Signal subscriber eventfds directly from kernel (replaces userspace mq_send loop).
-  // NOTE: eventfd_signal() is called under topic_rwsem write lock. Each call is ~100-200 ns
-  // (spin_lock + counter increment + wake_up). For the current max subscriber count (~6-7),
-  // this adds ~1 us which is acceptable. If subscriber count grows significantly, consider
-  // copying notify_ctx pointers (with eventfd_ctx_get) under lock, releasing the lock, then
-  // signaling and putting outside the lock.
+  // Collect notify_ctx pointers under topic_rwsem write lock, then signal outside the lock
+  // to avoid lock contention. eventfd_signal() takes ~100-200 ns each (spin_lock + counter
+  // increment + wake_up), and for topics with many subscribers (e.g., /tf with 100+), signaling
+  // under lock would block other publish/receive/take operations on the same topic.
+  //
+  // Safety: notify_ctx pointers remain valid after releasing topic_rwsem because we still hold
+  // global_htables_rwsem read lock, and subscriber removal requires global_htables_rwsem write
+  // lock. No eventfd_ctx refcount management is needed.
+  struct eventfd_ctx * notify_ctx_stack[NOTIFY_CTX_STACK_SIZE];
+  struct eventfd_ctx ** notify_ctxs = notify_ctx_stack;
+  bool notify_ctxs_allocated = false;
+  bool notify_alloc_failed = false;
+  uint32_t notify_num = 0;
   uint32_t subscriber_num = 0;
+
   struct subscriber_info * sub_info;
   int bkt_sub_info;
   hash_for_each(wrapper->topic.sub_info_htable, bkt_sub_info, sub_info, node)
@@ -832,7 +840,25 @@ int agnocast_ioctl_publish_msg(
       continue;
     }
     if (sub_info->notify_ctx) {
-      eventfd_signal(sub_info->notify_ctx);
+      if (notify_num == NOTIFY_CTX_STACK_SIZE && !notify_ctxs_allocated && !notify_alloc_failed) {
+        // Stack buffer full, switch to heap allocation
+        uint32_t sub_count = agnocast_get_size_sub_info_htable(wrapper);
+        struct eventfd_ctx ** heap_ctxs =
+          kcalloc(sub_count, sizeof(struct eventfd_ctx *), GFP_ATOMIC);
+        if (heap_ctxs) {
+          memcpy(heap_ctxs, notify_ctx_stack, notify_num * sizeof(struct eventfd_ctx *));
+          notify_ctxs = heap_ctxs;
+          notify_ctxs_allocated = true;
+        } else {
+          notify_alloc_failed = true;
+        }
+      }
+      if (notify_num < NOTIFY_CTX_STACK_SIZE || notify_ctxs_allocated) {
+        notify_ctxs[notify_num++] = sub_info->notify_ctx;
+      } else {
+        // Fallback: signal under lock if heap allocation failed
+        agnocast_eventfd_signal(sub_info->notify_ctx);
+      }
     }
     subscriber_num++;
   }
@@ -840,6 +866,15 @@ int agnocast_ioctl_publish_msg(
 
 unlock_all:
   up_write(&wrapper->topic_rwsem);
+
+  // Signal subscriber eventfds outside topic_rwsem (but still under global_htables_rwsem read lock)
+  for (uint32_t i = 0; i < notify_num; i++) {
+    agnocast_eventfd_signal(notify_ctxs[i]);
+  }
+  if (notify_ctxs_allocated) {
+    kfree(notify_ctxs);
+  }
+
 unlock_only_global:
   up_read(&global_htables_rwsem);
   return ret;
