@@ -9,7 +9,12 @@ Columns used in the tables below:
   - ✓ Works without modification (either the command does not depend on Agnocast semantics, or the information it needs is available on DDS).
   - ⚠ Works partially — typically, DDS-visible aspects (bridged topics, `rclcpp::Node`-based nodes that use Agnocast pub/sub, etc.) are reported correctly, but purely Agnocast-only endpoints are invisible.
   - ✗ Does not see Agnocast-only endpoints because Agnocast bypasses the RMW/DDS layer.
-- **Planned** — whether first-class Agnocast support is intended. `TBD` means this has not been decided based on the current source code and documents.
+  - N/A Not applicable (the command is Agnocast-specific and has no upstream `ros2` counterpart).
+- **Planned** — whether dedicated Agnocast support is intended.
+  - `Yes` Agnocast-specific support is planned.
+  - `No` Explicitly not planned (the command is DDS-only and has no Agnocast counterpart).
+  - `TBD` Not decided.
+  - `-` Not applicable — the command already works as-is (including via the bridge), so no dedicated Agnocast support is needed.
 - **Notes** — short explanation and pointers.
 
 ### 1. Top-level ros2 commands
@@ -125,22 +130,7 @@ Component containers can load `agnocast::Node` subclasses; the container itself 
 | `ros2 bag reindex` | ✗ | ✓ | - | Same as above. |
 | `ros2 bag burst` | ✗ | ✓ | - | Same as `play`. |
 
-### 10. Other commands (no Agnocast-specific behavior)
-
-The following commands are transport-agnostic or DDS-only and are listed for completeness.
-
-| Command / verb | Agnocast version | Works as-is | Planned | Notes |
-|----------------|:----------------:|:-----------:|:-------:|-------|
-| `ros2 interface list` / `show` / `package` / `packages` / `proto` | ✗ | ✓ | - | Message definitions only. |
-| `ros2 pkg create` / `executables` / `list` / `prefix` / `xml` | ✗ | ✓ | - | Package metadata. |
-| `ros2 daemon start` / `stop` / `status` | ✗ | ✓ | - | DDS discovery daemon. |
-| `ros2 doctor` / `ros2 wtf` | ✗ | ✓ | TBD | DDS/RMW diagnostics; Agnocast-specific diagnostics TBD. |
-| `ros2 multicast send` / `receive` | ✗ | ✓ | - | DDS multicast test. |
-| `ros2 security` (all verbs) | ✗ | ✓ | No | DDS security; Agnocast bypasses DDS. |
-| `ros2 launch` | ✗ | ✓ | - | Launches processes. |
-| `ros2 run` | ✗ | ✓ | - | Launches a single executable. |
-
-### 11. `ros2 agnocast` verbs
+### 10. `ros2 agnocast` verbs
 
 `ros2agnocast` registers a top-level `ros2 agnocast` command with the following verbs (see `src/ros2agnocast/setup.py`).
 
