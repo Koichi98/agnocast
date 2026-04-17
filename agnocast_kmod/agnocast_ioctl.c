@@ -827,7 +827,8 @@ int agnocast_ioctl_publish_msg(
   struct eventfd_ctx * notify_ctx_stack[NOTIFY_CTX_STACK_SIZE];
   struct eventfd_ctx ** notify_ctxs = notify_ctx_stack;
   bool notify_ctxs_allocated = false;
-  bool notify_alloc_failed = false;
+  bool notify_within_lock =
+    false;  // Fallback to this when stack is exceeded AND heap allocation fails
   uint32_t notify_num = 0;
   uint32_t subscriber_num = 0;
 
@@ -836,32 +837,39 @@ int agnocast_ioctl_publish_msg(
   hash_for_each(wrapper->topic.sub_info_htable, bkt_sub_info, sub_info, node)
   {
     if (sub_info->is_take_sub) continue;
-    if (sub_info->ignore_local_publications && (sub_info->pid == pub_info->pid)) {
+    if (sub_info->ignore_local_publications && sub_info->pid == pub_info->pid) continue;
+
+    subscriber_num++;
+
+    if (!sub_info->notify_ctx) continue;
+
+    if (notify_within_lock) {
+      agnocast_eventfd_signal(sub_info->notify_ctx);
       continue;
     }
-    if (sub_info->notify_ctx) {
-      if (notify_num == NOTIFY_CTX_STACK_SIZE && !notify_ctxs_allocated && !notify_alloc_failed) {
-        // Stack buffer full, switch to heap allocation
-        uint32_t sub_count = agnocast_get_size_sub_info_htable(wrapper);
-        struct eventfd_ctx ** heap_ctxs =
-          kcalloc(sub_count, sizeof(struct eventfd_ctx *), GFP_ATOMIC);
-        if (heap_ctxs) {
-          memcpy(heap_ctxs, notify_ctx_stack, notify_num * sizeof(struct eventfd_ctx *));
-          notify_ctxs = heap_ctxs;
-          notify_ctxs_allocated = true;
-        } else {
-          notify_alloc_failed = true;
-        }
-      }
-      if (notify_num < NOTIFY_CTX_STACK_SIZE || notify_ctxs_allocated) {
+
+    if (notify_num < NOTIFY_CTX_STACK_SIZE || notify_ctxs_allocated) {
+      // Store the context in the stack or already-allocated heap
+      notify_ctxs[notify_num++] = sub_info->notify_ctx;
+    } else {
+      // Stack is full but we haven't allocated heap yet
+      uint32_t sub_count = agnocast_get_size_sub_info_htable(wrapper);
+      struct eventfd_ctx ** heap = kcalloc(sub_count, sizeof(*heap), GFP_ATOMIC);
+      if (heap) {
+        notify_ctxs_allocated = true;
+
+        // Copy the contexts stored in the stack to the heap
+        memcpy(heap, notify_ctx_stack, notify_num * sizeof(*heap));
+        notify_ctxs = heap;
         notify_ctxs[notify_num++] = sub_info->notify_ctx;
       } else {
-        // Fallback: signal under lock if heap allocation failed
+        // Stack is full and heap allocation failed. Fallback to signaling within the lock
+        notify_within_lock = true;
         agnocast_eventfd_signal(sub_info->notify_ctx);
       }
     }
-    subscriber_num++;
   }
+
   ioctl_ret->ret_subscriber_num = subscriber_num;
 
 unlock_all:
