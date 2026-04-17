@@ -1,3 +1,157 @@
+## Support Status of ros2 Commands for Agnocast
+
+This section enumerates the standard `ros2` CLI commands shipped with `ros2cli` (and related packages such as `ros2bag`, `ros2lifecycle`) and describes how they behave in an Agnocast environment.
+
+Columns used in the tables below:
+
+- **Agnocast version** — whether `ros2agnocast` provides a dedicated Agnocast-aware verb (e.g. `ros2 topic list_agnocast`, `ros2 agnocast generate-bridge-plugins`). ✓ means a variant exists; ✗ means no variant exists today.
+- **Works as-is** — whether the unmodified `ros2` command produces useful results for Agnocast endpoints.
+  - ✓ Works without modification (either the command does not depend on Agnocast semantics, or the information it needs is available on DDS).
+  - ⚠ Works partially — typically, DDS-visible aspects (bridged topics, `rclcpp::Node`-based nodes that use Agnocast pub/sub, etc.) are reported correctly, but purely Agnocast-only endpoints are invisible.
+  - ✗ Does not see Agnocast-only endpoints because Agnocast bypasses the RMW/DDS layer.
+- **Planned** — whether first-class Agnocast support is intended. `TBD` means this has not been decided based on the current source code and documents.
+- **Notes** — short explanation and pointers.
+
+### 1. Top-level ros2 commands
+
+| Command | Agnocast version | Works as-is | Planned | Notes |
+|---------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 action` | ✗ | ✗ | TBD | Agnocast does not implement Actions (see `agnocast_node_interface_comparison.md`). Pure Agnocast nodes are not visible. |
+| `ros2 bag` | ✗ | ✓ | - | Works for bridged topics via the DDS side of the bridge. Purely Agnocast-only topics (without a bridge) are not captured. |
+| `ros2 component` | ✗ | ✓ | - | Component Container loading works for `agnocast::Node`. See "Composable Node Considerations" in `agnocast_node_interface_comparison.md`. |
+| `ros2 daemon` | ✗ | ✓ | - | DDS discovery daemon; unrelated to Agnocast's shared memory path. |
+| `ros2 doctor` / `ros2 wtf` | ✗ | ✓ | TBD | Reports DDS/RMW health only. No Agnocast-specific diagnostics yet. |
+| `ros2 interface` | ✗ | ✓ | - | Works on message definitions only; agnostic to transport. |
+| `ros2 launch` | ✗ | ✓ | - | Launches processes; Agnocast executables are launched the same way. |
+| `ros2 lifecycle` | ✗ | ✗ | TBD | `agnocast::Node` does not support lifecycle (see `agnocast_node_interface_comparison.md` §4.3). |
+| `ros2 multicast` | ✗ | ✓ | - | Exercises DDS multicast; unrelated to Agnocast. |
+| `ros2 node` | ✓ (`list_agnocast`, `info_agnocast`) | ⚠ | - | Pure `agnocast::Node` instances are invisible to standard `ros2 node`. `rclcpp::Node`-based nodes are visible. See §2. |
+| `ros2 param` | ✗ | ⚠ | Yes | `agnocast::Node` supports parameter APIs but does not expose a Parameter Service (see `agnocast_node_interface_comparison.md` §2.3). `rclcpp::Node`-based nodes work as usual. |
+| `ros2 pkg` | ✗ | ✓ | - | Package metadata; no runtime interaction. |
+| `ros2 run` | ✗ | ✓ | - | Launches an executable; no Agnocast-specific behavior. |
+| `ros2 security` | ✗ | ✓ | No | DDS security artifacts; Agnocast bypasses DDS and has no equivalent. |
+| `ros2 service` | ✗ | ✗ | TBD | Agnocast services use internal shared-memory topics prefixed with `/AGNOCAST_SRV_*` and are not exposed via DDS. Agnocast services are marked experimental (see `agnocast_node_interface_comparison.md` §2.6). |
+| `ros2 topic` | ✓ (`list_agnocast`, `info_agnocast`) | ⚠ | - | Pure Agnocast-only topics are invisible. Bridged topics show up via the bridge node. See §3. |
+| `ros2 agnocast` | ✓ (new top-level command) | N/A | - | Provided by `ros2agnocast` for Agnocast-specific operations (`version`, `generate-bridge-plugins`). |
+
+### 2. `ros2 node` verbs
+
+| Verb | Agnocast version | Works as-is | Planned | Notes |
+|------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 node list` | ✓ `list_agnocast` | ⚠ | - | `list_agnocast` merges `ros2 node list` output with Agnocast-derived nodes and marks the latter with `(Agnocast enabled)`. Supports `-a`, `-c`, and `-d` (debug to include internal `agnocast_bridge_node_*`). |
+| `ros2 node info` | ✓ `info_agnocast` | ⚠ | - | `info_agnocast` augments the standard output with Agnocast publishers/subscribers and bridge status labels. |
+
+### 3. `ros2 topic` verbs
+
+| Verb | Agnocast version | Works as-is | Planned | Notes |
+|------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 topic list` | ✓ `list_agnocast` | ⚠ | - | `list_agnocast` reports Agnocast topics with `(Agnocast enabled)` / `(Agnocast enabled, bridged)` suffixes. See §"Topic List" below. |
+| `ros2 topic info` | ✓ `info_agnocast` | ⚠ | - | `info_agnocast` reports Agnocast publisher/subscriber counts and QoS. Supports `-v` and `-d`. See §"Topic Info" below. |
+| `ros2 topic echo` | ✗ | ⚠ | TBD | Works when the bridge is active, but the message type must be specified explicitly, e.g. `ros2 topic echo /my_topic agnocast_sample_interfaces/msg/DynamicSizeArray`. |
+| `ros2 topic pub` | ✗ | ✓ | - | Works via the bridge. |
+| `ros2 topic hz` | ✗ | ✓ | - | Works via the bridge. |
+| `ros2 topic bw` | ✗ | ✗ | TBD | Requires subscribing to the topic. |
+| `ros2 topic delay` | ✗ | ✗ | TBD | Requires subscribing to the topic. |
+| `ros2 topic type` | ✗ | ⚠ | TBD | Bridged topics resolve a type via DDS; Agnocast-only topics do not. |
+| `ros2 topic find` | ✗ | ⚠ | TBD | Same as `type` — only DDS-visible topics are discoverable. |
+
+### 4. `ros2 service` verbs
+
+| Verb | Agnocast version | Works as-is | Planned | Notes |
+|------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 service list` | ✗ | ✗ | TBD | |
+| `ros2 service call` | ✗ | ✗ | TBD | |
+| `ros2 service type` / `find` / `info` / `echo` | ✗ | ✗ | TBD | |
+
+### 5. `ros2 param` verbs
+
+Agnocast's `NodeParameters` implements the parameter APIs but does not create a `ParameterService` (see `agnocast_node_interface_comparison.md` §2.3 "Other differences from rclcpp::NodeParameters"). The comparison document records this as **Planned: Yes**.
+
+| Verb | Agnocast version | Works as-is | Planned | Notes |
+|------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 param list` | ✗ | ⚠ | Yes | Works for `rclcpp::Node` (including nodes using Agnocast pub/sub). Does not work for `agnocast::Node` because no ParameterService is registered. |
+| `ros2 param get` | ✗ | ⚠ | Yes | Same as above. |
+| `ros2 param set` | ✗ | ⚠ | Yes | Same as above. |
+| `ros2 param describe` | ✗ | ⚠ | Yes | Same as above. |
+| `ros2 param dump` | ✗ | ⚠ | Yes | Same as above. |
+| `ros2 param load` | ✗ | ⚠ | Yes | Same as above. |
+| `ros2 param delete` | ✗ | ⚠ | Yes | Same as above. |
+
+### 6. `ros2 action` verbs
+
+`agnocast::Node` does not provide an Actions implementation. Pure Agnocast nodes are not discovered by DDS action discovery.
+
+| Verb | Agnocast version | Works as-is | Planned | Notes |
+|------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 action list` | ✗ | ✗ | TBD | Agnocast has no Action implementation. |
+| `ros2 action info` | ✗ | ✗ | TBD | Same as above. |
+| `ros2 action send_goal` | ✗ | ✗ | TBD | Same as above. |
+| `ros2 action echo` | ✗ | ✗ | TBD | Same as above. |
+
+### 7. `ros2 lifecycle` verbs
+
+`agnocast::Node` does not support Lifecycle (see `agnocast_node_interface_comparison.md` §4.3).
+
+| Verb | Agnocast version | Works as-is | Planned | Notes |
+|------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 lifecycle nodes` | ✗ | ✗ | TBD | No lifecycle support in Agnocast. |
+| `ros2 lifecycle list` | ✗ | ✗ | TBD | Same as above. |
+| `ros2 lifecycle get` | ✗ | ✗ | TBD | Same as above. |
+| `ros2 lifecycle set` | ✗ | ✗ | TBD | Same as above. |
+
+### 8. `ros2 component` verbs
+
+Component containers can load `agnocast::Node` subclasses; the container itself is a DDS participant (see `agnocast_node_interface_comparison.md` §5).
+
+| Verb | Agnocast version | Works as-is | Planned | Notes |
+|------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 component list` | ✗ | ✓ | - | Operates on DDS-visible containers. |
+| `ros2 component load` | ✗ | ✓ | - | Loading an Agnocast-enabled component into a container is supported. |
+| `ros2 component unload` | ✗ | ✓ | - | |
+| `ros2 component types` | ✗ | ✓ | - | Lists registered component plugin types via `ament_index` (`rclcpp_components` resources); transport-agnostic. |
+| `ros2 component standalone` | ✗ | ✓ | - | Launches a component in a self-contained container process. Works for `agnocast::Node`, with the same caveat as Composable Node loading — the container becomes a DDS participant (see `agnocast_node_interface_comparison.md` §5). |
+
+### 9. `ros2 bag` verbs
+
+`ros2 bag` records DDS traffic; Agnocast-only topics live in shared memory and are not captured unless the Agnocast↔ROS 2 bridge is active.
+
+| Verb | Agnocast version | Works as-is | Planned | Notes |
+|------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 bag record` | ✗ | ✓ | - | Works via the bridge. Agnocast-only topics without a bridge are not captured. |
+| `ros2 bag play` | ✗ | ✓ | - | Works via the bridge. Playback publishes via DDS; reaches Agnocast only if a bridge exists. |
+| `ros2 bag info` | ✗ | ✓ | - | Operates on a stored bag file, independent of transport. |
+| `ros2 bag list` | ✗ | ✓ | - | Same as above. |
+| `ros2 bag convert` | ✗ | ✓ | - | Same as above. |
+| `ros2 bag reindex` | ✗ | ✓ | - | Same as above. |
+| `ros2 bag burst` | ✗ | ✓ | - | Same as `play`. |
+
+### 10. Other commands (no Agnocast-specific behavior)
+
+The following commands are transport-agnostic or DDS-only and are listed for completeness.
+
+| Command / verb | Agnocast version | Works as-is | Planned | Notes |
+|----------------|:----------------:|:-----------:|:-------:|-------|
+| `ros2 interface list` / `show` / `package` / `packages` / `proto` | ✗ | ✓ | - | Message definitions only. |
+| `ros2 pkg create` / `executables` / `list` / `prefix` / `xml` | ✗ | ✓ | - | Package metadata. |
+| `ros2 daemon start` / `stop` / `status` | ✗ | ✓ | - | DDS discovery daemon. |
+| `ros2 doctor` / `ros2 wtf` | ✗ | ✓ | TBD | DDS/RMW diagnostics; Agnocast-specific diagnostics TBD. |
+| `ros2 multicast send` / `receive` | ✗ | ✓ | - | DDS multicast test. |
+| `ros2 security` (all verbs) | ✗ | ✓ | No | DDS security; Agnocast bypasses DDS. |
+| `ros2 launch` | ✗ | ✓ | - | Launches processes. |
+| `ros2 run` | ✗ | ✓ | - | Launches a single executable. |
+
+### 11. `ros2 agnocast` verbs
+
+`ros2agnocast` registers a top-level `ros2 agnocast` command with the following verbs (see `src/ros2agnocast/setup.py`).
+
+| Verb | Purpose |
+|------|---------|
+| `ros2 agnocast --version` / `-v` | Print version information for Agnocast components. |
+| `ros2 agnocast version` | Same as `--version` (verb form). |
+| `ros2 agnocast generate-bridge-plugins` | Generate a ROS 2 bridge plugin package for user message types. |
+
+---
+
 ## How to use ros2 command for Agnocast
 
 Currently, Agnocast supports the following `ros2` commands:
