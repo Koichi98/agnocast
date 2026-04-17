@@ -166,23 +166,12 @@ bool wait_and_handle_epoll_event(
       callback_info = it->second;
     }
 
-    // Read the eventfd to clear the notification. The read is non-blocking (EFD_NONBLOCK).
-    // NOTE: There is a TOCTOU race between epoll_wait reporting the fd as readable and
-    // this read, but eventfd semantics guarantee that a spurious EAGAIN is the worst case.
-    uint64_t eventfd_val = 0;
-    auto ret = read(callback_info.notify_eventfd, &eventfd_val, sizeof(eventfd_val));
-    if (ret < 0) {
-      if (errno != EAGAIN) {
-        RCLCPP_ERROR_STREAM(
-          logger, "eventfd read failed for topic '"
-                    << callback_info.topic_name << "' (subscriber_id="
-                    << callback_info.subscriber_id << "): " << strerror(errno));
-        close(agnocast_fd);
-        exit(EXIT_FAILURE);
-      }
-
-      return false;
-    }
+    // The eventfd is shared per-topic: all subscribers on the same topic share one eventfd.
+    // We intentionally do NOT read() the eventfd to drain the counter, because:
+    // - One subscriber's read() would drain the counter to 0, causing other subscribers'
+    //   epoll to not report the event (poll() re-check sees counter == 0).
+    // - Instead, the counter accumulates, and EPOLLET ensures we only wake on new signals.
+    // - RECEIVE_MSG handles catching up on missed messages.
 
     agnocast::enqueue_receive_and_execute(
       callback_info_id, my_pid, callback_info, ready_agnocast_executables_mutex,

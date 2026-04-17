@@ -59,11 +59,12 @@ union ioctl_add_subscriber_args {
     bool is_take_sub;
     bool ignore_local_publications;
     bool is_bridge;
-    int32_t eventfd;  // eventfd created by userspace, passed to kernel for publish notification
+    int32_t eventfd;  // eventfd created by userspace, passed to kernel
   };
   struct
   {
     topic_local_id_t ret_id;
+    int32_t ret_eventfd;  // shared topic eventfd installed for subsequent subscribers (-1 otherwise)
   };
 };
 

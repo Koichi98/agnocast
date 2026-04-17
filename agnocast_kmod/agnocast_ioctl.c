@@ -1,5 +1,7 @@
 #include "agnocast_internal.h"
 
+#include <linux/file.h>
+
 #ifndef KUNIT_BUILD
 // Kernel module uses global PIDs, whereas user-space and the interface between them use local PIDs.
 // Thus, PIDs must be converted from global to local before they are passed from kernel to user.
@@ -109,7 +111,7 @@ static int insert_subscriber_info(
   struct topic_wrapper * wrapper, const char * node_name, const pid_t subscriber_pid,
   const uint32_t qos_depth, const bool qos_is_transient_local, const bool qos_is_reliable,
   const bool is_take_sub, bool ignore_local_publications, const bool is_bridge,
-  struct eventfd_ctx * notify_ctx, struct subscriber_info ** new_info)
+  struct subscriber_info ** new_info)
 {
   int count = agnocast_get_size_sub_info_htable(wrapper);
   if (count == MAX_SUBSCRIBER_NUM) {
@@ -163,7 +165,6 @@ static int insert_subscriber_info(
   (*new_info)->ignore_local_publications = ignore_local_publications;
   (*new_info)->need_mmap_update = true;
   (*new_info)->is_bridge = is_bridge;
-  (*new_info)->notify_ctx = notify_ctx;
   INIT_HLIST_NODE(&(*new_info)->node);
   uint32_t hash_val = hash_min(new_id, SUB_INFO_HASH_BITS);
   hash_add(wrapper->topic.sub_info_htable, &(*new_info)->node, hash_val);
@@ -606,15 +607,26 @@ int agnocast_ioctl_add_subscriber(
   const bool is_bridge, const int32_t eventfd, union ioctl_add_subscriber_args * ioctl_ret)
 {
   int ret;
-  struct eventfd_ctx * notify_ctx = NULL;
+  struct eventfd_ctx * new_ctx = NULL;
+  struct file * new_file = NULL;
+  int notify_fd = -1;
+  struct file * notify_file_ref = NULL;
 
-  // For non-take subscribers, acquire eventfd context for publish notification.
+  // For non-take subscribers, acquire eventfd file and context.
+  // The first subscriber's eventfd becomes the per-topic shared notification eventfd.
+  // Subsequent subscribers receive the shared eventfd via fd_install.
   // eventfd < 0 means no notification (used in kunit tests).
   if (!is_take_sub && eventfd >= 0) {
-    notify_ctx = eventfd_ctx_fdget(eventfd);
-    if (IS_ERR(notify_ctx)) {
-      dev_warn(agnocast_device, "eventfd_ctx_fdget failed.\n");
-      return PTR_ERR(notify_ctx);
+    new_file = eventfd_fget(eventfd);
+    if (IS_ERR(new_file)) {
+      dev_warn(agnocast_device, "eventfd_fget failed.\n");
+      return PTR_ERR(new_file);
+    }
+    new_ctx = eventfd_ctx_fileget(new_file);
+    if (IS_ERR(new_ctx)) {
+      fput(new_file);
+      dev_warn(agnocast_device, "eventfd_ctx_fileget failed.\n");
+      return PTR_ERR(new_ctx);
     }
   }
 
@@ -626,21 +638,58 @@ int agnocast_ioctl_add_subscriber(
     goto unlock;
   }
 
+  // Set up per-topic shared eventfd on first non-take subscriber
+  if (!is_take_sub && new_ctx && !wrapper->shared_notify_ctx) {
+    wrapper->shared_notify_file = new_file;
+    wrapper->shared_notify_ctx = new_ctx;
+    new_file = NULL;  // ownership transferred to topic_wrapper
+    new_ctx = NULL;
+  }
+
+  // For subsequent subscribers, install the shared eventfd into their process fd table
+  if (!is_take_sub && eventfd >= 0 && wrapper->shared_notify_file && new_file != NULL) {
+    // This subscriber was not the first — install the shared fd
+    notify_fd = get_unused_fd_flags(O_CLOEXEC);
+    if (notify_fd >= 0) {
+      notify_file_ref = get_file(wrapper->shared_notify_file);
+    }
+  }
+
   struct subscriber_info * sub_info;
   ret = insert_subscriber_info(
     wrapper, node_name, subscriber_pid, qos_depth, qos_is_transient_local, qos_is_reliable,
-    is_take_sub, ignore_local_publications, is_bridge, notify_ctx, &sub_info);
+    is_take_sub, ignore_local_publications, is_bridge, &sub_info);
   if (ret < 0) {
     goto unlock;
   }
 
   ioctl_ret->ret_id = sub_info->id;
+  ioctl_ret->ret_eventfd = -1;
 
 unlock:
   up_write(&global_htables_rwsem);
-  if (ret < 0 && notify_ctx) {
-    eventfd_ctx_put(notify_ctx);
+
+  // Clean up caller's eventfd refs if we didn't transfer ownership
+  if (new_ctx) {
+    eventfd_ctx_put(new_ctx);
   }
+  if (new_file) {
+    fput(new_file);
+  }
+
+  // Install shared eventfd for subsequent subscribers; first subscriber keeps its own fd
+  if (ret >= 0 && notify_fd >= 0 && notify_file_ref) {
+    fd_install(notify_fd, notify_file_ref);
+    ioctl_ret->ret_eventfd = notify_fd;
+  } else {
+    if (notify_fd >= 0) {
+      put_unused_fd(notify_fd);
+    }
+    if (notify_file_ref) {
+      fput(notify_file_ref);
+    }
+  }
+
   return ret;
 }
 
@@ -816,21 +865,7 @@ int agnocast_ioctl_publish_msg(
     goto unlock_all;
   }
 
-  // Collect notify_ctx pointers under topic_rwsem write lock, then signal outside the lock
-  // to avoid lock contention. eventfd_signal() takes ~100-200 ns each (spin_lock + counter
-  // increment + wake_up), and for topics with many subscribers (e.g., /tf with 100+), signaling
-  // under lock would block other publish/receive/take operations on the same topic.
-  //
-  // Safety: notify_ctx pointers remain valid after releasing topic_rwsem because we still hold
-  // global_htables_rwsem read lock, and subscriber removal requires global_htables_rwsem write
-  // lock. No eventfd_ctx refcount management is needed.
-  struct eventfd_ctx * notify_ctx_stack[NOTIFY_CTX_STACK_SIZE];
-  struct eventfd_ctx ** notify_ctxs = notify_ctx_stack;
-  bool notify_ctxs_allocated = false;
-  bool notify_alloc_failed = false;
-  uint32_t notify_num = 0;
   uint32_t subscriber_num = 0;
-
   struct subscriber_info * sub_info;
   int bkt_sub_info;
   hash_for_each(wrapper->topic.sub_info_htable, bkt_sub_info, sub_info, node)
@@ -839,27 +874,6 @@ int agnocast_ioctl_publish_msg(
     if (sub_info->ignore_local_publications && (sub_info->pid == pub_info->pid)) {
       continue;
     }
-    if (sub_info->notify_ctx) {
-      if (notify_num == NOTIFY_CTX_STACK_SIZE && !notify_ctxs_allocated && !notify_alloc_failed) {
-        // Stack buffer full, switch to heap allocation
-        uint32_t sub_count = agnocast_get_size_sub_info_htable(wrapper);
-        struct eventfd_ctx ** heap_ctxs =
-          kcalloc(sub_count, sizeof(struct eventfd_ctx *), GFP_ATOMIC);
-        if (heap_ctxs) {
-          memcpy(heap_ctxs, notify_ctx_stack, notify_num * sizeof(struct eventfd_ctx *));
-          notify_ctxs = heap_ctxs;
-          notify_ctxs_allocated = true;
-        } else {
-          notify_alloc_failed = true;
-        }
-      }
-      if (notify_num < NOTIFY_CTX_STACK_SIZE || notify_ctxs_allocated) {
-        notify_ctxs[notify_num++] = sub_info->notify_ctx;
-      } else {
-        // Fallback: signal under lock if heap allocation failed
-        agnocast_eventfd_signal(sub_info->notify_ctx);
-      }
-    }
     subscriber_num++;
   }
   ioctl_ret->ret_subscriber_num = subscriber_num;
@@ -867,12 +881,9 @@ int agnocast_ioctl_publish_msg(
 unlock_all:
   up_write(&wrapper->topic_rwsem);
 
-  // Signal subscriber eventfds outside topic_rwsem (but still under global_htables_rwsem read lock)
-  for (uint32_t i = 0; i < notify_num; i++) {
-    agnocast_eventfd_signal(notify_ctxs[i]);
-  }
-  if (notify_ctxs_allocated) {
-    kfree(notify_ctxs);
+  // Signal the per-topic shared eventfd once to wake all subscribers.
+  if (subscriber_num > 0 && wrapper->shared_notify_ctx) {
+    agnocast_eventfd_signal(wrapper->shared_notify_ctx);
   }
 
 unlock_only_global:
@@ -1847,9 +1858,6 @@ int agnocast_ioctl_remove_subscriber(
   }
 
   hash_del(&sub_info->node);
-  if (sub_info->notify_ctx) {
-    eventfd_ctx_put(sub_info->notify_ctx);
-  }
   kfree(sub_info->node_name);
   kfree(sub_info);
 

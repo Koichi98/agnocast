@@ -1,5 +1,7 @@
 #include "agnocast_internal.h"
 
+#include <linux/file.h>
+
 static void remove_all_topics(void)
 {
   struct topic_wrapper * wrapper;
@@ -32,11 +34,15 @@ static void remove_all_topics(void)
     hash_for_each_safe(wrapper->topic.sub_info_htable, bkt_sub_info, tmp_sub_info, sub_info, node)
     {
       hash_del(&sub_info->node);
-      if (sub_info->notify_ctx) {
-        eventfd_ctx_put(sub_info->notify_ctx);
-      }
       kfree(sub_info->node_name);
       kfree(sub_info);
+    }
+
+    if (wrapper->shared_notify_ctx) {
+      eventfd_ctx_put(wrapper->shared_notify_ctx);
+    }
+    if (wrapper->shared_notify_file) {
+      fput(wrapper->shared_notify_file);
     }
 
     hash_del(&wrapper->node);

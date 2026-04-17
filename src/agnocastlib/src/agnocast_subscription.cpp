@@ -53,7 +53,16 @@ union ioctl_add_subscriber_args SubscriptionBase::initialize(
     exit(EXIT_FAILURE);
   }
 
-  notify_eventfd_ = efd;
+  // The first subscriber's eventfd becomes the shared topic eventfd (kernel keeps it).
+  // Subsequent subscribers receive a new fd pointing to the same shared eventfd via ret_eventfd.
+  if (add_subscriber_args.ret_eventfd > 0) {
+    // Subsequent subscriber: close the unused eventfd we created, use the shared one
+    close(efd);
+    notify_eventfd_ = add_subscriber_args.ret_eventfd;
+  } else {
+    // First subscriber: our eventfd is now the shared topic eventfd
+    notify_eventfd_ = efd;
+  }
 
   return add_subscriber_args;
 }

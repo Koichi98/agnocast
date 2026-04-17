@@ -50,7 +50,13 @@ void prepare_epoll_impl(
       }
 
       struct epoll_event ev = {};
-      ev.events = EPOLLIN;
+      // EPOLLET (edge-triggered) is required because the eventfd is shared across all
+      // subscribers on the same topic. With level-triggered mode, one subscriber's read()
+      // would drain the counter to 0, causing other subscribers' epoll_wait to see "not
+      // readable" and miss the notification. With EPOLLET, each eventfd_signal() from the
+      // kernel triggers a new edge event for all epoll instances, regardless of the counter
+      // value. We intentionally never read() the eventfd — the counter just accumulates.
+      ev.events = EPOLLIN | EPOLLET;
       ev.data.u32 = callback_info_id;
 
       if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, callback_info.notify_eventfd, &ev) == -1) {

@@ -99,7 +99,6 @@ struct subscriber_info
   bool ignore_local_publications;
   bool need_mmap_update;
   bool is_bridge;
-  struct eventfd_ctx * notify_ctx;  // eventfd for publish notifications (NULL for take_sub)
   struct hlist_node node;
 };
 
@@ -123,10 +122,6 @@ static inline void agnocast_eventfd_signal(struct eventfd_ctx * ctx)
 #define agnocast_eventfd_signal(ctx) eventfd_signal(ctx)
 #endif
 
-// Stack buffer size for notify_ctx pointer collection in publish_msg.
-// Heap allocation is used as fallback when subscriber count exceeds this.
-#define NOTIFY_CTX_STACK_SIZE 64
-
 struct topic_struct
 {
   struct rb_root entries;
@@ -146,6 +141,8 @@ struct topic_wrapper
   struct rw_semaphore
     topic_rwsem;  // Per-topic rwsem: read for read-only ops, write for publish/receive/modify
   struct topic_struct topic;
+  struct file * shared_notify_file;      // shared eventfd file for publish notifications
+  struct eventfd_ctx * shared_notify_ctx; // eventfd ctx for signaling (extracted from file)
   struct hlist_node node;
 };
 

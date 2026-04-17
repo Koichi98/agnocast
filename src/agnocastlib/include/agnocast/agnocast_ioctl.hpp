@@ -84,6 +84,7 @@ union ioctl_add_subscriber_args {
   struct
   {
     topic_local_id_t ret_id;
+    int32_t ret_eventfd;
   };
 };
 #pragma GCC diagnostic pop
