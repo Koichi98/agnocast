@@ -6,6 +6,10 @@ policy, priority/nice, and CPU affinity against the YAML config.
 
 Run while both agnocast_cie_thread_configurator and the target application are running.
 
+Note: Reading scheduling parameters of threads owned by another user requires
+root privileges or CAP_SYS_PTRACE/CAP_SYS_NICE. Run with 'sudo' if the target
+process is owned by a different user.
+
 Usage:
     python3 verify_thread_config.py <config.yaml> [--pid <pid>]
 """
@@ -32,13 +36,17 @@ SCHED_POLICY_NAMES = {
     6: "SCHED_DEADLINE",
 }
 
-SCHED_POLICY_NUMBERS = {v: k for k, v in SCHED_POLICY_NAMES.items()}
-
 # ---------------------------------------------------------------------------
 # sched_getattr via syscall -- needed to read SCHED_DEADLINE params
 # ---------------------------------------------------------------------------
 _ARCH = platform.machine()
 _SYS_SCHED_GETATTR = {"x86_64": 315, "aarch64": 275}.get(_ARCH)
+
+_libc = None
+if _SYS_SCHED_GETATTR is not None:
+    _lib_name = ctypes.util.find_library("c")
+    if _lib_name:
+        _libc = ctypes.CDLL(_lib_name, use_errno=True)
 
 
 class _SchedAttr(ctypes.Structure):
@@ -55,12 +63,11 @@ class _SchedAttr(ctypes.Structure):
 
 
 def _sched_getattr(tid):
-    if _SYS_SCHED_GETATTR is None:
+    if _libc is None:
         return None
-    libc = ctypes.CDLL(ctypes.util.find_library("c"), use_errno=True)
     attr = _SchedAttr()
     attr.size = ctypes.sizeof(_SchedAttr)
-    ret = libc.syscall(
+    ret = _libc.syscall(
         _SYS_SCHED_GETATTR, tid, ctypes.byref(attr), ctypes.sizeof(_SchedAttr), 0
     )
     if ret != 0:
@@ -83,12 +90,14 @@ def get_thread_sched_info(tid):
         # Fallback when sched_getattr syscall number is unknown
         try:
             policy_int = os.sched_getscheduler(tid)
+            priority = os.sched_getparam(tid).sched_priority
+            nice = os.getpriority(os.PRIO_PROCESS, tid)
         except OSError:
             return None
         return {
             "policy": SCHED_POLICY_NAMES.get(policy_int, f"UNKNOWN({policy_int})"),
-            "priority": os.sched_getparam(tid).sched_priority,
-            "nice": os.getpriority(os.PRIO_PROCESS, tid),
+            "priority": priority,
+            "nice": nice,
         }
 
     return {
@@ -104,6 +113,7 @@ def get_thread_sched_info(tid):
 
 
 def get_thread_affinity(tid):
+    """Return the set of CPU indices the thread is allowed to run on, or None if unavailable."""
     try:
         return os.sched_getaffinity(tid)
     except OSError:
@@ -252,6 +262,7 @@ def get_mismatch_details(expected, actual_info, actual_affinity):
 
     if actual_policy != expected_policy:
         errors.append(f"policy: expected={expected_policy}, actual={actual_policy}")
+        return errors
 
     if expected_policy in ("SCHED_OTHER", "SCHED_BATCH", "SCHED_IDLE"):
         exp_nice = expected.get("priority", 0)
@@ -281,6 +292,27 @@ def get_mismatch_details(expected, actual_info, actual_affinity):
             )
 
     return errors
+
+
+def _find_best_mismatch(expected, all_threads):
+    """Find the thread with fewest mismatches and return a diagnostic message."""
+    if not all_threads:
+        return "No threads found in target process(es)"
+    best_errors = None
+    best_tid = None
+    best_comm = None
+    for tid, info, affinity, comm in all_threads:
+        errors = get_mismatch_details(expected, info, affinity)
+        if best_errors is None or len(errors) < len(best_errors):
+            best_errors = errors
+            best_tid = tid
+            best_comm = comm
+    if best_errors:
+        return (
+            f"Closest thread: tid={best_tid} comm='{best_comm}' — "
+            + "; ".join(best_errors)
+        )
+    return "No thread found matching expected configuration"
 
 
 # ---------------------------------------------------------------------------
@@ -329,21 +361,23 @@ def verify(yaml_config, pids):
         else:
             entry["status"] = "FAIL"
             # Find the closest thread to show mismatch details
-            entry["message"] = "No thread found matching expected configuration"
+            best_details = _find_best_mismatch(expected, all_threads)
+            entry["message"] = best_details
         results.append(entry)
 
     # Check non-ROS threads
     for nrt in yaml_config.get("non_ros_threads") or []:
         expected = dict(nrt)
+        expected_name = expected["name"]
         entry = {
             "type": "non_ros_thread",
-            "name": expected["name"],
+            "name": expected_name,
             "expected": describe_config(expected),
         }
 
         matched_idx = None
-        for i, (tid, info, affinity, _comm) in enumerate(available_threads):
-            if config_matches_thread(expected, info, affinity):
+        for i, (tid, info, affinity, comm) in enumerate(available_threads):
+            if comm == expected_name and config_matches_thread(expected, info, affinity):
                 matched_idx = i
                 break
 
@@ -355,7 +389,19 @@ def verify(yaml_config, pids):
             entry["actual"] = describe_actual(info, affinity)
         else:
             entry["status"] = "FAIL"
-            entry["message"] = "No thread found matching expected configuration"
+            # Check if any thread has the right name but wrong params
+            name_matched = [
+                (tid, info, aff) for tid, info, aff, c in all_threads if c == expected_name
+            ]
+            if name_matched:
+                tid, info, aff = name_matched[0]
+                details = get_mismatch_details(expected, info, aff)
+                entry["message"] = (
+                    f"Thread '{expected_name}' (tid={tid}) found but mismatched: "
+                    + "; ".join(details)
+                )
+            else:
+                entry["message"] = f"No thread with comm name '{expected_name}' found"
         results.append(entry)
 
     return results, all_threads
