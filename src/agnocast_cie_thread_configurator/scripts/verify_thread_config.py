@@ -17,12 +17,16 @@ Usage:
 import argparse
 import ctypes
 import ctypes.util
+import errno
 import os
 import platform
 import re
 import sys
 
 import yaml
+
+# Linux TASK_COMM_LEN is 16; the visible comm string is at most 15 characters.
+_TASK_COMM_LEN = 15
 
 # ---------------------------------------------------------------------------
 # Scheduling policy constants
@@ -79,11 +83,22 @@ def _sched_getattr(tid):
 # ---------------------------------------------------------------------------
 # Read actual thread scheduling state from Linux
 # ---------------------------------------------------------------------------
+_permission_warned = False
+
+
 def get_thread_sched_info(tid):
     """Return dict with actual scheduling info for *tid*, or None if the thread is gone."""
+    global _permission_warned
     try:
         attr = _sched_getattr(tid)
-    except OSError:
+    except OSError as e:
+        if e.errno in (errno.EPERM, errno.EACCES) and not _permission_warned:
+            print(
+                f"Warning: Permission denied reading scheduling info for tid {tid}. "
+                "Run with elevated privileges for accurate results.",
+                file=sys.stderr,
+            )
+            _permission_warned = True
         return None
 
     if attr is None:
@@ -92,7 +107,14 @@ def get_thread_sched_info(tid):
             policy_int = os.sched_getscheduler(tid)
             priority = os.sched_getparam(tid).sched_priority
             nice = os.getpriority(os.PRIO_PROCESS, tid)
-        except OSError:
+        except OSError as e:
+            if e.errno in (errno.EPERM, errno.EACCES) and not _permission_warned:
+                print(
+                    f"Warning: Permission denied reading scheduling info for tid {tid}. "
+                    "Run with elevated privileges for accurate results.",
+                    file=sys.stderr,
+                )
+                _permission_warned = True
             return None
         return {
             "policy": SCHED_POLICY_NAMES.get(policy_int, f"UNKNOWN({policy_int})"),
@@ -294,6 +316,12 @@ def get_mismatch_details(expected, actual_info, actual_affinity):
     return errors
 
 
+def _extract_node_name_from_id(cbg_id):
+    """Extract node name from a callback group ID like /node_name@..."""
+    match = re.match(r"^/([^@/]+)", cbg_id)
+    return match.group(1) if match else None
+
+
 def _find_best_mismatch(expected, all_threads):
     """Find the thread with fewest mismatches and return a diagnostic message."""
     if not all_threads:
@@ -318,10 +346,19 @@ def _find_best_mismatch(expected, all_threads):
 # ---------------------------------------------------------------------------
 # Verification
 # ---------------------------------------------------------------------------
-def verify(yaml_config, pids):
-    """Verify YAML config against actual thread states found in the given PIDs."""
+def verify(yaml_config, pids, node_to_pids=None):
+    """Verify YAML config against actual thread states found in the given PIDs.
+
+    Args:
+        node_to_pids: Optional mapping of node_name -> set of PIDs. When provided,
+            callback group matching is restricted to threads from the associated
+            node's PIDs, preventing cross-process false positives.
+    """
+    default_domain_id = int(os.environ.get("ROS_DOMAIN_ID", "0"))
+
     # Collect all thread info
     all_threads = []  # list of (tid, sched_info, affinity, comm)
+    tid_to_pid = {}
     for pid in pids:
         for tid in get_all_tids(pid):
             info = get_thread_sched_info(tid)
@@ -330,6 +367,7 @@ def verify(yaml_config, pids):
             affinity = get_thread_affinity(tid)
             comm = get_thread_comm(tid)
             all_threads.append((tid, info, affinity, comm))
+            tid_to_pid[tid] = pid
 
     results = []
     available_threads = list(all_threads)
@@ -341,13 +379,22 @@ def verify(yaml_config, pids):
         entry = {
             "type": "callback_group",
             "id": expected["id"],
-            "domain_id": expected.get("domain_id", 0),
+            "domain_id": expected.get("domain_id", default_domain_id),
             "expected": describe_config(expected),
         }
+
+        # Determine allowed PIDs for this callback group
+        allowed_pids = None
+        if node_to_pids is not None:
+            node_name = _extract_node_name_from_id(expected["id"])
+            if node_name and node_name in node_to_pids:
+                allowed_pids = node_to_pids[node_name]
 
         # Find a matching thread
         matched_idx = None
         for i, (tid, info, affinity, _comm) in enumerate(available_threads):
+            if allowed_pids is not None and tid_to_pid.get(tid) not in allowed_pids:
+                continue
             if config_matches_thread(expected, info, affinity):
                 matched_idx = i
                 break
@@ -369,6 +416,8 @@ def verify(yaml_config, pids):
     for nrt in yaml_config.get("non_ros_threads") or []:
         expected = dict(nrt)
         expected_name = expected["name"]
+        # Linux comm is truncated to TASK_COMM_LEN-1 (15) characters
+        comm_name = expected_name[:_TASK_COMM_LEN]
         entry = {
             "type": "non_ros_thread",
             "name": expected_name,
@@ -377,7 +426,7 @@ def verify(yaml_config, pids):
 
         matched_idx = None
         for i, (tid, info, affinity, comm) in enumerate(available_threads):
-            if comm == expected_name and config_matches_thread(expected, info, affinity):
+            if comm == comm_name and config_matches_thread(expected, info, affinity):
                 matched_idx = i
                 break
 
@@ -391,17 +440,32 @@ def verify(yaml_config, pids):
             entry["status"] = "FAIL"
             # Check if any thread has the right name but wrong params
             name_matched = [
-                (tid, info, aff) for tid, info, aff, c in all_threads if c == expected_name
+                (tid, info, aff) for tid, info, aff, c in all_threads if c == comm_name
             ]
             if name_matched:
                 tid, info, aff = name_matched[0]
                 details = get_mismatch_details(expected, info, aff)
+                truncation_note = ""
+                if len(expected_name) > _TASK_COMM_LEN:
+                    truncation_note = (
+                        f" (note: name truncated from '{expected_name}' to "
+                        f"'{comm_name}' for /proc/comm matching)"
+                    )
                 entry["message"] = (
-                    f"Thread '{expected_name}' (tid={tid}) found but mismatched: "
+                    f"Thread '{comm_name}' (tid={tid}) found but mismatched: "
                     + "; ".join(details)
+                    + truncation_note
                 )
             else:
-                entry["message"] = f"No thread with comm name '{expected_name}' found"
+                truncation_note = ""
+                if len(expected_name) > _TASK_COMM_LEN:
+                    truncation_note = (
+                        f" (note: name was truncated to '{comm_name}' for matching "
+                        f"due to Linux TASK_COMM_LEN limit)"
+                    )
+                entry["message"] = (
+                    f"No thread with comm name '{comm_name}' found" + truncation_note
+                )
         results.append(entry)
 
     return results, all_threads
@@ -454,9 +518,31 @@ def main():
     )
     args = parser.parse_args()
 
-    with open(args.config_file) as f:
-        yaml_config = yaml.safe_load(f)
+    try:
+        with open(args.config_file) as f:
+            yaml_config = yaml.safe_load(f)
+    except FileNotFoundError:
+        print(f"Error: Config file '{args.config_file}' not found.", file=sys.stderr)
+        return 1
+    except yaml.YAMLError as e:
+        print(f"Error: Failed to parse YAML config: {e}", file=sys.stderr)
+        return 1
 
+    # Warn if SCHED_DEADLINE configs exist but sched_getattr is unavailable
+    if _libc is None:
+        has_deadline = any(
+            cbg.get("policy") == "SCHED_DEADLINE"
+            for cbg in yaml_config.get("callback_groups") or []
+        )
+        if has_deadline:
+            print(
+                f"Warning: SCHED_DEADLINE configs found but sched_getattr syscall is "
+                f"unavailable on this architecture ({_ARCH}). SCHED_DEADLINE "
+                f"verification will be unreliable.",
+                file=sys.stderr,
+            )
+
+    node_to_pids = None
     if args.pid:
         pids = args.pid
         for pid in pids:
@@ -471,11 +557,13 @@ def main():
             return 1
 
         pids = []
+        node_to_pids = {}
         for name in sorted(node_names):
             found = find_pids_by_node_name(name)
             if not found:
                 print(f"Warning: No process found for node '{name}'", file=sys.stderr)
             else:
+                node_to_pids[name] = set(found)
                 pids.extend(found)
                 print(f"Found PID(s) {found} for node '{name}'")
 
@@ -487,7 +575,7 @@ def main():
 
     print(f"Checking {len(pids)} process(es)...\n")
 
-    results, all_threads = verify(yaml_config, pids)
+    results, all_threads = verify(yaml_config, pids, node_to_pids)
     all_ok = print_results(results, all_threads)
     print()
 
