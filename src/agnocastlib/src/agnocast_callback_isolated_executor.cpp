@@ -160,6 +160,11 @@ void CallbackIsolatedAgnocastExecutor::spin()
         break;
       }
 
+      // Record the count before spawning so the upgrade loop only checks pre-existing entries.
+      // Newly spawned executors may not have entered spin() yet, so cancelling them could
+      // deadlock (cancel sets spinning=false, but spin() resets it to true).
+      auto pre_existing_count = child_callback_groups_.size();
+
       // Spawn executors for newly discovered callback groups
       for (auto & [group, node] : new_groups) {
         if (group->get_associated_with_executor_atomic().load()) {
@@ -169,7 +174,7 @@ void CallbackIsolatedAgnocastExecutor::spin()
       }
 
       // Check existing ROS-only executors for late-arriving agnocast entities
-      for (size_t i = 0; i < child_callback_groups_.size();) {
+      for (size_t i = 0; i < pre_existing_count;) {
         auto group = child_callback_groups_[i].lock();
         if (!group) {
           ++i;
@@ -214,6 +219,7 @@ void CallbackIsolatedAgnocastExecutor::spin()
         child_nodes_.erase(child_nodes_.begin() + idx);
         weak_child_executors_.erase(weak_child_executors_.begin() + idx);
         child_threads_.erase(child_threads_.begin() + idx);
+        --pre_existing_count;
         // Don't increment i; the next element shifted into this position
       }
     }
@@ -234,6 +240,10 @@ void CallbackIsolatedAgnocastExecutor::spin()
       for (auto & upgrade : upgrades) {
         if (upgrade.node) {
           spawn_child_executor(upgrade.group, upgrade.node);
+        } else {
+          RCLCPP_WARN(
+            logger,
+            "Node expired during executor upgrade; callback group will no longer be served.");
         }
       }
     }

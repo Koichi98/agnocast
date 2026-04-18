@@ -37,8 +37,8 @@ class ComponentManagerCallbackIsolated : public rclcpp_components::ComponentMana
 
     std::shared_ptr<rclcpp::Executor> executor_;
     std::thread thread_;
-    rclcpp::CallbackGroup::SharedPtr callback_group_;
-    rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_;
+    rclcpp::CallbackGroup::WeakPtr callback_group_;
+    rclcpp::node_interfaces::NodeBaseInterface::WeakPtr node_;
   };
 
 public:
@@ -246,7 +246,8 @@ void ComponentManagerCallbackIsolated::check_for_new_callback_groups()
     for (auto it = executor_wrappers.begin(); it != executor_wrappers.end();) {
       auto & wrapper = *it;
 
-      if (!wrapper.callback_group_) {
+      auto callback_group = wrapper.callback_group_.lock();
+      if (!callback_group) {
         ++it;
         continue;
       }
@@ -258,7 +259,7 @@ void ComponentManagerCallbackIsolated::check_for_new_callback_groups()
         continue;
       }
 
-      auto agnocast_topics = agnocast::get_agnocast_topics_by_group(wrapper.callback_group_);
+      auto agnocast_topics = agnocast::get_agnocast_topics_by_group(callback_group);
       if (agnocast_topics.empty()) {
         ++it;
         continue;
@@ -269,8 +270,7 @@ void ComponentManagerCallbackIsolated::check_for_new_callback_groups()
         "Agnocast topics detected in callback group previously assigned a ROS-only executor. "
         "Upgrading to SingleThreadedAgnocastExecutor.");
 
-      auto callback_group = wrapper.callback_group_;
-      auto node = wrapper.node_;
+      auto node = wrapper.node_.lock();
       cancel_executor(wrapper);
       it = executor_wrappers.erase(it);
 
