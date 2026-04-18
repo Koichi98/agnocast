@@ -88,6 +88,7 @@ void CallbackIsolatedAgnocastExecutor::spin()
       }
 
       child_callback_groups_.push_back(group);
+      child_nodes_.push_back(node);
       weak_child_executors_.push_back(executor);
 
       child_threads_.emplace_back([executor, callback_group_id = std::move(callback_group_id),
@@ -144,19 +145,97 @@ void CallbackIsolatedAgnocastExecutor::spin()
       }
     }
 
-    if (new_groups.empty()) {
-      continue;
+    // Upgrade ROS-only executors that now have agnocast topics
+    struct UpgradeInfo
+    {
+      rclcpp::CallbackGroup::SharedPtr group;
+      rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node;
+      std::thread thread;
+    };
+    std::vector<UpgradeInfo> upgrades;
+
+    {
+      std::lock_guard<std::mutex> guard{child_resources_mutex_};
+      if (!spinning.load() || !rclcpp::ok()) {
+        break;
+      }
+
+      // Spawn executors for newly discovered callback groups
+      for (auto & [group, node] : new_groups) {
+        if (group->get_associated_with_executor_atomic().load()) {
+          continue;
+        }
+        spawn_child_executor(group, node);
+      }
+
+      // Check existing ROS-only executors for late-arriving agnocast entities
+      for (size_t i = 0; i < child_callback_groups_.size();) {
+        auto group = child_callback_groups_[i].lock();
+        if (!group) {
+          ++i;
+          continue;
+        }
+
+        auto executor = weak_child_executors_[i].lock();
+        if (!executor) {
+          ++i;
+          continue;
+        }
+
+        // Only check groups running under a plain SingleThreadedExecutor
+        if (!std::dynamic_pointer_cast<rclcpp::executors::SingleThreadedExecutor>(executor)) {
+          ++i;
+          continue;
+        }
+
+        auto agnocast_topics = agnocast::get_agnocast_topics_by_group(group);
+        if (agnocast_topics.empty()) {
+          ++i;
+          continue;
+        }
+
+        // Agnocast entities appeared — schedule upgrade
+        RCLCPP_INFO(
+          logger,
+          "Agnocast topics detected in callback group previously assigned a ROS-only executor. "
+          "Upgrading to SingleThreadedAgnocastExecutor.");
+
+        auto node = child_nodes_[i].lock();
+        executor->cancel();
+
+        UpgradeInfo info;
+        info.group = group;
+        info.node = node;
+        info.thread = std::move(child_threads_[i]);
+        upgrades.push_back(std::move(info));
+
+        auto idx = static_cast<std::ptrdiff_t>(i);
+        child_callback_groups_.erase(child_callback_groups_.begin() + idx);
+        child_nodes_.erase(child_nodes_.begin() + idx);
+        weak_child_executors_.erase(weak_child_executors_.begin() + idx);
+        child_threads_.erase(child_threads_.begin() + idx);
+        // Don't increment i; the next element shifted into this position
+      }
     }
 
-    std::lock_guard<std::mutex> guard{child_resources_mutex_};
-    if (!spinning.load() || !rclcpp::ok()) {
-      break;
-    }
-    for (auto & [group, node] : new_groups) {
-      if (group->get_associated_with_executor_atomic().load()) {
-        continue;
+    // Join old threads outside the lock to avoid deadlock
+    for (auto & upgrade : upgrades) {
+      if (upgrade.thread.joinable()) {
+        upgrade.thread.join();
       }
-      spawn_child_executor(group, node);
+    }
+
+    // Re-spawn upgraded groups with SingleThreadedAgnocastExecutor
+    if (!upgrades.empty()) {
+      std::lock_guard<std::mutex> guard{child_resources_mutex_};
+      if (!spinning.load() || !rclcpp::ok()) {
+        break;
+      }
+      for (auto & upgrade : upgrades) {
+        if (upgrade.node) {
+          spawn_child_executor(upgrade.group, upgrade.node);
+        }
+      }
     }
   }
 
@@ -176,6 +255,7 @@ void CallbackIsolatedAgnocastExecutor::spin()
     child_threads_.clear();
     weak_child_executors_.clear();
     child_callback_groups_.clear();
+    child_nodes_.clear();
   }
   for (auto & thread : threads_to_join) {
     if (thread.joinable()) {
@@ -409,7 +489,8 @@ void CallbackIsolatedAgnocastExecutor::stop_callback_group(
     std::lock_guard<std::mutex> guard{child_resources_mutex_};
     if (
       child_callback_groups_.size() != weak_child_executors_.size() ||
-      child_callback_groups_.size() != child_threads_.size()) {
+      child_callback_groups_.size() != child_threads_.size() ||
+      child_callback_groups_.size() != child_nodes_.size()) {
       RCLCPP_ERROR(
         logger, "Child executor vectors are misaligned. Skipping stop_callback_group().");
       return;
@@ -423,6 +504,7 @@ void CallbackIsolatedAgnocastExecutor::stop_callback_group(
         thread_to_join = std::move(child_threads_[i]);
         auto idx = static_cast<std::ptrdiff_t>(i);
         child_callback_groups_.erase(child_callback_groups_.begin() + idx);
+        child_nodes_.erase(child_nodes_.begin() + idx);
         weak_child_executors_.erase(weak_child_executors_.begin() + idx);
         child_threads_.erase(child_threads_.begin() + idx);
         found = true;

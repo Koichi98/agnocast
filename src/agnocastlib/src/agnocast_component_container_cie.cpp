@@ -37,6 +37,8 @@ class ComponentManagerCallbackIsolated : public rclcpp_components::ComponentMana
 
     std::shared_ptr<rclcpp::Executor> executor_;
     std::thread thread_;
+    rclcpp::CallbackGroup::SharedPtr callback_group_;
+    rclcpp::node_interfaces::NodeBaseInterface::SharedPtr node_;
   };
 
 public:
@@ -172,6 +174,8 @@ void ComponentManagerCallbackIsolated::start_executor_for_callback_group(
   auto it = node_id_to_executor_wrappers_[node_id].begin();
   it = node_id_to_executor_wrappers_[node_id].emplace(it, executor);
   auto & executor_wrapper = *it;
+  executor_wrapper.callback_group_ = callback_group;
+  executor_wrapper.node_ = node;
 
   executor_wrapper.thread_ =
     std::thread([&executor_wrapper, group_id = std::move(group_id), this]() {
@@ -235,6 +239,45 @@ void ComponentManagerCallbackIsolated::check_for_new_callback_groups()
 
         start_executor_for_callback_group(nid, callback_group, node);
       });
+  }
+
+  // Upgrade ROS-only executors that now have agnocast topics
+  for (auto & [node_id, executor_wrappers] : node_id_to_executor_wrappers_) {
+    for (auto it = executor_wrappers.begin(); it != executor_wrappers.end();) {
+      auto & wrapper = *it;
+
+      if (!wrapper.callback_group_) {
+        ++it;
+        continue;
+      }
+
+      // Only check groups running under a plain SingleThreadedExecutor
+      if (!std::dynamic_pointer_cast<rclcpp::executors::SingleThreadedExecutor>(
+            wrapper.executor_)) {
+        ++it;
+        continue;
+      }
+
+      auto agnocast_topics = agnocast::get_agnocast_topics_by_group(wrapper.callback_group_);
+      if (agnocast_topics.empty()) {
+        ++it;
+        continue;
+      }
+
+      RCLCPP_WARN(
+        rclcpp::get_logger("agnocast_component_container_cie"),
+        "Agnocast topics detected in callback group previously assigned a ROS-only executor. "
+        "Upgrading to SingleThreadedAgnocastExecutor.");
+
+      auto callback_group = wrapper.callback_group_;
+      auto node = wrapper.node_;
+      cancel_executor(wrapper);
+      it = executor_wrappers.erase(it);
+
+      if (node) {
+        start_executor_for_callback_group(node_id, callback_group, node);
+      }
+    }
   }
 }
 
