@@ -274,6 +274,10 @@ void ComponentManagerCallbackIsolated::check_for_new_callback_groups()
       cancel_executor(wrapper);
       it = executor_wrappers.erase(it);
 
+      // The executor destructor (triggered by erase above) clears associated_with_executor,
+      // but we clear it explicitly as a defensive measure.
+      callback_group->get_associated_with_executor_atomic().store(false);
+
       if (node) {
         start_executor_for_callback_group(node_id, callback_group, node);
       }

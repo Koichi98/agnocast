@@ -224,11 +224,15 @@ void CallbackIsolatedAgnocastExecutor::spin()
       }
     }
 
-    // Join old threads outside the lock to avoid deadlock
+    // Join old threads outside the lock to avoid deadlock.
+    // After join, the thread's lambda (which holds the last shared_ptr to the old executor) is
+    // destroyed, triggering the executor destructor that clears the associated_with_executor flag.
+    // We also clear it explicitly as a defensive measure.
     for (auto & upgrade : upgrades) {
       if (upgrade.thread.joinable()) {
         upgrade.thread.join();
       }
+      upgrade.group->get_associated_with_executor_atomic().store(false);
     }
 
     // Re-spawn upgraded groups with SingleThreadedAgnocastExecutor
