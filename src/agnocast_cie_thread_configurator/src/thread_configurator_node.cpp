@@ -18,10 +18,26 @@
 #include <string>
 #include <unordered_map>
 
-ThreadConfiguratorNode::ThreadConfiguratorNode(const YAML::Node & yaml)
-: Node("thread_configurator_node"), unapplied_num_(0), cgroup_num_(0)
+ThreadConfiguratorNode::ThreadConfiguratorNode(const rclcpp::NodeOptions & options)
+: Node("thread_configurator_node", options), unapplied_num_(0), cgroup_num_(0)
 {
+  const auto config_file = this->declare_parameter<std::string>("config_file", "");
+  if (config_file.empty()) {
+    throw std::runtime_error(
+      "'config_file' parameter must be provided with a valid YAML file path.");
+  }
+
+  YAML::Node yaml;
+  try {
+    yaml = YAML::LoadFile(config_file);
+  } catch (const std::exception & e) {
+    throw std::runtime_error("Error reading the YAML file '" + config_file + "': " + e.what());
+  }
+
+  validate_hardware_info(yaml);
   validate_rt_throttling(yaml);
+
+  RCLCPP_INFO(this->get_logger(), "Loaded config from: %s", config_file.c_str());
 
   YAML::Node callback_groups = yaml["callback_groups"];
   YAML::Node non_ros_threads = yaml["non_ros_threads"];
@@ -103,13 +119,14 @@ ThreadConfiguratorNode::ThreadConfiguratorNode(const YAML::Node & yaml)
     id_to_non_ros_thread_config_[config.thread_str] = &config;
   }
 
-  auto qos = rclcpp::QoS(rclcpp::QoSInitialization(RMW_QOS_POLICY_HISTORY_KEEP_LAST, 5000))
-               .reliable()
-               .transient_local();
+  auto cbg_qos = rclcpp::QoS(rclcpp::KeepAll()).reliable().transient_local();
+  // volatile: publisher context in spawn_non_ros2_thread is destroyed after publish,
+  // so transient_local is ineffective.
+  auto non_ros_thread_qos = rclcpp::QoS(rclcpp::KeepAll()).reliable();
 
   // Create subscription for non-ROS thread info
   non_ros_thread_sub_ = this->create_subscription<agnocast_cie_config_msgs::msg::NonRosThreadInfo>(
-    "/agnocast_cie_thread_configurator/non_ros_thread_info", qos,
+    "/agnocast_cie_thread_configurator/non_ros_thread_info", non_ros_thread_qos,
     [this](const agnocast_cie_config_msgs::msg::NonRosThreadInfo::SharedPtr msg) {
       this->non_ros_thread_callback(msg);
     });
@@ -117,7 +134,7 @@ ThreadConfiguratorNode::ThreadConfiguratorNode(const YAML::Node & yaml)
   // Create subscription for default domain on this node
   subs_for_each_domain_.push_back(
     this->create_subscription<agnocast_cie_config_msgs::msg::CallbackGroupInfo>(
-      "/agnocast_cie_thread_configurator/callback_group_info", qos,
+      "/agnocast_cie_thread_configurator/callback_group_info", cbg_qos,
       [this,
        default_domain_id](const agnocast_cie_config_msgs::msg::CallbackGroupInfo::SharedPtr msg) {
         this->callback_group_callback(default_domain_id, msg);
@@ -133,7 +150,7 @@ ThreadConfiguratorNode::ThreadConfiguratorNode(const YAML::Node & yaml)
     nodes_for_each_domain_.push_back(node);
 
     auto sub = node->create_subscription<agnocast_cie_config_msgs::msg::CallbackGroupInfo>(
-      "/agnocast_cie_thread_configurator/callback_group_info", qos,
+      "/agnocast_cie_thread_configurator/callback_group_info", cbg_qos,
       [this, domain_id](const agnocast_cie_config_msgs::msg::CallbackGroupInfo::SharedPtr msg) {
         this->callback_group_callback(domain_id, msg);
       });
@@ -220,6 +237,43 @@ void ThreadConfiguratorNode::validate_rt_throttling(const YAML::Node & yaml)
   }
 }
 
+void ThreadConfiguratorNode::validate_hardware_info(const YAML::Node & yaml)
+{
+  if (!yaml["hardware_info"]) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "No hardware_info section found in configuration file. Skipping hardware validation.");
+    return;
+  }
+
+  const YAML::Node & yaml_hw_info = yaml["hardware_info"];
+  const auto current_hw_info = agnocast_cie_thread_configurator::get_hardware_info();
+
+  std::vector<std::string> mismatches;
+
+  for (const auto & [key, current_value] : current_hw_info) {
+    if (!yaml_hw_info[key]) {
+      continue;
+    }
+
+    std::string yaml_value = yaml_hw_info[key].as<std::string>();
+    if (yaml_value != current_value) {
+      mismatches.push_back(key + ": expected '" + yaml_value + "', got '" + current_value + "'");
+    }
+  }
+
+  if (!mismatches.empty()) {
+    std::string error_msg = "Hardware validation failed with the following mismatches:\n";
+    for (const auto & mismatch : mismatches) {
+      error_msg += "  - " + mismatch + "\n";
+    }
+    throw std::runtime_error(error_msg);
+  } else {
+    RCLCPP_INFO(
+      this->get_logger(), "Hardware validation successful. Configuration matches this system.");
+  }
+}
+
 ThreadConfiguratorNode::~ThreadConfiguratorNode()
 {
   if (cgroup_num_ > 0) {
@@ -231,6 +285,10 @@ ThreadConfiguratorNode::~ThreadConfiguratorNode()
 
 void ThreadConfiguratorNode::print_all_unapplied()
 {
+  if (unapplied_num_ == 0) {
+    return;
+  }
+
   RCLCPP_WARN(this->get_logger(), "Following callback groups are not yet configured");
 
   for (auto & config : callback_group_configs_) {
@@ -331,7 +389,11 @@ bool ThreadConfiguratorNode::issue_syscalls(const ThreadConfig & config)
     struct sched_attr attr;
     memset(&attr, 0, sizeof(attr));
     attr.size = sizeof(attr);
-    attr.sched_flags = 0;
+    // SCHED_FLAG_RESET_ON_FORK lets the target thread still call fork(2)/clone(2)
+    // after being placed under SCHED_DEADLINE; without it, clone(2) returns EAGAIN.
+    // Children reset to SCHED_OTHER; each callback-group thread that needs its own
+    // SCHED_DEADLINE gets it via its own CallbackGroupInfo message.
+    attr.sched_flags = SCHED_FLAG_RESET_ON_FORK;
     attr.sched_nice = 0;
     attr.sched_priority = 0;
 
@@ -376,11 +438,6 @@ bool ThreadConfiguratorNode::issue_syscalls(const ThreadConfig & config)
   return true;
 }
 
-bool ThreadConfiguratorNode::has_configured_once() const
-{
-  return configured_at_least_once_;
-}
-
 const std::vector<rclcpp::Node::SharedPtr> & ThreadConfiguratorNode::get_domain_nodes() const
 {
   return nodes_for_each_domain_;
@@ -402,18 +459,13 @@ void ThreadConfiguratorNode::callback_group_callback(
 
   ThreadConfig * config = it->second;
   if (config->applied) {
-    if (config->thread_id == msg->thread_id) {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "This callback group is already configured. skip (domain=%zu, id=%s, tid=%ld)", domain_id,
-        msg->callback_group_id.c_str(), msg->thread_id);
-      return;
-    }
+    // Always re-apply: the OS may reuse the same thread IDs after an application
+    // restarts, so we cannot use thread_id equality to skip reconfiguration.
     RCLCPP_INFO(
       this->get_logger(),
-      "This callback group is already configured, but thread_id changed. "
-      "Re-applying configuration (domain=%zu, id=%s, old_tid=%ld, new_tid=%ld)",
-      domain_id, msg->callback_group_id.c_str(), config->thread_id, msg->thread_id);
+      "Re-applying configuration for already configured callback group "
+      "(domain=%zu, id=%s, tid=%ld)",
+      domain_id, msg->callback_group_id.c_str(), msg->thread_id);
   }
 
   RCLCPP_INFO(
@@ -421,22 +473,13 @@ void ThreadConfiguratorNode::callback_group_callback(
     msg->thread_id, msg->callback_group_id.c_str());
   config->thread_id = msg->thread_id;
 
-  if (config->policy == "SCHED_DEADLINE") {
-    // delayed applying (deduplicate if already queued)
-    if (
-      std::find(deadline_configs_.begin(), deadline_configs_.end(), config) ==
-      deadline_configs_.end()) {
-      deadline_configs_.push_back(config);
-    }
-  } else {
-    if (!issue_syscalls(*config)) {
-      RCLCPP_WARN(
-        this->get_logger(),
-        "Skipping configuration for callback group (domain=%zu, id=%s, tid=%ld) due to syscall "
-        "failure.",
-        domain_id, msg->callback_group_id.c_str(), msg->thread_id);
-      return;
-    }
+  if (!issue_syscalls(*config)) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Skipping configuration for callback group (domain=%zu, id=%s, tid=%ld) due to syscall "
+      "failure.",
+      domain_id, msg->callback_group_id.c_str(), msg->thread_id);
+    return;
   }
 
   if (!config->applied) {
@@ -444,8 +487,8 @@ void ThreadConfiguratorNode::callback_group_callback(
   }
   config->applied = true;
 
-  if (unapplied_num_ == 0) {
-    apply_deadline_configs();
+  if (unapplied_num_ == 0 && !configured_at_least_once_) {
+    on_all_configured();
   }
 }
 
@@ -464,17 +507,12 @@ void ThreadConfiguratorNode::non_ros_thread_callback(
 
   ThreadConfig * config = it->second;
   if (config->applied) {
-    if (config->thread_id == msg->thread_id) {
-      RCLCPP_INFO(
-        this->get_logger(), "This non-ROS thread is already configured. skip (name=%s, tid=%ld)",
-        msg->thread_name.c_str(), msg->thread_id);
-      return;
-    }
+    // Always re-apply: the OS may reuse the same thread IDs after an application
+    // restarts, so we cannot use thread_id equality to skip reconfiguration.
     RCLCPP_INFO(
       this->get_logger(),
-      "This non-ROS thread is already configured, but thread_id changed. "
-      "Re-applying configuration (name=%s, old_tid=%ld, new_tid=%ld)",
-      msg->thread_name.c_str(), config->thread_id, msg->thread_id);
+      "Re-applying configuration for already configured non-ROS thread (name=%s, tid=%ld)",
+      msg->thread_name.c_str(), msg->thread_id);
   }
 
   RCLCPP_INFO(
@@ -482,21 +520,12 @@ void ThreadConfiguratorNode::non_ros_thread_callback(
     msg->thread_name.c_str());
   config->thread_id = msg->thread_id;
 
-  if (config->policy == "SCHED_DEADLINE") {
-    // delayed applying (deduplicate if already queued)
-    if (
-      std::find(deadline_configs_.begin(), deadline_configs_.end(), config) ==
-      deadline_configs_.end()) {
-      deadline_configs_.push_back(config);
-    }
-  } else {
-    if (!issue_syscalls(*config)) {
-      RCLCPP_WARN(
-        this->get_logger(),
-        "Skipping configuration for non-ROS thread (name=%s, tid=%ld) due to syscall failure.",
-        msg->thread_name.c_str(), msg->thread_id);
-      return;
-    }
+  if (!issue_syscalls(*config)) {
+    RCLCPP_WARN(
+      this->get_logger(),
+      "Skipping configuration for non-ROS thread (name=%s, tid=%ld) due to syscall failure.",
+      msg->thread_name.c_str(), msg->thread_id);
+    return;
   }
 
   if (!config->applied) {
@@ -504,31 +533,13 @@ void ThreadConfiguratorNode::non_ros_thread_callback(
   }
   config->applied = true;
 
-  if (unapplied_num_ == 0) {
-    apply_deadline_configs();
+  if (unapplied_num_ == 0 && !configured_at_least_once_) {
+    on_all_configured();
   }
 }
 
-void ThreadConfiguratorNode::apply_deadline_configs()
+void ThreadConfiguratorNode::on_all_configured()
 {
-  for (auto config : deadline_configs_) {
-    if (!issue_syscalls(*config)) {
-      RCLCPP_WARN(
-        this->get_logger(), "Failed to apply SCHED_DEADLINE for tid=%ld", config->thread_id);
-    }
-  }
-  deadline_configs_.clear();
-
   RCLCPP_INFO(this->get_logger(), "Success: All of the configurations are applied.");
-
   configured_at_least_once_ = true;
-
-  // Reset for re-application when target applications restart
-  unapplied_num_ = callback_group_configs_.size() + non_ros_thread_configs_.size();
-  for (auto & config : callback_group_configs_) {
-    config.applied = false;
-  }
-  for (auto & config : non_ros_thread_configs_) {
-    config.applied = false;
-  }
 }
