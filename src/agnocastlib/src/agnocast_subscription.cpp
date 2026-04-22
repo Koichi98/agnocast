@@ -8,6 +8,7 @@ SubscriptionBase::SubscriptionBase(rclcpp::Node * node, const std::string & topi
 : id_(0), topic_name_(node->get_node_topics_interface()->resolve_topic_name(topic_name))
 {
   validate_ld_preload();
+  validate_not_rclcpp_component_container();
 }
 
 SubscriptionBase::SubscriptionBase(
@@ -15,6 +16,7 @@ SubscriptionBase::SubscriptionBase(
 : id_(0), topic_name_(node->get_node_topics_interface()->resolve_topic_name(topic_name))
 {
   validate_ld_preload();
+  validate_not_rclcpp_component_container();
 }
 
 union ioctl_add_subscriber_args SubscriptionBase::initialize(

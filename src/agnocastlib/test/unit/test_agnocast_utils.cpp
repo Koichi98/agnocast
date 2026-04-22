@@ -64,3 +64,9 @@ TEST(AgnocastUtilsTest, validate_ld_preload_only_libagnocast_heaphook)
   EXPECT_NO_THROW(agnocast::validate_ld_preload());
   unsetenv("LD_PRELOAD");
 }
+
+TEST(AgnocastUtilsTest, validate_not_rclcpp_component_container_normal)
+{
+  // The gtest binary's name does not match any stock container name, so the check should pass.
+  EXPECT_NO_THROW(agnocast::validate_not_rclcpp_component_container());
+}

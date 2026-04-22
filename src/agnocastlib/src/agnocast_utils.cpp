@@ -3,6 +3,10 @@
 #include "agnocast/agnocast_mq.hpp"
 #include "agnocast/node/agnocast_node.hpp"
 
+#include <unistd.h>
+
+#include <array>
+#include <climits>
 #include <cstdlib>
 #include <cstring>
 
@@ -44,6 +48,67 @@ void validate_ld_preload()
       "Pre-existing shared libraries in LD_PRELOAD may have been overwritten by "
       "libagnocast_heaphook.so");
   }
+}
+
+void validate_not_rclcpp_component_container()
+{
+  // Detect the case where an Agnocast-enabled component is loaded into a stock rclcpp_components
+  // container. Such a container uses rclcpp::executors::{Single,Multi}ThreadedExecutor, which does
+  // not poll Agnocast callbacks, so subscription callbacks would silently never fire.
+  //
+  // /proc/self/exe resolves to the real executable regardless of argv[0] manipulation or symlink
+  // name, and is readable without extra privileges because it refers to the calling process.
+  std::array<char, PATH_MAX> exe_path_buf{};
+  ssize_t len = readlink("/proc/self/exe", exe_path_buf.data(), exe_path_buf.size() - 1);
+  if (len <= 0) {
+    // If we cannot resolve the executable path, skip the check rather than failing spuriously.
+    return;
+  }
+  exe_path_buf[len] = '\0';
+
+  const std::string exe_path(exe_path_buf.data());
+  const std::string exe_name =
+    exe_path.substr(exe_path.find_last_of('/') + 1);
+
+  static constexpr std::array<const char *, 3> kStockContainers = {
+    "component_container",
+    "component_container_mt",
+    "component_container_isolated",
+  };
+
+  bool matched_by_name = false;
+  for (const char * name : kStockContainers) {
+    if (exe_name == name) {
+      matched_by_name = true;
+      break;
+    }
+  }
+  const bool matched_by_path = exe_path.find("/rclcpp_components/") != std::string::npos;
+
+  if (!matched_by_name && !matched_by_path) {
+    return;
+  }
+
+  const char * escape = getenv("AGNOCAST_ALLOW_NON_AGNOCAST_CONTAINER");
+  if (escape != nullptr && std::strcmp(escape, "1") == 0) {
+    RCLCPP_WARN(
+      logger,
+      "Running an Agnocast pub/sub inside stock rclcpp_components container '%s' "
+      "(AGNOCAST_ALLOW_NON_AGNOCAST_CONTAINER=1 set, continuing).",
+      exe_path.c_str());
+    return;
+  }
+
+  RCLCPP_ERROR(
+    logger,
+    "Agnocast pub/sub is being created inside a stock rclcpp_components container ('%s'). "
+    "Stock containers use rclcpp executors and do not dispatch Agnocast callbacks. "
+    "Use agnocast_component_container / agnocast_component_container_mt / "
+    "agnocast_component_container_cie instead. "
+    "Set AGNOCAST_ALLOW_NON_AGNOCAST_CONTAINER=1 to bypass this check.",
+    exe_path.c_str());
+  close(agnocast_fd);
+  exit(EXIT_FAILURE);
 }
 
 static std::string create_mq_name(

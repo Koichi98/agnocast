@@ -45,6 +45,7 @@ inline void validate_qos(const rclcpp::QoS & qos)
 }
 
 void validate_ld_preload();
+void validate_not_rclcpp_component_container();
 std::string create_mq_name_for_agnocast_publish(
   const std::string & topic_name, const topic_local_id_t id);
 std::string create_mq_name_for_bridge(const pid_t pid);

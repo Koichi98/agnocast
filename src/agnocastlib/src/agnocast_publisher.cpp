@@ -38,6 +38,7 @@ topic_local_id_t initialize_publisher(
   const bool is_bridge)
 {
   validate_ld_preload();
+  validate_not_rclcpp_component_container();
 
   union ioctl_add_publisher_args pub_args = {};
   pub_args.topic_name = {topic_name.c_str(), topic_name.size()};
