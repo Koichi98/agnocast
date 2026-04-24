@@ -14,8 +14,6 @@
 namespace agnocast
 {
 
-constexpr int64_t NANOSECONDS_PER_SECOND = 1000000000;
-
 struct TimerInfo
 {
   ~TimerInfo();

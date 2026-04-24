@@ -233,6 +233,8 @@ void register_timer_info(
     timer_info->timer_fd = create_timer_fd(timer_id, period, clock->get_clock_type());
   }
 
+  timer->set_timer_fd(timer_info->timer_fd);
+
   setup_time_jump_callback(timer_info, clock);
 
   {
@@ -253,10 +255,19 @@ void handle_timer_event(TimerInfo & timer_info)
   }
 
   const int64_t now_ns = timer_info.clock->now().nanoseconds();
+  const int64_t period_ns = timer_info.period.count();
+
+  if (timer->is_need_reset()) {
+    timer->reset_complete();
+    // TODO: execute on_reset_callback
+  }
+
+  if (timer->is_canceled()) {
+    return;
+  }
 
   timer_info.last_call_time_ns.store(now_ns, std::memory_order_relaxed);
 
-  const int64_t period_ns = timer_info.period.count();
   int64_t next_call_time_ns =
     timer_info.next_call_time_ns.load(std::memory_order_relaxed) + period_ns;
 

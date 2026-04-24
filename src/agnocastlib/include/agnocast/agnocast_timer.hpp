@@ -4,6 +4,9 @@
 #include "rclcpp/clock.hpp"
 #include "rclcpp/macros.hpp"
 
+#include <sys/timerfd.h>
+#include <unistd.h>
+
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -12,6 +15,8 @@
 
 namespace agnocast
 {
+
+constexpr int64_t NANOSECONDS_PER_SECOND = 1000000000;
 
 /**
  * @brief Base class for Agnocast timers providing periodic callback execution.
@@ -31,6 +36,46 @@ public:
   // void cancel(), bool is_canceled(), void reset(), std::chrono::nanoseconds time_until_trigger(),
   // etc.
 
+  AGNOCAST_PUBLIC
+  void cancel() { canceled_ = true; }
+
+  AGNOCAST_PUBLIC
+  bool is_canceled() const { return canceled_; }
+
+  AGNOCAST_PUBLIC
+  void reset()
+  {
+    if (timer_fd_ == -1) {
+      throw std::runtime_error("timer_fd is not set to TimerBase");
+      return;
+    }
+    struct itimerspec spec = {};
+    const auto period_count = period_.count();
+    if (period_count == 0) {
+      // Workaround: timerfd_settime() disarms the timer when both it_value and it_interval
+      // are zero. Use 1ns to keep the timer armed and achieve "always ready" semantics.
+      spec.it_interval.tv_sec = 0;
+      spec.it_interval.tv_nsec = 1;
+    } else {
+      spec.it_interval.tv_sec = period_count / NANOSECONDS_PER_SECOND;
+      spec.it_interval.tv_nsec = period_count % NANOSECONDS_PER_SECOND;
+    }
+    spec.it_value = spec.it_interval;
+
+    if (timerfd_settime(timer_fd_, 0, &spec, nullptr) == -1) {
+      close(timer_fd_);
+      throw std::runtime_error("timerfd_settime failed for timer_id=" + std::to_string(timer_fd_));
+    }
+    canceled_ = false;
+    need_reset_ = true;
+  }
+
+  bool is_need_reset() { return need_reset_; }
+
+  void reset_complete() { need_reset_ = false; }
+
+  void set_timer_fd(int timer_fd) { timer_fd_ = timer_fd; }
+
   /** @brief Return whether this timer uses a steady clock.
    *  @return True if the clock is steady. */
   AGNOCAST_PUBLIC
@@ -45,12 +90,15 @@ public:
 
 protected:
   TimerBase(uint32_t timer_id, std::chrono::nanoseconds period)
-  : timer_id_(timer_id), period_(period)
+  : timer_id_(timer_id), timer_fd_(-1), period_(period), canceled_(false), need_reset_(false)
   {
   }
 
   uint32_t timer_id_;
+  int timer_fd_;
   std::chrono::nanoseconds period_;
+  bool canceled_;
+  bool need_reset_;
 };
 
 /**
