@@ -70,6 +70,22 @@ public:
     need_reset_ = true;
   }
 
+  std::chrono::nanoseconds time_until_trigger()
+  {
+    if (canceled_) {
+      return std::chrono::nanoseconds::max();
+    }
+    struct itimerspec spec = {};
+    if (timerfd_gettime(timer_fd_, &spec) == -1) {
+      close(timer_fd_);
+      throw std::runtime_error("timerfd_gettime failed for timer_id=" + std::to_string(timer_fd_));
+    }
+    auto total_nsec = (static_cast<int64_t>(spec.it_value.tv_sec) * NANOSECONDS_PER_SECOND) +
+                      static_cast<int64_t>(spec.it_value.tv_nsec);
+
+    return std::chrono::nanoseconds(total_nsec);
+  }
+
   bool is_need_reset() { return need_reset_; }
 
   void reset_complete() { need_reset_ = false; }
