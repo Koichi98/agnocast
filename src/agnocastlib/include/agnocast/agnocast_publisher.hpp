@@ -40,6 +40,7 @@ union ioctl_publish_msg_args publish_core(
   std::unordered_map<topic_local_id_t, std::tuple<mqd_t, bool>> & opened_mqs);
 uint32_t get_subscription_count_core(const std::string & topic_name);
 uint32_t get_intra_subscription_count_core(const std::string & topic_name);
+int64_t get_last_publish_ioctl_ns();
 void increment_borrowed_publisher_num();
 void decrement_borrowed_publisher_num();
 

@@ -5,11 +5,18 @@
 #include <sys/types.h>
 
 #include <array>
+#include <ctime>
 
 namespace agnocast
 {
 
 thread_local uint32_t borrowed_publisher_num = 0;
+thread_local int64_t last_publish_ioctl_ns = 0;
+
+int64_t get_last_publish_ioctl_ns()
+{
+  return last_publish_ioctl_ns;
+}
 
 extern "C" uint32_t agnocast_get_borrowed_publisher_num()
 {
@@ -81,11 +88,15 @@ union ioctl_publish_msg_args publish_core(
     reinterpret_cast<uint64_t>(subscriber_ids_buffer.data());
   publish_msg_args.subscriber_ids_buffer_size = MAX_SUBSCRIBER_NUM;
 
+  struct timespec ts0, ts1;
+  clock_gettime(CLOCK_MONOTONIC, &ts0);
   if (ioctl(agnocast_fd, AGNOCAST_PUBLISH_MSG_CMD, &publish_msg_args) < 0) {
     RCLCPP_ERROR(logger, "AGNOCAST_PUBLISH_MSG_CMD failed: %s", strerror(errno));
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   }
+  clock_gettime(CLOCK_MONOTONIC, &ts1);
+  last_publish_ioctl_ns = (ts1.tv_sec - ts0.tv_sec) * 1'000'000'000LL + (ts1.tv_nsec - ts0.tv_nsec);
 
   TRACEPOINT(agnocast_publish, publisher_handle, publish_msg_args.ret_entry_id);
 

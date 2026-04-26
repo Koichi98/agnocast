@@ -1172,6 +1172,7 @@ int agnocast_ioctl_receive_msg(
   uint32_t pub_shm_infos_size, union ioctl_receive_msg_args * ioctl_ret)
 {
   int ret = 0;
+  u64 t_enter = ktime_get_ns();
 
   down_read(&global_htables_rwsem);
 
@@ -1184,8 +1185,37 @@ int agnocast_ioctl_receive_msg(
     goto unlock_only_global;
   }
 
-  // Use write lock because we modify sub_info fields (latest_received_entry_id, need_mmap_update)
-  down_write(&wrapper->topic_rwsem);
+  // Read lock is sufficient here. The receive path's writes fall into three categories,
+  // none of which require exclusive (write) access to the per-topic rwsem:
+  //
+  // 1. Bitmap updates (add_subscriber_reference -> test_and_set_bit): atomic bit operations
+  //    that are safe for concurrent access by different subscribers setting different bits.
+  //
+  // 2. Per-subscriber fields (latest_received_entry_id, need_mmap_update): each subscriber
+  //    has its own sub_info struct, so concurrent receives from different subscribers modify
+  //    disjoint memory. Same-subscriber concurrent receives are prevented by the userspace
+  //    executor's MutuallyExclusive callback group serialization.
+  //    IMPORTANT: if a Reentrant callback group is used with a multi-threaded executor,
+  //    same-subscriber concurrent receives become theoretically possible, which would race
+  //    on latest_received_entry_id (duplicate messages) and need_mmap_update (duplicate mmap).
+  //    If Reentrant callback groups need to be supported in the future, add a per-subscriber
+  //    atomic_flag or spinlock to serialize receives within the same subscriber.
+  //    Note: need_mmap_update is set to true by agnocast_ioctl_add_publisher (line ~909),
+  //    which holds global_htables_rwsem WRITE — exclusive with our global READ here.
+  //    So the write from add_publisher and the read/clear here are fully serialized.
+  //
+  // 3. set_publisher_shm_info -> reference_memory: self-synchronized via mempool_lock.
+  //
+  // All other accesses (rbtree traversal, hashtable lookups) are read-only.
+  //
+  // Using a read lock here allows S concurrent subscribers to receive simultaneously on the
+  // same topic, eliminating the O(S) sequential lock-wait serialization that previously
+  // dominated tail latency under high subscriber fan-out.
+  down_read(&wrapper->topic_rwsem);
+  {
+    u64 t_lock_acquired = ktime_get_ns();
+    ioctl_ret->ret_lock_wait_ns = (int64_t)(t_lock_acquired - t_enter);
+  }
 
   struct subscriber_info * sub_info = find_subscriber_info(wrapper, subscriber_id);
   if (!sub_info) {
@@ -1218,7 +1248,11 @@ int agnocast_ioctl_receive_msg(
   sub_info->need_mmap_update = false;
 
 unlock_all:
-  up_write(&wrapper->topic_rwsem);
+  {
+    u64 t_before_unlock = ktime_get_ns();
+    ioctl_ret->ret_lock_hold_ns = (int64_t)(t_before_unlock - t_enter) - ioctl_ret->ret_lock_wait_ns;
+  }
+  up_read(&wrapper->topic_rwsem);
 unlock_only_global:
   up_read(&global_htables_rwsem);
   return ret;
@@ -1242,8 +1276,25 @@ int agnocast_ioctl_take_msg(
     goto unlock_only_global;
   }
 
-  // Use write lock because we modify sub_info fields (latest_received_entry_id, need_mmap_update)
-  down_write(&wrapper->topic_rwsem);
+  // Read lock is sufficient here — same reasoning as agnocast_ioctl_receive_msg above:
+  //
+  // 1. Bitmap updates (test_bit, add_subscriber_reference -> test_and_set_bit): atomic.
+  //
+  // 2. Per-subscriber fields (latest_received_entry_id, need_mmap_update): each subscriber
+  //    has its own sub_info struct, so concurrent takes from different subscribers modify
+  //    disjoint memory. Same-subscriber concurrent takes are prevented by the userspace
+  //    executor's MutuallyExclusive callback group serialization.
+  //    IMPORTANT: if a Reentrant callback group is used with a multi-threaded executor,
+  //    same-subscriber concurrent takes become theoretically possible, which would race
+  //    on latest_received_entry_id and need_mmap_update. If Reentrant callback groups
+  //    need to be supported, add a per-subscriber atomic_flag or spinlock.
+  //    Note: need_mmap_update is set to true by agnocast_ioctl_add_publisher (line ~909),
+  //    which holds global_htables_rwsem WRITE — exclusive with our global READ here.
+  //
+  // 3. set_publisher_shm_info -> reference_memory: self-synchronized via mempool_lock.
+  //
+  // 4. Rbtree traversal (rb_last, rb_prev): read-only.
+  down_read(&wrapper->topic_rwsem);
 
   struct subscriber_info * sub_info = find_subscriber_info(wrapper, subscriber_id);
   if (!sub_info) {
@@ -1334,7 +1385,7 @@ int agnocast_ioctl_take_msg(
   sub_info->need_mmap_update = false;
 
 unlock_all:
-  up_write(&wrapper->topic_rwsem);
+  up_read(&wrapper->topic_rwsem);
 unlock_only_global:
   up_read(&global_htables_rwsem);
   return ret;

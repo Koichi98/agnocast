@@ -114,6 +114,10 @@ uint32_t register_callback(
   return callback_info_id;
 }
 
+int64_t get_last_receive_ioctl_ns();
+int64_t get_last_receive_lock_wait_ns();
+int64_t get_last_receive_lock_hold_ns();
+
 void receive_and_execute_message(
   uint32_t callback_info_id, pid_t my_pid, const CallbackInfo & callback_info,
   std::mutex & ready_agnocast_executables_mutex,

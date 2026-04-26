@@ -5,10 +5,30 @@
 #include "agnocast/agnocast_executor.hpp"
 
 #include <array>
+#include <ctime>
 #include <stdexcept>
 
 namespace agnocast
 {
+
+thread_local int64_t last_receive_ioctl_ns = 0;
+thread_local int64_t last_receive_lock_wait_ns = 0;
+thread_local int64_t last_receive_lock_hold_ns = 0;
+
+int64_t get_last_receive_ioctl_ns()
+{
+  return last_receive_ioctl_ns;
+}
+
+int64_t get_last_receive_lock_wait_ns()
+{
+  return last_receive_lock_wait_ns;
+}
+
+int64_t get_last_receive_lock_hold_ns()
+{
+  return last_receive_lock_hold_ns;
+}
 
 std::mutex id2_callback_info_mtx;
 const int callback_map_bkt_cnt = 100;  // arbitrary size to prevent rehash
@@ -42,11 +62,17 @@ void receive_and_execute_message(
   {
     std::lock_guard<std::mutex> lock(mmap_mtx);
 
+    struct timespec ts0, ts1;
+    clock_gettime(CLOCK_MONOTONIC, &ts0);
     if (ioctl(agnocast_fd, AGNOCAST_RECEIVE_MSG_CMD, &receive_args) < 0) {
       RCLCPP_ERROR(logger, "AGNOCAST_RECEIVE_MSG_CMD failed: %s", strerror(errno));
       close(agnocast_fd);
       exit(EXIT_FAILURE);
     }
+    clock_gettime(CLOCK_MONOTONIC, &ts1);
+    last_receive_ioctl_ns = (ts1.tv_sec - ts0.tv_sec) * 1'000'000'000LL + (ts1.tv_nsec - ts0.tv_nsec);
+    last_receive_lock_wait_ns = receive_args.ret_lock_wait_ns;
+    last_receive_lock_hold_ns = receive_args.ret_lock_hold_ns;
 
     // Map the shared memory region with read permissions whenever a new publisher is discovered.
     for (uint32_t i = 0; i < receive_args.ret_pub_shm_num; i++) {

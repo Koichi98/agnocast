@@ -106,6 +106,8 @@ union ioctl_receive_msg_args {
     int64_t ret_entry_ids[MAX_RECEIVE_NUM];
     uint64_t ret_entry_addrs[MAX_RECEIVE_NUM];
     uint32_t ret_pub_shm_num;
+    int64_t ret_lock_wait_ns;
+    int64_t ret_lock_hold_ns;
   };
 };
 
