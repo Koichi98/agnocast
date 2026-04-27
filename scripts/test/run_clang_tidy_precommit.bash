@@ -11,6 +11,34 @@ set -euo pipefail
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 cd "$REPO_ROOT"
 
+# Packages linted by this hook. Keep in sync with:
+#   - the `files:` regex in .pre-commit-config.yaml
+#   - the changed-files regex in
+#     .github/workflows/build-and-test-agnocastlib-components-heaphook.yaml
+PKGS=(agnocastlib agnocast_components)
+
+# ---------------------------------------------------------------------------
+# Filter the staged files passed by pre-commit to the same set CI lints.
+# Done before the toolchain probes below — those spawn clang++-14 and add
+# noticeable latency, so a no-op invocation should bail early.
+# ---------------------------------------------------------------------------
+pairs=()
+for f in "$@"; do
+  for pkg in "${PKGS[@]}"; do
+    if [[ "$f" =~ ^src/$pkg/.*\.(cpp|hpp)$ ]] && [[ "$f" != *"/test/"* ]]; then
+      pairs+=("$pkg|$f")
+      break
+    fi
+  done
+done
+
+if [ ${#pairs[@]} -eq 0 ]; then
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
+# Toolchain checks.
+# ---------------------------------------------------------------------------
 CLANG_TIDY_BIN="clang-tidy-14"
 RUN_CLANG_TIDY_BIN="run-clang-tidy-14"
 
@@ -22,7 +50,11 @@ if ! command -v "$CLANG_TIDY_BIN" >/dev/null 2>&1 || \
 fi
 
 # Sanity check: must be LLVM 14.x, matching CI.
-TIDY_VERSION="$("$CLANG_TIDY_BIN" --version | grep -oE 'version [0-9]+' | head -n1 | awk '{print $2}')"
+tidy_version_out="$("$CLANG_TIDY_BIN" --version)"
+TIDY_VERSION=""
+if [[ "$tidy_version_out" =~ version[[:space:]]+([0-9]+) ]]; then
+  TIDY_VERSION="${BASH_REMATCH[1]}"
+fi
 if [ "$TIDY_VERSION" != "14" ]; then
   echo "ERROR: $CLANG_TIDY_BIN reports major version '$TIDY_VERSION', expected 14." >&2
   exit 1
@@ -45,38 +77,50 @@ if command -v clang++-14 >/dev/null 2>&1; then
   fi
 fi
 
-# Filter the staged files passed by pre-commit to the same set CI lints:
-#   src/(agnocastlib|agnocast_components)/**/*.{cpp,hpp}, excluding /test/.
-agnocastlib_files=()
-agnocast_components_files=()
-for f in "$@"; do
-  if [[ "$f" =~ ^src/(agnocastlib|agnocast_components)/.*\.(cpp|hpp)$ ]] && \
-     [[ "$f" != *"/test/"* ]]; then
-    pkg="${f#src/}"; pkg="${pkg%%/*}"
-    case "$pkg" in
-      agnocastlib)         agnocastlib_files+=("$f") ;;
-      agnocast_components) agnocast_components_files+=("$f") ;;
-    esac
-  fi
-done
-
-if [ ${#agnocastlib_files[@]} -eq 0 ] && [ ${#agnocast_components_files[@]} -eq 0 ]; then
-  exit 0
-fi
-
-# clang-tidy needs a compilation database. colcon writes one per package
-# under build/<pkg>/compile_commands.json when built with
-# -DCMAKE_EXPORT_COMPILE_COMMANDS=1. With --merge-install some setups also
-# expose build/compile_commands.json. If neither exists the hook prints a
-# warning and skips — CI runs clang-tidy on the PR, so a stale local build
+# ---------------------------------------------------------------------------
+# Lint each package. clang-tidy needs a compilation database.
+# colcon writes one per package under build/<pkg>/compile_commands.json when
+# built with -DCMAKE_EXPORT_COMPILE_COMMANDS=1. With --merge-install some
+# setups also expose build/compile_commands.json. If neither exists the hook
+# warns and skips — CI runs clang-tidy on the PR, so a stale local build
 # should not block the commit.
+# ---------------------------------------------------------------------------
 BUILD_HINT="Build with: colcon build --packages-up-to agnocastlib agnocast_components --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1"
+
+# Partition the input files by membership in a compile DB. JSON-aware
+# (whitespace/formatting independent), canonicalises both the DB entries
+# and the input paths via realpath so that symlinked workspaces match.
+# Outputs one line per input file:
+#   "+ <relpath>" — present in DB, will be linted
+#   "- <relpath>" — absent  from DB, will be reported as a gap
+partition_files_against_db() {
+  python3 - "$@" <<'PY'
+import json, os, sys
+db_path, repo, *files = sys.argv[1:]
+with open(db_path) as fh:
+    entries = json.load(fh)
+in_db = set()
+for e in entries:
+    p = e.get("file")
+    if not p:
+        continue
+    if not os.path.isabs(p):
+        p = os.path.join(e.get("directory", ""), p)
+    in_db.add(os.path.realpath(p))
+for f in files:
+    abs_p = os.path.realpath(os.path.join(repo, f))
+    print(("+ " if abs_p in in_db else "- ") + f)
+PY
+}
 
 JOBS="$(nproc)"
 EXIT_CODE=0
-for pkg in agnocastlib agnocast_components; do
-  declare -n pkg_files="${pkg}_files"
-  [ ${#pkg_files[@]} -eq 0 ] && continue
+for pkg in "${PKGS[@]}"; do
+  files=()
+  for pair in "${pairs[@]}"; do
+    [ "${pair%%|*}" = "$pkg" ] && files+=("${pair#*|}")
+  done
+  [ ${#files[@]} -eq 0 ] && continue
 
   if [ -f "build/$pkg/compile_commands.json" ]; then
     P_DIR="build/$pkg"
@@ -90,19 +134,19 @@ for pkg in agnocastlib agnocast_components; do
     continue
   fi
 
+  db="$P_DIR/compile_commands.json"
+
   # run-clang-tidy silently skips files absent from the compile DB, which
   # would let the hook report "Passed" without actually analysing them.
   # Partition staged files by DB membership and warn about the gap.
-  db="$P_DIR/compile_commands.json"
   matched_files=()
   missing_files=()
-  for f in "${pkg_files[@]}"; do
-    if grep -Fq "\"file\": \"$REPO_ROOT/$f\"" "$db"; then
-      matched_files+=("$f")
-    else
-      missing_files+=("$f")
-    fi
-  done
+  while IFS= read -r line; do
+    case "$line" in
+      "+ "*) matched_files+=("${line#+ }") ;;
+      "- "*) missing_files+=("${line#- }") ;;
+    esac
+  done < <(partition_files_against_db "$db" "$REPO_ROOT" "${files[@]}")
 
   if [ ${#missing_files[@]} -gt 0 ]; then
     if [ ${#matched_files[@]} -eq 0 ]; then
@@ -119,7 +163,11 @@ for pkg in agnocastlib agnocast_components; do
 
   [ ${#matched_files[@]} -eq 0 ] && continue
 
-  if ! "$RUN_CLANG_TIDY_BIN" -j "$JOBS" -p "$P_DIR" "${matched_files[@]}"; then
+  # Pass -clang-tidy-binary explicitly so the wrapper does not fall back to
+  # an unsuffixed `clang-tidy` (which on multi-version systems may resolve
+  # to a different LLVM major version than the one we just validated).
+  if ! "$RUN_CLANG_TIDY_BIN" -j "$JOBS" -p "$P_DIR" \
+      -clang-tidy-binary "$CLANG_TIDY_BIN" "${matched_files[@]}"; then
     EXIT_CODE=1
   fi
 done

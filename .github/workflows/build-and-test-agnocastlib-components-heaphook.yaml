@@ -164,11 +164,19 @@ jobs:
       if: github.event_name == 'pull_request' && steps.check_diff.outputs.cpp_changed == 'true' && env.ROS_DISTRO == 'humble'
       run: |
         set -euo pipefail
+        sudo apt-get update
         sudo apt-get install -y --no-install-recommends clang-tidy-14
         clang-tidy-14 --version
+        # Verify the helper script is actually on PATH — the clang-tidy-14
+        # package on Ubuntu 22.04 ships it today, but --no-install-recommends
+        # could drop it on a future packaging change. Fail loudly here rather
+        # than later with a confusing "command not found".
+        command -v run-clang-tidy-14 >/dev/null
         export FILES=($(echo "${{ steps.check_diff.outputs.changed_files }}" | grep -E '^src/(agnocastlib|agnocast_components)/.*\.(cpp|hpp)$' | grep -v '/test/' || true))
         if [ ${#FILES[@]} -gt 0 ]; then
-          run-clang-tidy-14 -j $(nproc) -p build/ "${FILES[@]}"
+          # Pin the underlying lint binary to clang-tidy-14 so the wrapper
+          # cannot silently fall back to an unsuffixed `clang-tidy`.
+          run-clang-tidy-14 -j $(nproc) -p build/ -clang-tidy-binary clang-tidy-14 "${FILES[@]}"
         else
           echo "No agnocastlib/agnocast_components C++ files changed, skipping clang-tidy"
         fi

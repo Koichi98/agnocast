@@ -82,9 +82,13 @@ python3 -m pip install --upgrade pre-commit identify
 pre-commit install
 ```
 
-The `clang-tidy` hook needs `compile_commands.json` produced by colcon. Run a build with the export flag at least once before committing C++ changes; if the file is absent the hook prints a warning and lets the commit proceed (CI will still run clang-tidy on the PR).
+The `clang-tidy` hook needs the `clang-tidy-14` toolchain (matching CI) and a `compile_commands.json` produced by colcon. Run a build with the export flag at least once before committing C++ changes; if the file is absent the hook prints a warning and lets the commit proceed (CI will still run clang-tidy on the PR).
 
 ```bash
+sudo apt-get install -y clang-tidy-14
+# On Ubuntu 22.04, also install libstdc++-12-dev so clang-14 can resolve
+# standard C++ headers like <atomic>:
+sudo apt-get install -y libstdc++-12-dev
 colcon build --packages-up-to agnocastlib agnocast_components \
   --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1
 ```
