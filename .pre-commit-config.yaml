@@ -19,3 +19,13 @@ repos:
         entry: scripts/test/run_kunit.bash
         language: system
         types: [c]
+
+      - id: clang-tidy
+        name: Run clang-tidy (matches CI clang-tidy-14)
+        entry: scripts/test/run_clang_tidy_precommit.bash
+        language: system
+        types_or: [c++]
+        files: ^src/(agnocastlib|agnocast_components)/.*\.(cpp|hpp)$
+        exclude: /test/
+        require_serial: true
+        pass_filenames: true

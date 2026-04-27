@@ -13,26 +13,6 @@ env:
   RUST_TOOLCHAIN: "1.75.0"
 
 jobs:
-  # TEMPORARY: print the clang-tidy version that CI actually uses, so we can
-  # pin to the exact same binary in both CI and the local pre-commit hook.
-  # Remove this job once the version is confirmed.
-  debug-clang-tidy-version:
-    if: github.event_name == 'pull_request'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-22.04, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - name: Print clang-tidy version info
-        run: |
-          set -x
-          cat /etc/os-release | head -5
-          which clang-tidy run-clang-tidy || true
-          clang-tidy --version || true
-          ls /usr/bin/clang-tidy* /usr/bin/run-clang-tidy* 2>&1 || true
-          dpkg -l | grep -E '^ii\s+(clang-tidy|llvm)' || true
-
   build-and-test-matrix:
     if: ${{ github.event_name == 'push' || github.event.label.name == 'run-build-test' }}
     strategy:
@@ -174,13 +154,21 @@ jobs:
     #   - modernize-pass-by-value: stricter about pass-by-value patterns
     # These produce many false positives with ROS/rclcpp code.
     # Until we can align the checks across versions, we only run clang-tidy on Humble.
+    #
+    # The clang-tidy version is pinned to 14 (via the version-suffixed binary)
+    # so the same major version is used in CI and in the local pre-commit hook
+    # (scripts/test/run_clang_tidy_precommit.bash). Do not switch back to the
+    # unsuffixed `run-clang-tidy` — it tracks the runner image's default and may
+    # silently change between LLVM major versions.
     - name: Run clang-tidy for agnocastlib and agnocast_components
       if: github.event_name == 'pull_request' && steps.check_diff.outputs.cpp_changed == 'true' && env.ROS_DISTRO == 'humble'
       run: |
         set -euo pipefail
+        sudo apt-get install -y --no-install-recommends clang-tidy-14
+        clang-tidy-14 --version
         export FILES=($(echo "${{ steps.check_diff.outputs.changed_files }}" | grep -E '^src/(agnocastlib|agnocast_components)/.*\.(cpp|hpp)$' | grep -v '/test/' || true))
         if [ ${#FILES[@]} -gt 0 ]; then
-          run-clang-tidy -j $(nproc) -p build/ "${FILES[@]}"
+          run-clang-tidy-14 -j $(nproc) -p build/ "${FILES[@]}"
         else
           echo "No agnocastlib/agnocast_components C++ files changed, skipping clang-tidy"
         fi
