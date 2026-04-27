@@ -28,5 +28,11 @@ jobs:
           python3 -m pip install pre-commit
 
       - name: Run pre-commit
+        # The clang-tidy hook needs a colcon build (compile_commands.json),
+        # which this lightweight workflow does not produce. clang-tidy is
+        # already executed in build-and-test-agnocastlib-components-heaphook.yaml,
+        # so skip it here to avoid duplicate (and impossible) work.
+        env:
+          SKIP: clang-tidy
         run: |
           pre-commit run --all-files
