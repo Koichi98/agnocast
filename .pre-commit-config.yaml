@@ -29,3 +29,5 @@ repos:
         exclude: /test/
         require_serial: true
         pass_filenames: true
+        # NOTE: this id ('clang-tidy') is referenced by SKIP=clang-tidy in
+        # .github/workflows/run-pre-commit.yaml. Keep them in sync.

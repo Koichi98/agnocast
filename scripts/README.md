@@ -67,6 +67,7 @@ Each script is a thin wrapper that runs `source install/setup.bash` followed by 
 | `test/test_rmmod_refcount.bash` | Verify `rmmod agnocast` is refused while `/dev/agnocast` is open and succeeds once the fd is closed. |
 | `test/switch_kmod.bats` | [bats](https://github.com/bats-core/bats-core) test suite for `switch_kmod.bash` (9 cases). **Destructive** — swaps installed `agnocast-kmod-v*` packages and load/unloads the module. Requires `apt install bats` and a prior run of `switch_kmod_canonical_setup.bash`. Run: `sudo bats scripts/test/switch_kmod.bats`. |
 | `test/switch_kmod_canonical_setup.bash` | One-time, idempotent setup for `switch_kmod.bats`: installs `agnocast-kmod-v${CANONICAL_VER:-2.3.3}` and caches the `.deb` for teardown recovery. |
+| `test/run_clang_tidy_precommit.bash` | Pre-commit entry-point for clang-tidy (LLVM 14, matching CI). Filters input files to `src/(agnocastlib\|agnocast_components)/**/*.{cpp,hpp}` (excluding `/test/`) and runs `run-clang-tidy-14`. Requires a prior `colcon build … -DCMAKE_EXPORT_COMPILE_COMMANDS=1`; if `compile_commands.json` is missing the script warns and skips. Invoked automatically by pre-commit; not normally run directly. |
 
 ### releases/ — maintainer-only
 

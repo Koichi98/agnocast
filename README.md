@@ -74,12 +74,19 @@ bash scripts/dev/setup.bash
 
 ### Setup pre-commit
 
-The following command allows `clang-format`, `markdownlint`, and [KUNIT Test](./agnocast_kmod/agnocast_kunit.c) to be run before each commit.
+The following command allows `clang-format`, `markdownlint`, [KUNIT Test](./agnocast_kmod/agnocast_kunit.c), and `clang-tidy` to be run before each commit.
 
 ```bash
 python3 -m pip install pre-commit
 python3 -m pip install --upgrade pre-commit identify
 pre-commit install
+```
+
+The `clang-tidy` hook needs `compile_commands.json` produced by colcon. Run a build with the export flag at least once before committing C++ changes; if the file is absent the hook prints a warning and lets the commit proceed (CI will still run clang-tidy on the PR).
+
+```bash
+colcon build --packages-up-to agnocastlib agnocast_components \
+  --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1
 ```
 
 If you want to disable pre-commit, please run `pre-commit uninstall`.

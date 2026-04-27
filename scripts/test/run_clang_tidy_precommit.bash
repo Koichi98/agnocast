@@ -22,7 +22,7 @@ if ! command -v "$CLANG_TIDY_BIN" >/dev/null 2>&1 || \
 fi
 
 # Sanity check: must be LLVM 14.x, matching CI.
-TIDY_VERSION="$("$CLANG_TIDY_BIN" --version | grep -oE 'version [0-9]+' | awk '{print $2}')"
+TIDY_VERSION="$("$CLANG_TIDY_BIN" --version | grep -oE 'version [0-9]+' | head -n1 | awk '{print $2}')"
 if [ "$TIDY_VERSION" != "14" ]; then
   echo "ERROR: $CLANG_TIDY_BIN reports major version '$TIDY_VERSION', expected 14." >&2
   exit 1
@@ -30,46 +30,50 @@ fi
 
 # Filter the staged files passed by pre-commit to the same set CI lints:
 #   src/(agnocastlib|agnocast_components)/**/*.{cpp,hpp}, excluding /test/.
-FILES=()
+agnocastlib_files=()
+agnocast_components_files=()
 for f in "$@"; do
   if [[ "$f" =~ ^src/(agnocastlib|agnocast_components)/.*\.(cpp|hpp)$ ]] && \
      [[ "$f" != *"/test/"* ]]; then
-    FILES+=("$f")
+    pkg="${f#src/}"; pkg="${pkg%%/*}"
+    case "$pkg" in
+      agnocastlib)         agnocastlib_files+=("$f") ;;
+      agnocast_components) agnocast_components_files+=("$f") ;;
+    esac
   fi
 done
 
-if [ ${#FILES[@]} -eq 0 ]; then
+if [ ${#agnocastlib_files[@]} -eq 0 ] && [ ${#agnocast_components_files[@]} -eq 0 ]; then
   exit 0
 fi
 
 # clang-tidy needs a compilation database. colcon writes one per package
 # under build/<pkg>/compile_commands.json when built with
 # -DCMAKE_EXPORT_COMPILE_COMMANDS=1. With --merge-install some setups also
-# expose build/compile_commands.json. Group files by package and run
-# clang-tidy with the matching -p directory.
-declare -A FILES_BY_PKG=()
-for f in "${FILES[@]}"; do
-  pkg="$(echo "$f" | awk -F/ '{print $2}')"
-  FILES_BY_PKG[$pkg]+="$f "
-done
-
+# expose build/compile_commands.json. If neither exists the hook prints a
+# warning and skips — CI runs clang-tidy on the PR, so a stale local build
+# should not block the commit.
 BUILD_HINT="Build with: colcon build --packages-up-to agnocastlib agnocast_components --cmake-args -DCMAKE_EXPORT_COMPILE_COMMANDS=1"
 
+JOBS="$(nproc)"
 EXIT_CODE=0
-for pkg in "${!FILES_BY_PKG[@]}"; do
+for pkg in agnocastlib agnocast_components; do
+  declare -n pkg_files="${pkg}_files"
+  [ ${#pkg_files[@]} -eq 0 ] && continue
+
   if [ -f "build/$pkg/compile_commands.json" ]; then
     P_DIR="build/$pkg"
   elif [ -f "build/compile_commands.json" ]; then
     P_DIR="build"
   else
-    echo "ERROR: no compile_commands.json for package '$pkg'." >&2
-    echo "       Looked for build/$pkg/compile_commands.json and build/compile_commands.json." >&2
-    echo "       $BUILD_HINT" >&2
-    exit 1
+    echo "WARN: no compile_commands.json for package '$pkg' — skipping clang-tidy." >&2
+    echo "      Looked for build/$pkg/compile_commands.json and build/compile_commands.json." >&2
+    echo "      $BUILD_HINT" >&2
+    echo "      CI will still run clang-tidy on this PR." >&2
+    continue
   fi
 
-  # shellcheck disable=SC2086
-  if ! "$RUN_CLANG_TIDY_BIN" -j "$(nproc)" -p "$P_DIR" ${FILES_BY_PKG[$pkg]}; then
+  if ! "$RUN_CLANG_TIDY_BIN" -j "$JOBS" -p "$P_DIR" "${pkg_files[@]}"; then
     EXIT_CODE=1
   fi
 done
