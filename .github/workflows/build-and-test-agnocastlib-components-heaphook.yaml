@@ -13,6 +13,26 @@ env:
   RUST_TOOLCHAIN: "1.75.0"
 
 jobs:
+  # TEMPORARY: print the clang-tidy version that CI actually uses, so we can
+  # pin to the exact same binary in both CI and the local pre-commit hook.
+  # Remove this job once the version is confirmed.
+  debug-clang-tidy-version:
+    if: github.event_name == 'pull_request'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Print clang-tidy version info
+        run: |
+          set -x
+          cat /etc/os-release | head -5
+          which clang-tidy run-clang-tidy || true
+          clang-tidy --version || true
+          ls /usr/bin/clang-tidy* /usr/bin/run-clang-tidy* 2>&1 || true
+          dpkg -l | grep -E '^ii\s+(clang-tidy|llvm)' || true
+
   build-and-test-matrix:
     if: ${{ github.event_name == 'push' || github.event.label.name == 'run-build-test' }}
     strategy:
