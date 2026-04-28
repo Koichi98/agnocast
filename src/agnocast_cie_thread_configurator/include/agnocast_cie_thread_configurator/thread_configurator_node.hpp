@@ -1,12 +1,14 @@
 #pragma once
 
+#include "agnocast_cie_thread_configurator/non_ros_thread_info_ipc.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "yaml-cpp/yaml.h"
 
 #include "agnocast_cie_config_msgs/msg/callback_group_info.hpp"
-#include "agnocast_cie_config_msgs/msg/non_ros_thread_info.hpp"
 
 #include <atomic>
+#include <map>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -46,16 +48,13 @@ private:
   bool issue_syscalls(const ThreadConfig & config);
   void callback_group_callback(
     size_t domain_id, const agnocast_cie_config_msgs::msg::CallbackGroupInfo::SharedPtr msg);
-  void non_ros_thread_callback(
-    const agnocast_cie_config_msgs::msg::NonRosThreadInfo::SharedPtr msg);
-
-  rclcpp::CallbackGroup::SharedPtr cbg_non_ros_thread_;
+  void non_ros_thread_callback(const agnocast_cie_thread_configurator::NonRosThreadInfoMsg & msg);
 
   std::vector<rclcpp::Node::SharedPtr> nodes_for_each_domain_;
   std::vector<rclcpp::Subscription<agnocast_cie_config_msgs::msg::CallbackGroupInfo>::SharedPtr>
     subs_for_each_domain_;
-  rclcpp::Subscription<agnocast_cie_config_msgs::msg::NonRosThreadInfo>::SharedPtr
-    non_ros_thread_sub_;
+  std::unique_ptr<agnocast_cie_thread_configurator::NonRosThreadInfoIpcServer>
+    non_ros_thread_ipc_server_;
 
   std::vector<ThreadConfig> callback_group_configs_;
   // (domain_id, callback_group_id) -> ThreadConfig*
