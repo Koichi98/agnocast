@@ -11,6 +11,7 @@
 #include <iostream>
 #include <set>
 #include <string>
+#include <string_view>
 
 PrerunNode::PrerunNode(const rclcpp::NodeOptions & options) : Node("prerun_node", options)
 {
@@ -42,16 +43,6 @@ PrerunNode::PrerunNode(const rclcpp::NodeOptions & options) : Node("prerun_node"
   size_t default_domain_id = agnocast_cie_thread_configurator::get_default_domain_id();
 
   auto cbg_qos = rclcpp::QoS(rclcpp::KeepAll()).reliable().transient_local();
-  // volatile: publisher context in spawn_non_ros2_thread is destroyed after publish,
-  // so transient_local is ineffective.
-  auto non_ros_thread_qos = rclcpp::QoS(rclcpp::KeepAll()).reliable();
-
-  // Create subscription for non-ROS thread info
-  non_ros_thread_sub_ = this->create_subscription<agnocast_cie_config_msgs::msg::NonRosThreadInfo>(
-    "/agnocast_cie_thread_configurator/non_ros_thread_info", non_ros_thread_qos,
-    [this](const agnocast_cie_config_msgs::msg::NonRosThreadInfo::SharedPtr msg) {
-      this->non_ros_thread_callback(msg);
-    });
 
   // Create subscription for default domain on this node
   subs_for_each_domain_.push_back(
@@ -80,6 +71,14 @@ PrerunNode::PrerunNode(const rclcpp::NodeOptions & options) : Node("prerun_node"
 
     RCLCPP_INFO(this->get_logger(), "Created subscription for domain ID: %zu", domain_id);
   }
+
+  // Start last: the callback can fire as soon as the receiver thread is up.
+  non_ros_thread_ipc_ =
+    std::make_unique<agnocast_cie_thread_configurator::NonRosThreadInfoIpcServer>(
+      this->get_logger(),
+      [this](const agnocast_cie_thread_configurator::NonRosThreadInfoMsg & msg) {
+        this->non_ros_thread_callback(msg);
+      });
 }
 
 void PrerunNode::topic_callback(
@@ -98,20 +97,25 @@ void PrerunNode::topic_callback(
 }
 
 void PrerunNode::non_ros_thread_callback(
-  const agnocast_cie_config_msgs::msg::NonRosThreadInfo::SharedPtr msg)
+  const agnocast_cie_thread_configurator::NonRosThreadInfoMsg & msg)
 {
-  if (non_ros_thread_names_.find(msg->thread_name) != non_ros_thread_names_.end()) {
+  // Runs on the IPC receiver thread.
+  std::lock_guard<std::mutex> lock(non_ros_thread_mutex_);
+
+  // Heterogeneous lookup avoids allocating a std::string for the duplicate-check probe.
+  // msg.thread_name is NUL-terminated (the receiver pins thread_name[kNonRosThreadNameMax]).
+  const std::string_view thread_name_view{msg.thread_name};
+  if (non_ros_thread_names_.find(thread_name_view) != non_ros_thread_names_.end()) {
     RCLCPP_ERROR(
-      this->get_logger(), "Duplicate thread_name received: tid=%ld | %s", msg->thread_id,
-      msg->thread_name.c_str());
+      this->get_logger(), "Duplicate thread_name received: tid=%ld | %s", msg.thread_id,
+      msg.thread_name);
     return;
   }
 
   RCLCPP_INFO(
-    this->get_logger(), "Received NonRosThreadInfo: tid=%ld | %s", msg->thread_id,
-    msg->thread_name.c_str());
+    this->get_logger(), "Received NonRosThreadInfo: tid=%ld | %s", msg.thread_id, msg.thread_name);
 
-  non_ros_thread_names_.insert(msg->thread_name);
+  non_ros_thread_names_.emplace(thread_name_view);
 }
 
 const std::vector<rclcpp::Node::SharedPtr> & PrerunNode::get_domain_nodes() const
@@ -165,7 +169,15 @@ void PrerunNode::dump_yaml_config(std::filesystem::path path)
   out << YAML::Key << "non_ros_threads";
   out << YAML::Value << YAML::BeginSeq;
 
-  for (const auto & thread_name : non_ros_thread_names_) {
+  // The receiver thread may still be alive; snapshot under the lock and release it
+  // before YAML emission. The set is small (one entry per registered non-ROS thread)
+  // and yaml-cpp emission heap-allocates per entry, so doing it under the lock would
+  // unnecessarily block the receiver from inserting new registrations.
+  const auto snapshot = [this] {
+    std::lock_guard<std::mutex> lock(non_ros_thread_mutex_);
+    return non_ros_thread_names_;
+  }();
+  for (const auto & thread_name : snapshot) {
     out << YAML::BeginMap;
     out << YAML::Key << "name" << YAML::Value << thread_name;
     out << YAML::Key << "affinity" << YAML::Value << YAML::Null;

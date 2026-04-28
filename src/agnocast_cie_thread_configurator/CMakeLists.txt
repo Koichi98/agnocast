@@ -69,9 +69,15 @@ ament_export_include_directories(include)
 ament_export_dependencies(agnocast_cie_config_msgs yaml-cpp rclcpp)
 
 if(BUILD_TESTING)
+  find_package(ament_lint_auto REQUIRED)
+  ament_lint_auto_find_test_dependencies()
+
   find_package(ament_cmake_gtest REQUIRED)
-  ament_add_gtest(test_${PROJECT_NAME} test/test_sanitize_node_name.cpp)
-  target_link_libraries(test_${PROJECT_NAME} thread_configurator)
+  ament_add_gtest(test_validate_thread_name test/test_validate_thread_name.cpp)
+  target_include_directories(test_validate_thread_name PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+  )
+  ament_target_dependencies(test_validate_thread_name rclcpp)
 endif()
 
 ament_package()

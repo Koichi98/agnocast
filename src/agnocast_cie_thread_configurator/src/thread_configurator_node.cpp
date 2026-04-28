@@ -16,6 +16,7 @@
 #include <fstream>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 namespace
@@ -51,6 +52,10 @@ ThreadConfiguratorNode::ThreadConfiguratorNode(const rclcpp::NodeOptions & optio
   YAML::Node non_ros_threads = yaml["non_ros_threads"];
 
   unapplied_num_ = callback_groups.size() + non_ros_threads.size();
+  // After this point, neither vector may grow or otherwise reallocate: the maps below
+  // (id_to_callback_group_config_, id_to_non_ros_thread_config_) store raw pointers into
+  // these elements. Adding dynamic registration here without switching the maps to indices
+  // would dangle every entry.
   callback_group_configs_.resize(callback_groups.size());
   non_ros_thread_configs_.resize(non_ros_threads.size());
 
@@ -142,16 +147,6 @@ ThreadConfiguratorNode::ThreadConfiguratorNode(const rclcpp::NodeOptions & optio
   }
 
   auto cbg_qos = rclcpp::QoS(rclcpp::KeepAll()).reliable().transient_local();
-  // volatile: publisher context in spawn_non_ros2_thread is destroyed after publish,
-  // so transient_local is ineffective.
-  auto non_ros_thread_qos = rclcpp::QoS(rclcpp::KeepAll()).reliable();
-
-  // Create subscription for non-ROS thread info
-  non_ros_thread_sub_ = this->create_subscription<agnocast_cie_config_msgs::msg::NonRosThreadInfo>(
-    "/agnocast_cie_thread_configurator/non_ros_thread_info", non_ros_thread_qos,
-    [this](const agnocast_cie_config_msgs::msg::NonRosThreadInfo::SharedPtr msg) {
-      this->non_ros_thread_callback(msg);
-    });
 
   // Create subscription for default domain on this node
   subs_for_each_domain_.push_back(
@@ -180,6 +175,14 @@ ThreadConfiguratorNode::ThreadConfiguratorNode(const rclcpp::NodeOptions & optio
 
     RCLCPP_INFO(this->get_logger(), "Created subscription for domain ID: %zu", domain_id);
   }
+
+  // Start last: the callback can fire as soon as the receiver thread is up.
+  non_ros_thread_ipc_ =
+    std::make_unique<agnocast_cie_thread_configurator::NonRosThreadInfoIpcServer>(
+      this->get_logger(),
+      [this](const agnocast_cie_thread_configurator::NonRosThreadInfoMsg & msg) {
+        this->non_ros_thread_callback(msg);
+      });
 }
 
 void ThreadConfiguratorNode::validate_rt_throttling(const YAML::Node & yaml)
@@ -298,6 +301,9 @@ void ThreadConfiguratorNode::validate_hardware_info(const YAML::Node & yaml)
 
 ThreadConfiguratorNode::~ThreadConfiguratorNode()
 {
+  // Tear down first so its callback cannot race with the cgroup teardown below.
+  non_ros_thread_ipc_.reset();
+
   if (cgroup_num_ > 0) {
     for (int i = 0; i < cgroup_num_; i++) {
       rmdir(("/sys/fs/cgroup/cpuset/" + std::to_string(i)).c_str());
@@ -307,24 +313,37 @@ ThreadConfiguratorNode::~ThreadConfiguratorNode()
 
 void ThreadConfiguratorNode::print_all_unapplied()
 {
-  if (unapplied_num_ == 0) {
-    return;
+  // Snapshot the unapplied names under the lock and release it before logging. RCLCPP_WARN
+  // formats and pushes through the rcl publisher, which is comparatively slow; holding the
+  // mutex across N of those calls would unnecessarily block the IPC receiver thread (and
+  // the executor thread) for the full duration of the print.
+  std::vector<std::string> unapplied_callback_groups;
+  std::vector<std::string> unapplied_non_ros_threads;
+  {
+    std::lock_guard<std::mutex> lock(callbacks_mutex_);
+    if (unapplied_num_ == 0) {
+      return;
+    }
+    for (const auto & config : callback_group_configs_) {
+      if (!config.applied) {
+        unapplied_callback_groups.push_back(config.thread_str);
+      }
+    }
+    for (const auto & config : non_ros_thread_configs_) {
+      if (!config.applied) {
+        unapplied_non_ros_threads.push_back(config.thread_str);
+      }
+    }
   }
 
   RCLCPP_WARN(this->get_logger(), "Following callback groups are not yet configured");
-
-  for (auto & config : callback_group_configs_) {
-    if (!config.applied) {
-      RCLCPP_WARN(this->get_logger(), "  - %s", config.thread_str.c_str());
-    }
+  for (const auto & name : unapplied_callback_groups) {
+    RCLCPP_WARN(this->get_logger(), "  - %s", name.c_str());
   }
 
   RCLCPP_WARN(this->get_logger(), "Following non-ROS threads are not yet configured");
-
-  for (auto & config : non_ros_thread_configs_) {
-    if (!config.applied) {
-      RCLCPP_WARN(this->get_logger(), "  - %s", config.thread_str.c_str());
-    }
+  for (const auto & name : unapplied_non_ros_threads) {
+    RCLCPP_WARN(this->get_logger(), "  - %s", name.c_str());
   }
 }
 
@@ -467,6 +486,9 @@ const std::vector<rclcpp::Node::SharedPtr> & ThreadConfiguratorNode::get_domain_
 void ThreadConfiguratorNode::callback_group_callback(
   size_t domain_id, const agnocast_cie_config_msgs::msg::CallbackGroupInfo::SharedPtr msg)
 {
+  // Serialize with non_ros_thread_callback (runs on the IPC receiver thread).
+  std::lock_guard<std::mutex> lock(callbacks_mutex_);
+
   auto key = std::make_pair(domain_id, msg->callback_group_id);
   auto it = id_to_callback_group_config_.find(key);
   if (it == id_to_callback_group_config_.end()) {
@@ -514,15 +536,21 @@ void ThreadConfiguratorNode::callback_group_callback(
 }
 
 void ThreadConfiguratorNode::non_ros_thread_callback(
-  const agnocast_cie_config_msgs::msg::NonRosThreadInfo::SharedPtr msg)
+  const agnocast_cie_thread_configurator::NonRosThreadInfoMsg & msg)
 {
-  auto it = id_to_non_ros_thread_config_.find(msg->thread_name);
+  // Runs on the IPC receiver thread, so serialize with callback_group_callback.
+  std::lock_guard<std::mutex> lock(callbacks_mutex_);
+
+  // Heterogeneous lookup avoids allocating a std::string for the lookup probe.
+  // msg.thread_name is NUL-terminated (the receiver pins thread_name[kNonRosThreadNameMax]).
+  const std::string_view thread_name_view{msg.thread_name};
+  auto it = id_to_non_ros_thread_config_.find(thread_name_view);
   if (it == id_to_non_ros_thread_config_.end()) {
     RCLCPP_INFO(
       this->get_logger(),
       "Received NonRosThreadInfo: but the yaml file does not "
       "contain configuration for name=%s (tid=%ld)",
-      msg->thread_name.c_str(), msg->thread_id);
+      msg.thread_name, msg.thread_id);
     return;
   }
 
@@ -533,19 +561,18 @@ void ThreadConfiguratorNode::non_ros_thread_callback(
     RCLCPP_INFO(
       this->get_logger(),
       "Re-applying configuration for already configured non-ROS thread (name=%s, tid=%ld)",
-      msg->thread_name.c_str(), msg->thread_id);
+      msg.thread_name, msg.thread_id);
   }
 
   RCLCPP_INFO(
-    this->get_logger(), "Received NonRosThreadInfo: tid=%ld | %s", msg->thread_id,
-    msg->thread_name.c_str());
-  config->thread_id = msg->thread_id;
+    this->get_logger(), "Received NonRosThreadInfo: tid=%ld | %s", msg.thread_id, msg.thread_name);
+  config->thread_id = msg.thread_id;
 
   if (!issue_syscalls(*config)) {
     RCLCPP_WARN(
       this->get_logger(),
       "Skipping configuration for non-ROS thread (name=%s, tid=%ld) due to syscall failure.",
-      msg->thread_name.c_str(), msg->thread_id);
+      msg.thread_name, msg.thread_id);
     return;
   }
 
