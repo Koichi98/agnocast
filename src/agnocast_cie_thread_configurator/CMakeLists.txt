@@ -76,7 +76,9 @@ if(BUILD_TESTING)
   ament_add_gtest(test_${PROJECT_NAME}
     test/test_sanitize_node_name.cpp
     test/test_validate_thread_name.cpp
+    test/test_non_ros_thread_info_ipc.cpp
   )
+  ament_target_dependencies(test_${PROJECT_NAME} rclcpp)
   target_link_libraries(test_${PROJECT_NAME} thread_configurator)
 endif()
 

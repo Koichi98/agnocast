@@ -6,6 +6,9 @@
   "epoll(7), and eventfd(2) are Linux-specific."
 #endif
 
+#include <rclcpp/clock.hpp>
+#include <rclcpp/logger.hpp>
+
 #include <sys/socket.h>
 #include <sys/un.h>
 
@@ -13,7 +16,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 
 namespace agnocast_cie_thread_configurator
@@ -104,5 +109,51 @@ int open_sender_socket(const char * thread_name) noexcept;
 // errors up to kSenderMaxSendAttempts * kSenderRetryDelay. Returns true on
 // success, false on permanent error or timeout (a WARN is logged on failure).
 bool send_thread_info(int fd, const NonRosThreadInfoMsg & msg, const char * thread_name) noexcept;
+
+// Receives NonRosThreadInfoMsg datagrams on the abstract-namespace UDS named
+// kNonRosThreadInfoSocketName. At most one server per network namespace per
+// host (abstract names are netns-scoped).
+//
+// Callbacks fire on the receiver thread, so callers MUST synchronize any
+// state shared with other threads. Malformed datagrams (wrong size),
+// transient recv errors, and exceptions escaping the user callback are all
+// logged (throttled) and dropped without tearing down the receiver thread.
+//
+// Construction throws std::system_error on any kernel-resource failure
+// (socket/bind/eventfd/epoll_create1/epoll_ctl). The most operationally
+// relevant case is EADDRINUSE on bind, which means another agnocast_cie
+// thread-info daemon is already bound in this network namespace.
+//
+// Non-copyable and non-movable: owns a std::thread and three raw fds. Hold
+// instances via std::unique_ptr (as both daemon nodes do) when reseat-ability
+// is needed.
+class NonRosThreadInfoIpcServer
+{
+public:
+  // Invoked on the internal receiver thread, never on an executor thread.
+  using Callback = std::function<void(const NonRosThreadInfoMsg &)>;
+
+  // `logger` is stored by value; it must be associated with a live rcl
+  // context for the lifetime of this object because the receiver thread
+  // emits RCLCPP_FATAL / RCLCPP_ERROR_THROTTLE through it.
+  NonRosThreadInfoIpcServer(rclcpp::Logger logger, Callback cb);
+  ~NonRosThreadInfoIpcServer();
+
+  NonRosThreadInfoIpcServer(const NonRosThreadInfoIpcServer &) = delete;
+  NonRosThreadInfoIpcServer & operator=(const NonRosThreadInfoIpcServer &) = delete;
+
+private:
+  void run();
+  bool epoll_add(int fd) noexcept;
+  void cleanup_fds() noexcept;
+
+  rclcpp::Logger logger_;
+  Callback cb_;
+  int sock_fd_ = -1;
+  int shutdown_fd_ = -1;
+  int epoll_fd_ = -1;
+  rclcpp::Clock throttle_clock_{RCL_STEADY_TIME};
+  std::thread thread_;
+};
 
 }  // namespace agnocast_cie_thread_configurator
