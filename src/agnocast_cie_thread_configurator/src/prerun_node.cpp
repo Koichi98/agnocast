@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <string>
 
@@ -41,22 +42,14 @@ PrerunNode::PrerunNode(const rclcpp::NodeOptions & options) : Node("prerun_node"
 
   size_t default_domain_id = agnocast_cie_thread_configurator::get_default_domain_id();
 
-  cbg_non_ros_thread_ = this->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-
   auto cbg_qos = rclcpp::QoS(rclcpp::KeepAll()).reliable().transient_local();
-  // volatile: publisher context in spawn_non_ros2_thread is destroyed after publish,
-  // so transient_local is ineffective.
-  auto non_ros_thread_qos = rclcpp::QoS(rclcpp::KeepAll()).reliable();
 
-  // Create subscription for non-ROS thread info
-  rclcpp::SubscriptionOptions non_ros_opts;
-  non_ros_opts.callback_group = cbg_non_ros_thread_;
-  non_ros_thread_sub_ = this->create_subscription<agnocast_cie_config_msgs::msg::NonRosThreadInfo>(
-    "/agnocast_cie_thread_configurator/non_ros_thread_info", non_ros_thread_qos,
-    [this](const agnocast_cie_config_msgs::msg::NonRosThreadInfo::SharedPtr msg) {
-      this->non_ros_thread_callback(msg);
-    },
-    non_ros_opts);
+  non_ros_thread_ipc_server_ =
+    std::make_unique<agnocast_cie_thread_configurator::NonRosThreadInfoIpcServer>(
+      this->get_logger(),
+      [this](const agnocast_cie_thread_configurator::NonRosThreadInfoMsg & msg) {
+        this->non_ros_thread_callback(msg);
+      });
 
   // Create subscription for default domain on this node. Uses the node's default
   // callback group, mirroring the per-domain extra nodes below.
@@ -106,20 +99,19 @@ void PrerunNode::topic_callback(
 }
 
 void PrerunNode::non_ros_thread_callback(
-  const agnocast_cie_config_msgs::msg::NonRosThreadInfo::SharedPtr msg)
+  const agnocast_cie_thread_configurator::NonRosThreadInfoMsg & msg)
 {
-  if (non_ros_thread_names_.find(msg->thread_name) != non_ros_thread_names_.end()) {
+  if (non_ros_thread_names_.find(msg.thread_name) != non_ros_thread_names_.end()) {
     RCLCPP_ERROR(
-      this->get_logger(), "Duplicate thread_name received: tid=%ld | %s", msg->thread_id,
-      msg->thread_name.c_str());
+      this->get_logger(), "Duplicate thread_name received: tid=%ld | %s", msg.thread_id,
+      msg.thread_name);
     return;
   }
 
   RCLCPP_INFO(
-    this->get_logger(), "Received NonRosThreadInfo: tid=%ld | %s", msg->thread_id,
-    msg->thread_name.c_str());
+    this->get_logger(), "Received NonRosThreadInfo: tid=%ld | %s", msg.thread_id, msg.thread_name);
 
-  non_ros_thread_names_.insert(msg->thread_name);
+  non_ros_thread_names_.insert(msg.thread_name);
 }
 
 const std::vector<rclcpp::Node::SharedPtr> & PrerunNode::get_domain_nodes() const
@@ -129,6 +121,11 @@ const std::vector<rclcpp::Node::SharedPtr> & PrerunNode::get_domain_nodes() cons
 
 void PrerunNode::dump_yaml_config(std::filesystem::path path)
 {
+  // Stop accepting new non-ROS thread registrations and join the receiver
+  // thread before reading non_ros_thread_names_; otherwise we race the
+  // receiver thread on the non-atomic std::set.
+  non_ros_thread_ipc_server_.reset();
+
   YAML::Emitter out;
 
   out << YAML::BeginMap;
