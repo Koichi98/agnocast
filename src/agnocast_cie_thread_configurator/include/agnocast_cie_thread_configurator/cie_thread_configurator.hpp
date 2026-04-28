@@ -32,9 +32,8 @@ rclcpp::Node::SharedPtr create_node_for_domain(size_t domain_id);
 // - thread_name: non-null, NUL-terminated, unique among threads managed by
 //   cie_thread_configurator, <= kNonRosThreadNameMax bytes, no embedded NUL.
 // - The daemon (prerun_node / thread_configurator_node) must be up within
-//   kSenderMaxConnectWaitIters * kSenderRetryDelay (5 s by default) of this
-//   call. If not, registration is silently skipped (WARN) and the user
-//   function still runs unconfigured.
+//   ~5 s of this call. If not, registration is silently skipped (WARN) and
+//   the user function still runs unconfigured.
 // - The calling process must share the daemon's network namespace (abstract
 //   UDS names are netns-scoped).
 // - Thread-safe: concurrent calls are permitted.

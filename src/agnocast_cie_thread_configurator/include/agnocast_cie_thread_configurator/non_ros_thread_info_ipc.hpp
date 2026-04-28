@@ -12,7 +12,6 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
-#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -24,18 +23,12 @@
 namespace agnocast_cie_thread_configurator
 {
 
-// Wire-format constants: the sender (spawn_non_ros2_thread) and the receiver
-// (NonRosThreadInfoIpcServer) must agree on these byte-for-byte. Changing any
-// of them is an ABI break that requires both sides to be rebuilt together.
-inline constexpr char kNonRosThreadInfoSocketName[] = "agnocast_cie_non_ros_thread_info";
+// Wire-format constant: the sender (spawn_non_ros2_thread) and the receiver
+// (NonRosThreadInfoIpcServer) must agree on this byte-for-byte. Changing it
+// is an ABI break that requires both sides to be rebuilt together. The
+// abstract socket name itself and the sender retry budgets live in the .cpp
+// (they are implementation details of this transport).
 inline constexpr size_t kNonRosThreadNameMax = 63;  // bytes excluding trailing NUL
-
-// Guarantee the abstract address fits sun_path so fill_abstract_sockaddr's
-// memcpy cannot overflow. The +1 accounts for the leading '\0' marker that
-// pins an address to the abstract namespace.
-static_assert(
-  sizeof(kNonRosThreadInfoSocketName) <= sizeof(sockaddr_un::sun_path),
-  "abstract socket name does not fit in sockaddr_un::sun_path");
 
 // SOCK_DGRAM preserves record boundaries, so each send/recv carries exactly
 // one struct. thread_id is the Linux TID (SYS_gettid), not the PID.
@@ -87,18 +80,8 @@ inline ThreadNameValidation validate_thread_name(std::string_view thread_name) n
   return ThreadNameValidation::kOk;
 }
 
-// Sender-side retry budgets. Increasing kSenderMaxConnectWaitIters tolerates
-// slower daemon startup (e.g., loaded CI hosts) at the cost of delaying the
-// user function in the "daemon absent" failure mode. kSenderMaxSendAttempts
-// is overwhelmingly defensive: the default Linux rcvbuf holds hundreds of
-// these messages.
-inline constexpr int kSenderMaxConnectWaitIters = 500;  // 5 s daemon-up wait
-inline constexpr int kSenderMaxSendAttempts = 50;       // 500 ms EAGAIN budget
-inline constexpr std::chrono::milliseconds kSenderRetryDelay{10};
-
 // Opens a SOCK_DGRAM AF_UNIX socket and connects to the daemon's
-// abstract-namespace address. Waits up to
-// kSenderMaxConnectWaitIters * kSenderRetryDelay for the daemon to start
+// abstract-namespace address. Waits up to ~5 s for the daemon to start
 // (connect returns ECONNREFUSED until something is bound).
 // Returns a connected fd on success (caller must close it) or -1 on
 // permanent failure / timeout. `thread_name` is borrowed and used only for
@@ -106,13 +89,13 @@ inline constexpr std::chrono::milliseconds kSenderRetryDelay{10};
 int open_sender_socket(const char * thread_name) noexcept;
 
 // Sends `msg` on the connected `fd` (MSG_DONTWAIT), retrying transient
-// errors up to kSenderMaxSendAttempts * kSenderRetryDelay. Returns true on
-// success, false on permanent error or timeout (a WARN is logged on failure).
+// errors for up to ~500 ms. Returns true on success, false on permanent
+// error or timeout (a WARN is logged on failure).
 bool send_thread_info(int fd, const NonRosThreadInfoMsg & msg, const char * thread_name) noexcept;
 
-// Receives NonRosThreadInfoMsg datagrams on the abstract-namespace UDS named
-// kNonRosThreadInfoSocketName. At most one server per network namespace per
-// host (abstract names are netns-scoped).
+// Receives NonRosThreadInfoMsg datagrams on the abstract-namespace UDS used
+// by this transport. At most one server per network namespace per host
+// (abstract names are netns-scoped).
 //
 // Callbacks fire on the receiver thread, so callers MUST synchronize any
 // state shared with other threads. Malformed datagrams (wrong size),

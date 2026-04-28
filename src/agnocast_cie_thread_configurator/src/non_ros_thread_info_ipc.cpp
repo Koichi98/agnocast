@@ -24,6 +24,27 @@
 
 namespace
 {
+// Wire-format socket name: the sender and the receiver must agree on this
+// byte-for-byte. Changing it is an ABI break that requires both sides to be
+// rebuilt together.
+constexpr char kNonRosThreadInfoSocketName[] = "agnocast_cie_non_ros_thread_info";
+
+// Guarantee the abstract address fits sun_path so fill_abstract_sockaddr's
+// memcpy cannot overflow. The +1 accounts for the leading '\0' marker that
+// pins an address to the abstract namespace.
+static_assert(
+  sizeof(kNonRosThreadInfoSocketName) <= sizeof(sockaddr_un::sun_path),
+  "abstract socket name does not fit in sockaddr_un::sun_path");
+
+// Sender-side retry budgets. Increasing kSenderMaxConnectWaitIters tolerates
+// slower daemon startup (e.g., loaded CI hosts) at the cost of delaying the
+// user function in the "daemon absent" failure mode. kSenderMaxSendAttempts
+// is overwhelmingly defensive: the default Linux rcvbuf holds hundreds of
+// these messages.
+constexpr int kSenderMaxConnectWaitIters = 500;  // 5 s daemon-up wait
+constexpr int kSenderMaxSendAttempts = 50;       // 500 ms EAGAIN budget
+constexpr std::chrono::milliseconds kSenderRetryDelay{10};
+
 // Thread-safe replacement for std::strerror. strerror itself is MT-Unsafe
 // (it returns a pointer to a static buffer), so concurrent senders can
 // clobber each other's diagnostic strings. strerrordesc_np (glibc 2.32+) is
