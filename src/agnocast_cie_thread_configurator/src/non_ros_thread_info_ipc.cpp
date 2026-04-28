@@ -1,3 +1,7 @@
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include "agnocast_cie_thread_configurator/non_ros_thread_info_ipc.hpp"
 
 #include <sys/socket.h>
@@ -10,6 +14,19 @@
 #include <cstring>
 #include <thread>
 
+namespace
+{
+// Thread-safe replacement for std::strerror. strerror itself is MT-Unsafe
+// (it returns a pointer to a static buffer), so concurrent senders can
+// clobber each other's diagnostic strings. strerrordesc_np (glibc 2.32+) is
+// MT-Safe and returns nullptr only for unknown errnos.
+const char * safe_strerror(int err) noexcept
+{
+  const char * msg = ::strerrordesc_np(err);
+  return msg != nullptr ? msg : "Unknown error";
+}
+}  // namespace
+
 namespace agnocast_cie_thread_configurator
 {
 
@@ -19,7 +36,7 @@ int open_sender_socket(const char * thread_name) noexcept
   if (fd == -1) {
     std::fprintf(
       stderr, "[cie_thread_client] [WARN] socket(AF_UNIX) failed for thread '%s': %s\n",
-      thread_name, std::strerror(errno));
+      thread_name, safe_strerror(errno));
     return -1;
   }
 
@@ -38,7 +55,7 @@ int open_sender_socket(const char * thread_name) noexcept
     if (err != ECONNREFUSED && err != EINTR && err != EAGAIN && err != EWOULDBLOCK) {
       std::fprintf(
         stderr, "[cie_thread_client] [WARN] connect to '@%s' failed for thread '%s': %s\n",
-        kNonRosThreadInfoSocketName, thread_name, std::strerror(err));
+        kNonRosThreadInfoSocketName, thread_name, safe_strerror(err));
       ::close(fd);
       return -1;
     }
@@ -79,7 +96,7 @@ bool send_thread_info(int fd, const NonRosThreadInfoMsg & msg, const char * thre
     if (err != EAGAIN && err != EWOULDBLOCK && err != EINTR && err != ENOBUFS) {
       std::fprintf(
         stderr, "[cie_thread_client] [WARN] send failed for NonRosThreadInfo (thread '%s'): %s\n",
-        thread_name, std::strerror(err));
+        thread_name, safe_strerror(err));
       return false;
     }
     std::this_thread::sleep_for(kSenderRetryDelay);
