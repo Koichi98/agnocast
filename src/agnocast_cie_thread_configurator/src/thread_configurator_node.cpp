@@ -304,6 +304,11 @@ ThreadConfiguratorNode::~ThreadConfiguratorNode()
 
 void ThreadConfiguratorNode::print_all_unapplied()
 {
+  // Stop accepting new non-ROS thread registrations and join the receiver
+  // thread before reading non_ros_thread_configs_; otherwise we race the
+  // receiver thread on the non-atomic config->applied / thread_id fields.
+  non_ros_thread_ipc_server_.reset();
+
   if (unapplied_num_.load() == 0) {
     return;
   }

@@ -14,9 +14,11 @@
 
 class ThreadConfiguratorNode : public rclcpp::Node
 {
-  // Each ThreadConfig instance is reachable from exactly one MutuallyExclusive
-  // callback group, so no two callbacks ever touch the same instance. Hence
-  // thread_id and applied stay non-atomic; print_all_unapplied reads post-spin.
+  // Each ThreadConfig is mutated by exactly one writer: a MutuallyExclusive
+  // callback-group thread for callback-group configs, and the IpcServer
+  // receiver thread for non-ROS thread configs. So thread_id and applied
+  // stay non-atomic. print_all_unapplied resets the IpcServer before reading
+  // non-ROS configs to ensure the receiver thread is joined.
   struct ThreadConfig
   {
     std::string thread_str;  // callback_group_id or thread_name
@@ -53,8 +55,6 @@ private:
   std::vector<rclcpp::Node::SharedPtr> nodes_for_each_domain_;
   std::vector<rclcpp::Subscription<agnocast_cie_config_msgs::msg::CallbackGroupInfo>::SharedPtr>
     subs_for_each_domain_;
-  std::unique_ptr<agnocast_cie_thread_configurator::NonRosThreadInfoIpcServer>
-    non_ros_thread_ipc_server_;
 
   std::vector<ThreadConfig> callback_group_configs_;
   // (domain_id, callback_group_id) -> ThreadConfig*
@@ -67,4 +67,9 @@ private:
   std::atomic<int> unapplied_num_{0};
   std::atomic<int> cgroup_num_{0};
   std::atomic<bool> configured_at_least_once_{false};
+
+  // Declared LAST so reverse-order destruction joins the receiver thread
+  // before any data it reads/writes (the maps and atomics above) is destroyed.
+  std::unique_ptr<agnocast_cie_thread_configurator::NonRosThreadInfoIpcServer>
+    non_ros_thread_ipc_server_;
 };
