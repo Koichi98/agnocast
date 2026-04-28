@@ -176,7 +176,6 @@ ThreadConfiguratorNode::ThreadConfiguratorNode(const rclcpp::NodeOptions & optio
     RCLCPP_INFO(this->get_logger(), "Created subscription for domain ID: %zu", domain_id);
   }
 
-  // Start last: the callback can fire as soon as the receiver thread is up.
   non_ros_thread_ipc_ =
     std::make_unique<agnocast_cie_thread_configurator::NonRosThreadInfoIpcServer>(
       this->get_logger(),
@@ -301,7 +300,6 @@ void ThreadConfiguratorNode::validate_hardware_info(const YAML::Node & yaml)
 
 ThreadConfiguratorNode::~ThreadConfiguratorNode()
 {
-  // Tear down first so its callback cannot race with the cgroup teardown below.
   non_ros_thread_ipc_.reset();
 
   if (cgroup_num_ > 0) {
@@ -313,10 +311,7 @@ ThreadConfiguratorNode::~ThreadConfiguratorNode()
 
 void ThreadConfiguratorNode::print_all_unapplied()
 {
-  // Snapshot the unapplied names under the lock and release it before logging. RCLCPP_WARN
-  // formats and pushes through the rcl publisher, which is comparatively slow; holding the
-  // mutex across N of those calls would unnecessarily block the IPC receiver thread (and
-  // the executor thread) for the full duration of the print.
+  // Snapshot the unapplied names under the lock and release it before logging.
   std::vector<std::string> unapplied_callback_groups;
   std::vector<std::string> unapplied_non_ros_threads;
   {
