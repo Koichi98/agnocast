@@ -63,3 +63,14 @@ TEST(ValidateThreadName, MaxLengthWithTrailingNulIsRejected)
   ASSERT_EQ(name.size(), kNonRosThreadNameMax);
   EXPECT_EQ(validate_thread_name(name), ThreadNameValidation::kEmbeddedNul);
 }
+
+TEST(ValidateThreadName, NullptrIsRejected)
+{
+  EXPECT_EQ(
+    validate_thread_name(static_cast<const char *>(nullptr)), ThreadNameValidation::kNullptr);
+}
+
+TEST(ValidateThreadName, CStringOverloadDelegates)
+{
+  EXPECT_EQ(validate_thread_name("worker"), ThreadNameValidation::kOk);
+}

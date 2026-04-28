@@ -32,6 +32,7 @@ rclcpp::Node::SharedPtr create_node_for_domain(size_t domain_id);
 
 enum class ThreadNameValidation {
   kOk,
+  kNullptr,
   kTooLong,
   kEmbeddedNul,
 };
@@ -48,6 +49,17 @@ inline ThreadNameValidation validate_thread_name(std::string_view thread_name) n
     return ThreadNameValidation::kEmbeddedNul;
   }
   return ThreadNameValidation::kOk;
+}
+
+// Overload for `const char *` callers (e.g., spawn_non_ros2_thread). Constructing a
+// std::string_view from a null pointer is undefined behaviour, so nullptr is rejected here
+// rather than forwarded.
+inline ThreadNameValidation validate_thread_name(const char * thread_name) noexcept
+{
+  if (thread_name == nullptr) {
+    return ThreadNameValidation::kNullptr;
+  }
+  return validate_thread_name(std::string_view{thread_name});
 }
 
 // Opens a SOCK_DGRAM AF_UNIX socket and connects it to the daemon's abstract-namespace
@@ -168,42 +180,48 @@ inline bool send_thread_info(
 template <class F, class... Args>
 std::thread spawn_non_ros2_thread(const char * thread_name, F && f, Args &&... args)
 {
-  if (thread_name == nullptr) {
-    std::fprintf(
-      stderr,
-      "[cie_thread_client] [WARN] spawn_non_ros2_thread called with nullptr thread_name; "
-      "skipping NonRosThreadInfo publish.\n");
-    thread_name = "";
+  // Validate synchronously so contract violations surface at the call site (rather than
+  // after a thread spawn), and the spawned thread only runs the happy path.
+  bool should_register = false;
+  switch (validate_thread_name(thread_name)) {
+    case ThreadNameValidation::kOk:
+      should_register = true;
+      break;
+    case ThreadNameValidation::kNullptr:
+      std::fprintf(
+        stderr,
+        "[cie_thread_client] [WARN] spawn_non_ros2_thread called with nullptr thread_name; "
+        "skipping NonRosThreadInfo publish.\n");
+      thread_name = "";
+      break;
+    case ThreadNameValidation::kTooLong:
+      std::fprintf(
+        stderr,
+        "[cie_thread_client] [WARN] Thread name '%s' exceeds %zu bytes; skipping "
+        "NonRosThreadInfo publish.\n",
+        thread_name, kNonRosThreadNameMax);
+      break;
+    case ThreadNameValidation::kEmbeddedNul:
+      std::fprintf(
+        stderr,
+        "[cie_thread_client] [WARN] Thread name contains an embedded NUL; skipping "
+        "NonRosThreadInfo publish.\n");
+      break;
   }
-  std::thread t([thread_name = std::string(thread_name), func = std::forward<F>(f),
+
+  std::thread t([thread_name = std::string(thread_name), should_register, func = std::forward<F>(f),
                  captured_args = std::make_tuple(std::forward<Args>(args)...)]() mutable {
-    switch (validate_thread_name(thread_name)) {
-      case ThreadNameValidation::kTooLong:
-        std::fprintf(
-          stderr,
-          "[cie_thread_client] [WARN] Thread name '%s' exceeds %zu bytes; skipping "
-          "NonRosThreadInfo publish.\n",
-          thread_name.c_str(), kNonRosThreadNameMax);
-        break;
-      case ThreadNameValidation::kEmbeddedNul:
-        std::fprintf(
-          stderr,
-          "[cie_thread_client] [WARN] Thread name contains an embedded NUL; skipping "
-          "NonRosThreadInfo publish.\n");
-        break;
-      case ThreadNameValidation::kOk: {
-        const int fd = open_sender_socket(thread_name.c_str());
-        if (fd != -1) {
-          NonRosThreadInfoMsg msg = {};
-          msg.thread_id = static_cast<int64_t>(syscall(SYS_gettid));
-          std::memcpy(msg.thread_name, thread_name.c_str(), thread_name.size());
-          msg.thread_name[thread_name.size()] = '\0';
-          send_thread_info(fd, msg, thread_name.c_str());
-          if (::close(fd) == -1) {
-            std::fprintf(stderr, "[cie_thread_client] [WARN] close failed: %s\n", strerror(errno));
-          }
+    if (should_register) {
+      const int fd = open_sender_socket(thread_name.c_str());
+      if (fd != -1) {
+        NonRosThreadInfoMsg msg = {};
+        msg.thread_id = static_cast<int64_t>(syscall(SYS_gettid));
+        std::memcpy(msg.thread_name, thread_name.c_str(), thread_name.size());
+        msg.thread_name[thread_name.size()] = '\0';
+        send_thread_info(fd, msg, thread_name.c_str());
+        if (::close(fd) == -1) {
+          std::fprintf(stderr, "[cie_thread_client] [WARN] close failed: %s\n", strerror(errno));
         }
-        break;
       }
     }
 
