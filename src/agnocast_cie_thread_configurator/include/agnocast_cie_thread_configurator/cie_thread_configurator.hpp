@@ -50,13 +50,11 @@ inline ThreadNameValidation validate_thread_name(std::string_view thread_name) n
   return ThreadNameValidation::kOk;
 }
 
-// Implementation detail of `spawn_non_ros2_thread`; not part of the public API.
 // Opens a SOCK_DGRAM AF_UNIX socket and connects it to the daemon's abstract-namespace
 // address. Waits up to kSenderMaxConnectWaitIters * kSenderRetryDelay for the daemon to
 // start (connect returns ECONNREFUSED until something is bound to that abstract name).
 // Returns a connected fd on success (caller must close it) or -1 on permanent failure /
-// timeout. `thread_name` is borrowed and used only for log messages; it must remain valid
-// for the duration of the call.
+// timeout.
 inline int open_sender_socket(const char * thread_name) noexcept
 {
   const int fd = ::socket(AF_UNIX, SOCK_DGRAM | SOCK_CLOEXEC, 0);
@@ -100,15 +98,8 @@ inline int open_sender_socket(const char * thread_name) noexcept
   return -1;
 }
 
-// Implementation detail of `spawn_non_ros2_thread`; not part of the public API.
 // Sends `msg` on the connected `fd` (MSG_DONTWAIT), retrying transient errors up to
-// kSenderMaxSendAttempts * kSenderRetryDelay. EAGAIN here means the receiver's SO_RCVBUF
-// is full; the default Linux rcvbuf (~200 KiB) holds hundreds of these messages, so the
-// retry budget is overwhelmingly defensive. ENOBUFS is also retried: AF_UNIX SOCK_DGRAM
-// can return it under transient kernel-memory pressure when allocating an sk_buff fails,
-// and dropping the registration outright over a momentary squeeze would silently leave
-// the thread unconfigured for its lifetime. EINTR consumes a retry slot too; see
-// open_sender_socket for the rationale. Returns true on success, false on permanent error
+// kSenderMaxSendAttempts * kSenderRetryDelay. Returns true on success, false on permanent error
 // or timeout (a WARN is logged in either failure case).
 inline bool send_thread_info(
   int fd, const NonRosThreadInfoMsg & msg, const char * thread_name) noexcept
@@ -130,6 +121,12 @@ inline bool send_thread_info(
       return false;
     }
     const int err = errno;
+    // EAGAIN here means the receiver's SO_RCVBUF is full;
+    // the default Linux rcvbuf (~200 KiB) holds hundreds of these messages, so the
+    // retry budget is overwhelmingly defensive. ENOBUFS is also retried: AF_UNIX SOCK_DGRAM
+    // can return it under transient kernel-memory pressure when allocating an sk_buff fails,
+    // and dropping the registration outright over a momentary squeeze would silently leave
+    // the thread unconfigured for its lifetime. EINTR consumes a retry slot too.
     if (err != EAGAIN && err != EWOULDBLOCK && err != EINTR && err != ENOBUFS) {
       std::fprintf(
         stderr, "[cie_thread_client] [WARN] send failed for NonRosThreadInfo (thread '%s'): %s\n",
@@ -171,11 +168,6 @@ inline bool send_thread_info(
 template <class F, class... Args>
 std::thread spawn_non_ros2_thread(const char * thread_name, F && f, Args &&... args)
 {
-  // Reject nullptr at the API boundary: passing it through to the lambda's
-  // `std::string(thread_name)` capture below would invoke undefined behaviour, while every
-  // other contract violation (oversize, embedded NUL) is reported as a clean WARN. Convert
-  // to an empty string so validate_thread_name's kOk path is reached and the user's `f`
-  // still runs (matching the documented "registration silently skipped" semantics).
   if (thread_name == nullptr) {
     std::fprintf(
       stderr,
@@ -202,9 +194,6 @@ std::thread spawn_non_ros2_thread(const char * thread_name, F && f, Args &&... a
       case ThreadNameValidation::kOk: {
         const int fd = open_sender_socket(thread_name.c_str());
         if (fd != -1) {
-          // Zero-init is load-bearing: we only memcpy `thread_name.size()` bytes plus a
-          // single trailing NUL, so the tail of `msg.thread_name` (and any trailing
-          // padding) would otherwise leak uninitialized stack bytes onto the wire.
           NonRosThreadInfoMsg msg = {};
           msg.thread_id = static_cast<int64_t>(syscall(SYS_gettid));
           std::memcpy(msg.thread_name, thread_name.c_str(), thread_name.size());
