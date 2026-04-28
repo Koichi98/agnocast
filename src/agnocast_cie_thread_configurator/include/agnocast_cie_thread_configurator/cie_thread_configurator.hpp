@@ -47,7 +47,7 @@ std::thread spawn_non_ros2_thread(const char * thread_name, F && f, Args &&... a
     std::fprintf(
       stderr,
       "[cie_thread_client] [WARN] spawn_non_ros2_thread called with nullptr thread_name; "
-      "skipping NonRosThreadInfo publish.\n");
+      "skipping NonRosThreadInfo registration.\n");
     thread_name = "";
   }
   std::thread t([thread_name = std::string(thread_name), func = std::forward<F>(f),
@@ -57,25 +57,29 @@ std::thread spawn_non_ros2_thread(const char * thread_name, F && f, Args &&... a
         std::fprintf(
           stderr,
           "[cie_thread_client] [WARN] thread name '%s' exceeds %zu bytes; skipping "
-          "NonRosThreadInfo publish.\n",
+          "NonRosThreadInfo registration.\n",
           thread_name.c_str(), kNonRosThreadNameMax);
         break;
       case ThreadNameValidation::kEmbeddedNul:
         std::fprintf(
           stderr,
           "[cie_thread_client] [WARN] thread name contains an embedded NUL; skipping "
-          "NonRosThreadInfo publish.\n");
+          "NonRosThreadInfo registration.\n");
         break;
       case ThreadNameValidation::kOk: {
+        // Empty thread_name only reaches here from the nullptr->"" remap above,
+        // which already logged a WARN and decided to skip; sending an empty-name
+        // datagram would just produce confusing "yaml does not contain configuration
+        // for name=" noise on the daemon side.
+        if (thread_name.empty()) break;
         const int fd = open_sender_socket(thread_name.c_str());
         if (fd != -1) {
-          // Zero-init is load-bearing: we only memcpy `thread_name.size()`
-          // bytes plus a single trailing NUL, so the tail of msg.thread_name
-          // would otherwise leak uninitialized stack bytes onto the wire.
+          // Zero-init covers the tail of msg.thread_name so uninitialized stack
+          // bytes do not leak onto the wire after the memcpy of thread_name.size()
+          // bytes; the trailing NUL is supplied by the same zero-init.
           NonRosThreadInfoMsg msg = {};
           msg.thread_id = static_cast<int64_t>(syscall(SYS_gettid));
           std::memcpy(msg.thread_name, thread_name.c_str(), thread_name.size());
-          msg.thread_name[thread_name.size()] = '\0';
           send_thread_info(fd, msg, thread_name.c_str());
           ::close(fd);
         }

@@ -35,7 +35,9 @@ struct NonRosThreadInfoMsg
   int64_t thread_id;
   char thread_name[kNonRosThreadNameMax + 1];
 };
-static_assert(std::is_trivially_copyable<NonRosThreadInfoMsg>::value);
+static_assert(
+  std::is_trivially_copyable<NonRosThreadInfoMsg>::value,
+  "NonRosThreadInfoMsg must remain trivially copyable for memcpy/recv on the wire");
 // Pin the on-wire layout: a future addition / reorder would silently break
 // the size check in the receiver loop while looking compatible on both sides
 // if rebuilt together.

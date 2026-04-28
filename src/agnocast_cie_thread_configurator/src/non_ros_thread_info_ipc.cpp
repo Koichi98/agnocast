@@ -75,11 +75,20 @@ int open_sender_socket(const char * thread_name) noexcept
       return fd;
     }
     const int err = errno;
+    // EISCONN: an EINTR-interrupted connect can complete asynchronously in the
+    // kernel, and the next connect() call then reports the socket as already
+    // connected -- treat that as success.
+    if (err == EISCONN) {
+      return fd;
+    }
     // ECONNREFUSED: daemon not yet bound (the common startup race we are
     // polling against). EAGAIN/EWOULDBLOCK: AF_UNIX connect can hit autobind
     // table exhaustion under burst load. EINTR: also consumes a slot so a
-    // signal storm cannot become a hot spin.
-    if (err != ECONNREFUSED && err != EINTR && err != EAGAIN && err != EWOULDBLOCK) {
+    // signal storm cannot become a hot spin. EALREADY: an EINTR-interrupted
+    // connect is still in progress in the kernel; retry to discover the result.
+    if (
+      err != ECONNREFUSED && err != EINTR && err != EAGAIN && err != EWOULDBLOCK &&
+      err != EALREADY) {
       std::fprintf(
         stderr, "[cie_thread_client] [WARN] connect to '@%s' failed for thread '%s': %s\n",
         kNonRosThreadInfoSocketName, thread_name, safe_strerror(err));
@@ -218,25 +227,27 @@ NonRosThreadInfoIpcServer::~NonRosThreadInfoIpcServer()
       // event makes run() return. eventfd write effectively cannot fail
       // under normal operation; if it does, continuing would hang the
       // destructor forever in thread_.join(). Surface and terminate.
+      // stderr precedes RCLCPP_FATAL so the diagnostic survives even when the
+      // logger backend is mid-shutdown or itself throws std::bad_alloc.
       if (w == -1) {
         const int err = errno;
-        RCLCPP_FATAL(
-          logger_, "eventfd write failed (%s); cannot wake receiver thread", safe_strerror(err));
         std::fprintf(
           stderr,
           "[NonRosThreadInfoIpcServer] [FATAL] eventfd write failed (%s); cannot wake "
           "receiver thread\n",
           safe_strerror(err));
-      } else {
         RCLCPP_FATAL(
-          logger_,
-          "eventfd write returned unexpected size %zd (expected %zu); cannot wake "
-          "receiver thread",
-          w, sizeof(v));
+          logger_, "eventfd write failed (%s); cannot wake receiver thread", safe_strerror(err));
+      } else {
         std::fprintf(
           stderr,
           "[NonRosThreadInfoIpcServer] [FATAL] eventfd write returned unexpected size %zd "
           "(expected %zu); cannot wake receiver thread\n",
+          w, sizeof(v));
+        RCLCPP_FATAL(
+          logger_,
+          "eventfd write returned unexpected size %zd (expected %zu); cannot wake "
+          "receiver thread",
           w, sizeof(v));
       }
       std::terminate();
@@ -292,10 +303,12 @@ void NonRosThreadInfoIpcServer::run()
       // rest of the process lifetime. Surface it loudly so launch tooling
       // can react.
       const int err = errno;
-      RCLCPP_FATAL(logger_, "epoll_wait() failed: %s", safe_strerror(err));
+      // stderr first, then logger: if the rcl logger is mid-shutdown or
+      // itself throws, the operator still sees the cause on stderr.
       std::fprintf(
         stderr, "[NonRosThreadInfoIpcServer] [FATAL] epoll_wait() failed: %s\n",
         safe_strerror(err));
+      RCLCPP_FATAL(logger_, "epoll_wait() failed: %s", safe_strerror(err));
       std::terminate();
     }
 
