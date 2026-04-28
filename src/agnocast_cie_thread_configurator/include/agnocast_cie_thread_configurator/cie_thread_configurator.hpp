@@ -39,14 +39,10 @@ enum class ThreadNameValidation {
 };
 
 // Validates that `thread_name` can be safely embedded in a NonRosThreadInfoMsg wire frame.
-// Returns kOk if the name fits in `kNonRosThreadNameMax` bytes and contains no embedded NUL
-// bytes; otherwise the relevant error code. An empty string is considered valid (kOk),
-// matching the wire format which permits any byte sequence within the size budget.
-// Callers should invoke this before constructing a NonRosThreadInfoMsg directly. Note that
-// `spawn_non_ros2_thread` takes a `const char *` thread name and so cannot detect embedded
-// NULs in its caller; those are unreachable from that path.
-// Takes std::string_view so callers holding a `const char *` or `std::string_view` (e.g., a
-// view over `msg.thread_name`) do not have to materialize a std::string just to validate.
+// Empty strings are valid (kOk); the wire format permits any byte sequence within the size
+// budget. Callers should invoke this before constructing a NonRosThreadInfoMsg directly.
+// std::string_view lets `const char *` or view callers (e.g., a view over `msg.thread_name`)
+// validate without materializing a std::string.
 inline ThreadNameValidation validate_thread_name(std::string_view thread_name) noexcept
 {
   if (thread_name.size() > kNonRosThreadNameMax) {

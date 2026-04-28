@@ -538,7 +538,6 @@ void ThreadConfiguratorNode::callback_group_callback(
 void ThreadConfiguratorNode::non_ros_thread_callback(
   const agnocast_cie_thread_configurator::NonRosThreadInfoMsg & msg)
 {
-  // Runs on the IPC receiver thread, so serialize with callback_group_callback.
   std::lock_guard<std::mutex> lock(callbacks_mutex_);
 
   // Heterogeneous lookup avoids allocating a std::string for the lookup probe.

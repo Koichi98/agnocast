@@ -99,7 +99,6 @@ void PrerunNode::topic_callback(
 void PrerunNode::non_ros_thread_callback(
   const agnocast_cie_thread_configurator::NonRosThreadInfoMsg & msg)
 {
-  // Runs on the IPC receiver thread.
   std::lock_guard<std::mutex> lock(non_ros_thread_mutex_);
 
   // Heterogeneous lookup avoids allocating a std::string for the duplicate-check probe.
