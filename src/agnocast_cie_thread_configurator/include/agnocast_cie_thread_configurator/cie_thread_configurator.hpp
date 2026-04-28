@@ -32,17 +32,13 @@ rclcpp::Node::SharedPtr create_node_for_domain(size_t domain_id);
 
 enum class ThreadNameValidation {
   kOk,
-  kTooLong,      // size() > kNonRosThreadNameMax; checked before kEmbeddedNul.
-  kEmbeddedNul,  // contains a '\0' byte within the size budget. Unreachable from
-                 // spawn_non_ros2_thread (which takes a const char *) but matters for
-                 // callers that construct a NonRosThreadInfoMsg directly.
+  kTooLong,
+  kEmbeddedNul,
 };
 
 // Validates that `thread_name` can be safely embedded in a NonRosThreadInfoMsg wire frame.
-// Empty strings are valid (kOk); the wire format permits any byte sequence within the size
-// budget. Callers should invoke this before constructing a NonRosThreadInfoMsg directly.
-// std::string_view lets `const char *` or view callers (e.g., a view over `msg.thread_name`)
-// validate without materializing a std::string.
+// Empty strings are valid (kOk). Callers should invoke this before constructing a
+// NonRosThreadInfoMsg directly.
 inline ThreadNameValidation validate_thread_name(std::string_view thread_name) noexcept
 {
   if (thread_name.size() > kNonRosThreadNameMax) {
