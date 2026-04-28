@@ -52,7 +52,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
         if not args.debug:
             pub_topic_info_rets = [p for p in pub_topic_info_rets if not p['is_bridge']]
         agnocast_pub_count = len(pub_topic_info_rets)
-        
+
         # Count ROS 2 publishers excluding bridge nodes (unless debug mode)
         ros2_pub_infos = []
         try:
@@ -83,7 +83,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
                     print('  Deadline: %s' % info.qos_profile.deadline)
                     print('  Liveliness: %s' % info.qos_profile.liveliness.name)
                     print('  Liveliness lease duration: %s' % info.qos_profile.liveliness_lease_duration, end=line_end)
-                
+
                 for info in pub_topic_info_rets:
                     nodespace, node_name = self.split_full_node_name(info['node_name'])
                     print('Node name: %s' % node_name)
@@ -104,7 +104,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
         if not args.debug:
             sub_topic_info_rets = [s for s in sub_topic_info_rets if not s['is_bridge']]
         agnocast_sub_count = len(sub_topic_info_rets)
-        
+
         # Count ROS 2 subscribers excluding bridge nodes (unless debug mode)
         ros2_sub_infos = []
         try:
@@ -135,7 +135,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
                     print('  Deadline: %s' % info.qos_profile.deadline)
                     print('  Liveliness: %s' % info.qos_profile.liveliness.name)
                     print('  Liveliness lease duration: %s' % info.qos_profile.liveliness_lease_duration, end=line_end)
-                
+
                 for info in sub_topic_info_rets:
                     nodespace, node_name = self.split_full_node_name(info['node_name'])
                     print('Node name: %s' % node_name)
@@ -157,7 +157,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
             lib.get_agnocast_sub_nodes.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
             lib.get_agnocast_sub_nodes.restype = ctypes.POINTER(TopicInfoRet)
             lib.get_agnocast_pub_nodes.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
-            lib.get_agnocast_pub_nodes.restype = ctypes.POINTER(TopicInfoRet)          
+            lib.get_agnocast_pub_nodes.restype = ctypes.POINTER(TopicInfoRet)
             lib.free_agnocast_topic_info_ret.argtypes = [ctypes.POINTER(TopicInfoRet)]
             lib.free_agnocast_topic_info_ret.restype = None
 
@@ -175,7 +175,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
                     "qos_is_transient_local": sub_topic_info_ret_array[i].qos_is_transient_local,
                     "is_bridge": sub_topic_info_ret_array[i].is_bridge,
                 })
-            if sub_topic_info_ret_count.value != 0 and sub_topic_info_ret_array is not None:
+            if sub_topic_info_ret_array:
                 lib.free_agnocast_topic_info_ret(sub_topic_info_ret_array)
 
             # get agnocast pub node list
@@ -189,7 +189,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
                     "qos_is_transient_local": pub_topic_info_ret_array[i].qos_is_transient_local,
                     "is_bridge": pub_topic_info_ret_array[i].is_bridge,
                 })
-            if pub_topic_info_ret_count.value != 0 and pub_topic_info_ret_array is not None:
+            if pub_topic_info_ret_array:
                 lib.free_agnocast_topic_info_ret(pub_topic_info_ret_array)
 
             # get bridge node names
@@ -211,7 +211,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
             # check if topic exists
             if topic_types is None:
                 if sub_topic_info_ret_count.value == 0 and pub_topic_info_ret_count.value == 0:
-                    return 'Unkown topic: %s' % topic_name
+                    return 'Unknown topic: %s' % topic_name
                 else:
                     topic_types = '<UNKNOWN>'
 
