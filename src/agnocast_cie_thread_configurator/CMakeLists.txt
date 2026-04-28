@@ -11,7 +11,10 @@ find_package(rclcpp REQUIRED)
 find_package(agnocast_cie_config_msgs REQUIRED)
 find_package(yaml-cpp REQUIRED)
 
-add_library(thread_configurator SHARED src/util.cpp)
+add_library(thread_configurator SHARED
+  src/util.cpp
+  src/non_ros_thread_info_ipc.cpp
+)
 ament_target_dependencies(thread_configurator rclcpp agnocast_cie_config_msgs)
 
 add_executable(

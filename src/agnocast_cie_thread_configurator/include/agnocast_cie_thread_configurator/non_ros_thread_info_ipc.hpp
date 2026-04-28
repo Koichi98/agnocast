@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -80,5 +81,28 @@ inline ThreadNameValidation validate_thread_name(std::string_view thread_name) n
   }
   return ThreadNameValidation::kOk;
 }
+
+// Sender-side retry budgets. Increasing kSenderMaxConnectWaitIters tolerates
+// slower daemon startup (e.g., loaded CI hosts) at the cost of delaying the
+// user function in the "daemon absent" failure mode. kSenderMaxSendAttempts
+// is overwhelmingly defensive: the default Linux rcvbuf holds hundreds of
+// these messages.
+inline constexpr int kSenderMaxConnectWaitIters = 500;  // 5 s daemon-up wait
+inline constexpr int kSenderMaxSendAttempts = 50;       // 500 ms EAGAIN budget
+inline constexpr std::chrono::milliseconds kSenderRetryDelay{10};
+
+// Opens a SOCK_DGRAM AF_UNIX socket and connects to the daemon's
+// abstract-namespace address. Waits up to
+// kSenderMaxConnectWaitIters * kSenderRetryDelay for the daemon to start
+// (connect returns ECONNREFUSED until something is bound).
+// Returns a connected fd on success (caller must close it) or -1 on
+// permanent failure / timeout. `thread_name` is borrowed and used only for
+// log messages; it must remain valid for the duration of the call.
+int open_sender_socket(const char * thread_name) noexcept;
+
+// Sends `msg` on the connected `fd` (MSG_DONTWAIT), retrying transient
+// errors up to kSenderMaxSendAttempts * kSenderRetryDelay. Returns true on
+// success, false on permanent error or timeout (a WARN is logged on failure).
+bool send_thread_info(int fd, const NonRosThreadInfoMsg & msg, const char * thread_name) noexcept;
 
 }  // namespace agnocast_cie_thread_configurator
