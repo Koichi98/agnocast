@@ -25,9 +25,7 @@ namespace agnocast_cie_thread_configurator
 
 // Wire-format constant: the sender (spawn_non_ros2_thread) and the receiver
 // (NonRosThreadInfoIpcServer) must agree on this byte-for-byte. Changing it
-// is an ABI break that requires both sides to be rebuilt together. The
-// abstract socket name itself and the sender retry budgets live in the .cpp
-// (they are implementation details of this transport).
+// is an ABI break that requires both sides to be rebuilt together.
 inline constexpr size_t kNonRosThreadNameMax = 63;  // bytes excluding trailing NUL
 
 // SOCK_DGRAM preserves record boundaries, so each send/recv carries exactly
@@ -107,13 +105,10 @@ bool send_thread_info(int fd, const NonRosThreadInfoMsg & msg, const char * thre
 // relevant case is EADDRINUSE on bind, which means another agnocast_cie
 // thread-info daemon is already bound in this network namespace.
 //
-// Non-copyable and non-movable: owns a std::thread and three raw fds. Hold
-// instances via std::unique_ptr (as both daemon nodes do) when reseat-ability
-// is needed.
+// Non-copyable and non-movable: owns a std::thread and three raw fds.
 class NonRosThreadInfoIpcServer
 {
 public:
-  // Invoked on the internal receiver thread, never on an executor thread.
   using Callback = std::function<void(const NonRosThreadInfoMsg &)>;
 
   // `logger` is stored by value; it must be associated with a live rcl

@@ -24,9 +24,7 @@
 
 namespace
 {
-// Wire-format socket name: the sender and the receiver must agree on this
-// byte-for-byte. Changing it is an ABI break that requires both sides to be
-// rebuilt together.
+// Wire-format socket name; same ABI policy as kNonRosThreadNameMax.
 constexpr char kNonRosThreadInfoSocketName[] = "agnocast_cie_non_ros_thread_info";
 
 // Guarantee the abstract address fits sun_path so fill_abstract_sockaddr's
