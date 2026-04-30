@@ -7,6 +7,7 @@
 #include <sys/timerfd.h>
 #include <unistd.h>
 
+#include <atomic>
 #include <chrono>
 #include <functional>
 #include <memory>
@@ -37,10 +38,10 @@ public:
   // etc.
 
   AGNOCAST_PUBLIC
-  void cancel() { canceled_ = true; }
+  void cancel() { canceled_.store(true); }
 
   AGNOCAST_PUBLIC
-  bool is_canceled() const { return canceled_; }
+  bool is_canceled() const { return canceled_.load(); }
 
   AGNOCAST_PUBLIC
   void reset()
@@ -65,7 +66,7 @@ public:
       close(timer_fd_);
       throw std::runtime_error("timerfd_settime failed for timer_id=" + std::to_string(timer_fd_));
     }
-    canceled_ = false;
+    canceled_.store(false);
 
     // TODO: call on_reset_callback
   }
@@ -76,7 +77,7 @@ public:
     if (timer_fd_ == -1) {
       throw std::runtime_error("timer_fd is not set to TimerBase");
     }
-    if (canceled_) {
+    if (canceled_.load()) {
       return std::chrono::nanoseconds::max();
     }
     struct itimerspec spec = {};
@@ -113,7 +114,7 @@ protected:
   uint32_t timer_id_;
   int timer_fd_;
   std::chrono::nanoseconds period_;
-  bool canceled_;
+  std::atomic<bool> canceled_;
 };
 
 /**
