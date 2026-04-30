@@ -233,7 +233,7 @@ void register_timer_info(
     timer_info->timer_fd = create_timer_fd(timer_id, period, clock->get_clock_type());
   }
 
-  timer->set_timer_fd(timer_info->timer_fd);
+  timer->set_timer_info(timer_info);
 
   setup_time_jump_callback(timer_info, clock);
 

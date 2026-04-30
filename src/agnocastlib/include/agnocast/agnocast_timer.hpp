@@ -17,6 +17,8 @@
 namespace agnocast
 {
 
+struct TimerInfo;
+
 constexpr int64_t NANOSECONDS_PER_SECOND = 1000000000;
 
 /**
@@ -44,54 +46,12 @@ public:
   bool is_canceled() const { return canceled_.load(); }
 
   AGNOCAST_PUBLIC
-  void reset()
-  {
-    if (timer_fd_ == -1) {
-      throw std::runtime_error("timer_fd is not set to TimerBase");
-    }
-    struct itimerspec spec = {};
-    const auto period_count = period_.count();
-    if (period_count == 0) {
-      // Workaround: timerfd_settime() disarms the timer when both it_value and it_interval
-      // are zero. Use 1ns to keep the timer armed and achieve "always ready" semantics.
-      spec.it_interval.tv_sec = 0;
-      spec.it_interval.tv_nsec = 1;
-    } else {
-      spec.it_interval.tv_sec = period_count / NANOSECONDS_PER_SECOND;
-      spec.it_interval.tv_nsec = period_count % NANOSECONDS_PER_SECOND;
-    }
-    spec.it_value = spec.it_interval;
-
-    if (timerfd_settime(timer_fd_, 0, &spec, nullptr) == -1) {
-      close(timer_fd_);
-      throw std::runtime_error("timerfd_settime failed for timer_id=" + std::to_string(timer_fd_));
-    }
-    canceled_.store(false);
-
-    // TODO: call on_reset_callback
-  }
+  void reset();
 
   AGNOCAST_PUBLIC
-  std::chrono::nanoseconds time_until_trigger()
-  {
-    if (timer_fd_ == -1) {
-      throw std::runtime_error("timer_fd is not set to TimerBase");
-    }
-    if (canceled_.load()) {
-      return std::chrono::nanoseconds::max();
-    }
-    struct itimerspec spec = {};
-    if (timerfd_gettime(timer_fd_, &spec) == -1) {
-      close(timer_fd_);
-      throw std::runtime_error("timerfd_gettime failed for timer_id=" + std::to_string(timer_fd_));
-    }
-    auto total_nsec = (static_cast<int64_t>(spec.it_value.tv_sec) * NANOSECONDS_PER_SECOND) +
-                      static_cast<int64_t>(spec.it_value.tv_nsec);
+  std::chrono::nanoseconds time_until_trigger();
 
-    return std::chrono::nanoseconds(total_nsec);
-  }
-
-  void set_timer_fd(int timer_fd) { timer_fd_ = timer_fd; }
+  void set_timer_info(std::weak_ptr<TimerInfo> timer_info) { timer_info_ = timer_info; }
 
   /** @brief Return whether this timer uses a steady clock.
    *  @return True if the clock is steady. */
@@ -107,12 +67,12 @@ public:
 
 protected:
   TimerBase(uint32_t timer_id, std::chrono::nanoseconds period)
-  : timer_id_(timer_id), timer_fd_(-1), period_(period), canceled_(false)
+  : timer_id_(timer_id), timer_info_(), period_(period), canceled_(false)
   {
   }
 
   uint32_t timer_id_;
-  int timer_fd_;
+  std::weak_ptr<TimerInfo> timer_info_;
   std::chrono::nanoseconds period_;
   std::atomic<bool> canceled_;
 };
