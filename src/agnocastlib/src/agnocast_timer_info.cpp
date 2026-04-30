@@ -247,27 +247,20 @@ void register_timer_info(
 
 void handle_timer_event(TimerInfo & timer_info)
 {
-  // TODO(Koichi98): Add canceled check here
-
   auto timer = timer_info.timer.lock();
   if (!timer) {
     return;  // Timer object has been destroyed
-  }
-
-  const int64_t now_ns = timer_info.clock->now().nanoseconds();
-  const int64_t period_ns = timer_info.period.count();
-
-  if (timer->is_need_reset()) {
-    timer->reset_complete();
-    // TODO: execute on_reset_callback
   }
 
   if (timer->is_canceled()) {
     return;
   }
 
+  const int64_t now_ns = timer_info.clock->now().nanoseconds();
+
   timer_info.last_call_time_ns.store(now_ns, std::memory_order_relaxed);
 
+  const int64_t period_ns = timer_info.period.count();
   int64_t next_call_time_ns =
     timer_info.next_call_time_ns.load(std::memory_order_relaxed) + period_ns;
 

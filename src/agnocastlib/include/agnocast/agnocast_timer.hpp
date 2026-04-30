@@ -67,9 +67,11 @@ public:
       throw std::runtime_error("timerfd_settime failed for timer_id=" + std::to_string(timer_fd_));
     }
     canceled_ = false;
-    need_reset_ = true;
+
+    // TODO: call on_reset_callback
   }
 
+  AGNOCAST_PUBLIC
   std::chrono::nanoseconds time_until_trigger()
   {
     if (canceled_) {
@@ -85,10 +87,6 @@ public:
 
     return std::chrono::nanoseconds(total_nsec);
   }
-
-  bool is_need_reset() { return need_reset_; }
-
-  void reset_complete() { need_reset_ = false; }
 
   void set_timer_fd(int timer_fd) { timer_fd_ = timer_fd; }
 
@@ -106,7 +104,7 @@ public:
 
 protected:
   TimerBase(uint32_t timer_id, std::chrono::nanoseconds period)
-  : timer_id_(timer_id), timer_fd_(-1), period_(period), canceled_(false), need_reset_(false)
+  : timer_id_(timer_id), timer_fd_(-1), period_(period), canceled_(false)
   {
   }
 
@@ -114,7 +112,6 @@ protected:
   int timer_fd_;
   std::chrono::nanoseconds period_;
   bool canceled_;
-  bool need_reset_;
 };
 
 /**
