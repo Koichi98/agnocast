@@ -47,7 +47,6 @@ public:
   {
     if (timer_fd_ == -1) {
       throw std::runtime_error("timer_fd is not set to TimerBase");
-      return;
     }
     struct itimerspec spec = {};
     const auto period_count = period_.count();
@@ -76,7 +75,6 @@ public:
   {
     if (timer_fd_ == -1) {
       throw std::runtime_error("timer_fd is not set to TimerBase");
-      return std::chrono::nanoseconds::max();
     }
     if (canceled_) {
       return std::chrono::nanoseconds::max();
