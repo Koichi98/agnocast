@@ -341,14 +341,14 @@ class NodeInfoAgnocastVerb(VerbExtension):
                 print(f"    {service.name}: {', '.join(service.types)}")
 
             for service_name in agnocast_servers:
-                print(f"    {service_name}: <UNKNOWN> {get_agnocast_label(service_name, ros2_sub_topics, ros2_pub_topics)}")
+                print(f"    {service_name}: <UNKNOWN> (Agnocast enabled)")
 
             print("  Service Clients:")
             for client in service_clients:
                 print(f"    {client.name}: {', '.join(client.types)}")
 
             for service_name in agnocast_clients:
-                print(f"    {service_name}: <UNKNOWN> {get_agnocast_label(service_name, ros2_sub_topics, ros2_pub_topics)}")
+                print(f"    {service_name}: <UNKNOWN> (Agnocast enabled)")
 
             # ======== Action ========
             print("  Action Servers:")
