@@ -54,8 +54,6 @@ class NodeInfoAgnocastVerb(VerbExtension):
             lib = ctypes.CDLL("libagnocast_ioctl_wrapper.so")
             lib.get_agnocast_topics.argtypes = [ctypes.POINTER(ctypes.c_int)]
             lib.get_agnocast_topics.restype = ctypes.POINTER(ctypes.POINTER(ctypes.c_char))
-            lib.free_agnocast_topics.argtypes = [ctypes.POINTER(ctypes.POINTER(ctypes.c_char)), ctypes.c_int]
-            lib.free_agnocast_topics.restype = None
             lib.get_agnocast_sub_topics.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
             lib.get_agnocast_sub_topics.restype = ctypes.POINTER(ctypes.POINTER(ctypes.c_char))
             lib.get_agnocast_pub_topics.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
@@ -179,7 +177,7 @@ class NodeInfoAgnocastVerb(VerbExtension):
                                 break
 
                 return list(sub_topic_set), list(pub_topic_set), list(server_set), list(client_set)
-            
+
             def get_ros2_node_agnocast_endpoints(node_name_bytes):
                 """Return (sub_topics, pub_topics, server_names, client_names) owned by `node_name_bytes`.
 
