@@ -8,8 +8,11 @@ namespace agnocast
 {
 
 CallbackIsolatedAgnocastExecutor::CallbackIsolatedAgnocastExecutor(
-  const rclcpp::ExecutorOptions & options, int next_exec_timeout_ms)
-: rclcpp::Executor(options), next_exec_timeout_ms_(next_exec_timeout_ms)
+  const rclcpp::ExecutorOptions & options, int next_exec_timeout_ms,
+  int monitor_polling_interval_ms)
+: rclcpp::Executor(options),
+  next_exec_timeout_ms_(next_exec_timeout_ms),
+  monitor_polling_interval_ms_(monitor_polling_interval_ms)
 {
 }
 
@@ -25,7 +28,6 @@ void CallbackIsolatedAgnocastExecutor::spin()
 
   RCPPUTILS_SCOPE_EXIT(this->spinning.store(false););
 
-  std::vector<std::thread> threads;
   std::vector<std::pair<
     rclcpp::CallbackGroup::SharedPtr, rclcpp::node_interfaces::NodeBaseInterface::SharedPtr>>
     groups_and_nodes;
@@ -64,14 +66,12 @@ void CallbackIsolatedAgnocastExecutor::spin()
 
   std::mutex client_publisher_mutex;
   auto client_publisher = agnocast::create_rclcpp_client_publisher();
-  threads.reserve(groups_and_nodes.size());
 
-  {
-    std::lock_guard<std::mutex> guard{weak_child_executors_mutex_};
-    if (!spinning.load()) {
-      return;
-    }
-    for (auto & [group, node] : groups_and_nodes) {
+  // Note: spawn_child_executor must be called while holding child_resources_mutex_.
+  auto spawn_child_executor =
+    [this, &client_publisher, &client_publisher_mutex](
+      const rclcpp::CallbackGroup::SharedPtr & group,
+      const rclcpp::node_interfaces::NodeBaseInterface::SharedPtr & node) {
       std::shared_ptr<rclcpp::Executor> executor;
       auto agnocast_topics = agnocast::get_agnocast_topics_by_group(group);
       auto callback_group_id = agnocast::create_callback_group_id(group, node, agnocast_topics);
@@ -87,10 +87,11 @@ void CallbackIsolatedAgnocastExecutor::spin()
           ->dedicate_to_callback_group(group, node);
       }
 
+      child_callback_groups_.push_back(group);
       weak_child_executors_.push_back(executor);
 
-      threads.emplace_back([executor, callback_group_id = std::move(callback_group_id),
-                            &client_publisher, &client_publisher_mutex]() {
+      child_threads_.emplace_back([executor, callback_group_id = std::move(callback_group_id),
+                                   &client_publisher, &client_publisher_mutex]() {
         auto tid = static_cast<pid_t>(syscall(SYS_gettid));
 
         {
@@ -100,10 +101,83 @@ void CallbackIsolatedAgnocastExecutor::spin()
 
         executor->spin();
       });
-    }
-  }  // guard weak_child_executors_mutex_
+    };
 
-  for (auto & thread : threads) {
+  {
+    std::lock_guard<std::mutex> guard{child_resources_mutex_};
+    if (!spinning.load()) {
+      return;
+    }
+    for (auto & [group, node] : groups_and_nodes) {
+      spawn_child_executor(group, node);
+    }
+  }  // guard child_resources_mutex_
+
+  // Monitoring loop: periodically scan for new callback groups from nodes
+  while (spinning.load() && rclcpp::ok()) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(monitor_polling_interval_ms_));
+
+    if (!spinning.load() || !rclcpp::ok()) {
+      break;
+    }
+
+    std::vector<std::pair<
+      rclcpp::CallbackGroup::SharedPtr, rclcpp::node_interfaces::NodeBaseInterface::SharedPtr>>
+      new_groups;
+
+    {
+      std::lock_guard<std::mutex> guard{mutex_};
+      for (const auto & weak_node : weak_nodes_) {
+        auto node = weak_node.lock();
+        if (!node) {
+          continue;
+        }
+
+        node->for_each_callback_group(
+          [&new_groups, &node](const rclcpp::CallbackGroup::SharedPtr & group) {
+            if (
+              group && group->automatically_add_to_executor_with_node() &&
+              !group->get_associated_with_executor_atomic().load()) {
+              new_groups.emplace_back(group, node);
+            }
+          });
+      }
+    }
+
+    if (new_groups.empty()) {
+      continue;
+    }
+
+    std::lock_guard<std::mutex> guard{child_resources_mutex_};
+    if (!spinning.load() || !rclcpp::ok()) {
+      break;
+    }
+    for (auto & [group, node] : new_groups) {
+      if (group->get_associated_with_executor_atomic().load()) {
+        continue;
+      }
+      spawn_child_executor(group, node);
+    }
+  }
+
+  // Join all child threads after monitoring loop exits.
+  // Cancel child executors and move threads out under the lock, then join OUTSIDE the lock.
+  // A child thread's callback may call cancel() which acquires child_resources_mutex_,
+  // so holding it during thread.join() would deadlock.
+  std::vector<std::thread> threads_to_join;
+  {
+    std::lock_guard<std::mutex> guard{child_resources_mutex_};
+    for (auto & weak_child_executor : weak_child_executors_) {
+      if (auto child_executor = weak_child_executor.lock()) {
+        child_executor->cancel();
+      }
+    }
+    threads_to_join = std::move(child_threads_);
+    child_threads_.clear();
+    weak_child_executors_.clear();
+    child_callback_groups_.clear();
+  }
+  for (auto & thread : threads_to_join) {
     if (thread.joinable()) {
       thread.join();
     }
@@ -313,13 +387,60 @@ void CallbackIsolatedAgnocastExecutor::remove_node(rclcpp::Node::SharedPtr node_
 void CallbackIsolatedAgnocastExecutor::cancel()
 {
   spinning.store(false);
-  std::lock_guard<std::mutex> guard{weak_child_executors_mutex_};
+  std::lock_guard<std::mutex> guard{child_resources_mutex_};
   for (auto & weak_child_executor : weak_child_executors_) {
     if (auto child_executor = weak_child_executor.lock()) {
       child_executor->cancel();
     }
   }
-  weak_child_executors_.clear();
+}
+
+void CallbackIsolatedAgnocastExecutor::stop_callback_group(
+  const rclcpp::CallbackGroup::SharedPtr & group_ptr)
+{
+  if (!group_ptr) {
+    return;
+  }
+
+  std::thread thread_to_join;
+  bool found = false;
+
+  {
+    std::lock_guard<std::mutex> guard{child_resources_mutex_};
+    if (
+      child_callback_groups_.size() != weak_child_executors_.size() ||
+      child_callback_groups_.size() != child_threads_.size()) {
+      RCLCPP_ERROR(
+        logger, "Child executor vectors are misaligned. Skipping stop_callback_group().");
+      return;
+    }
+    for (size_t i = 0; i < child_callback_groups_.size(); ++i) {
+      auto grp = child_callback_groups_[i].lock();
+      if (grp && grp == group_ptr) {
+        if (auto executor = weak_child_executors_[i].lock()) {
+          executor->cancel();
+        }
+        thread_to_join = std::move(child_threads_[i]);
+        auto idx = static_cast<std::ptrdiff_t>(i);
+        child_callback_groups_.erase(child_callback_groups_.begin() + idx);
+        weak_child_executors_.erase(weak_child_executors_.begin() + idx);
+        child_threads_.erase(child_threads_.begin() + idx);
+        found = true;
+        break;
+      }
+    }
+  }
+
+  if (found && thread_to_join.joinable()) {
+    if (thread_to_join.get_id() == std::this_thread::get_id()) {
+      RCLCPP_ERROR(
+        logger,
+        "stop_callback_group() called from its own child thread. Detaching to avoid self-join UB.");
+      thread_to_join.detach();
+    } else {
+      thread_to_join.join();
+    }
+  }
 }
 
 }  // namespace agnocast

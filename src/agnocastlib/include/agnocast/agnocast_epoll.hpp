@@ -14,14 +14,13 @@ namespace agnocast
 
 struct AgnocastExecutable;
 
-extern std::atomic<bool> need_epoll_updates;
-
 constexpr uint32_t TIMER_EVENT_FLAG = 0x80000000;
 constexpr uint32_t CLOCK_EVENT_FLAG = 0x40000000;     // For clock_eventfd events (ROS_TIME timers)
 constexpr uint32_t SHUTDOWN_EVENT_FLAG = 0x20000000;  // For shutdown events (AgnocastOnlyExecutor)
+constexpr uint32_t EPOLL_EVENT_ID_RESERVED_MASK =
+  TIMER_EVENT_FLAG | CLOCK_EVENT_FLAG | SHUTDOWN_EVENT_FLAG;
 
-/// @return true if shutdown event detected, false otherwise
-bool wait_and_handle_epoll_event(
+void wait_and_handle_epoll_event(
   int epoll_fd, pid_t my_pid, int timeout_ms, std::mutex & ready_agnocast_executables_mutex,
   std::vector<AgnocastExecutable> & ready_agnocast_executables);
 
@@ -113,25 +112,6 @@ void prepare_epoll_impl(
 
       timer_info.need_epoll_update = false;
     }
-  }
-
-  // Check if all updates are done
-  const bool all_callbacks_updated = [&]() {
-    std::lock_guard<std::mutex> lock(id2_callback_info_mtx);
-    return std::none_of(id2_callback_info.begin(), id2_callback_info.end(), [](const auto & it) {
-      return it.second.need_epoll_update;
-    });
-  }();
-
-  const bool all_timers_updated = [&]() {
-    std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
-    return std::none_of(id2_timer_info.begin(), id2_timer_info.end(), [](const auto & it) {
-      return it.second->need_epoll_update;
-    });
-  }();
-
-  if (all_callbacks_updated && all_timers_updated) {
-    need_epoll_updates.store(false);
   }
 }
 

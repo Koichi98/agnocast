@@ -2,6 +2,7 @@
 
 #include "agnocast/agnocast.hpp"
 #include "agnocast/agnocast_epoll.hpp"
+#include "agnocast/agnocast_epoll_update_dispatcher.hpp"
 #include "agnocast/node/agnocast_node.hpp"
 #include "agnocast_signal_handler.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -19,7 +20,8 @@ AgnocastOnlyExecutor::AgnocastOnlyExecutor()
 : spinning_(false),
   epoll_fd_(epoll_create1(0)),
   shutdown_event_fd_(eventfd(0, EFD_NONBLOCK)),
-  my_pid_(getpid())
+  my_pid_(getpid()),
+  epoll_update_tracker_(EpollUpdateDispatcher::get_instance().register_tracker())
 {
   if (epoll_fd_ == -1) {
     RCLCPP_ERROR(logger, "epoll_create1 failed: %s", strerror(errno));
@@ -44,8 +46,12 @@ AgnocastOnlyExecutor::AgnocastOnlyExecutor()
     exit(EXIT_FAILURE);
   }
 
-  SignalHandler::install();
-  SignalHandler::register_shutdown_event(shutdown_event_fd_);
+  if (!SignalHandler::register_shutdown_event(shutdown_event_fd_)) {
+    RCLCPP_ERROR(logger, "Failed to register shutdown eventfd with signal handler");
+    close(shutdown_event_fd_);
+    close(epoll_fd_);
+    exit(EXIT_FAILURE);
+  }
 }
 
 AgnocastOnlyExecutor::~AgnocastOnlyExecutor()
@@ -84,18 +90,16 @@ AgnocastOnlyExecutor::~AgnocastOnlyExecutor()
 }
 
 bool AgnocastOnlyExecutor::get_next_agnocast_executable(
-  AgnocastExecutable & agnocast_executable, const int timeout_ms, bool & shutdown_detected)
+  AgnocastExecutable & agnocast_executable, const int timeout_ms)
 {
-  shutdown_detected = false;
-
   if (get_next_ready_agnocast_executable(agnocast_executable)) {
     return true;
   }
 
-  shutdown_detected = agnocast::wait_and_handle_epoll_event(
+  agnocast::wait_and_handle_epoll_event(
     epoll_fd_, my_pid_, timeout_ms, ready_agnocast_executables_mutex_, ready_agnocast_executables_);
 
-  if (shutdown_detected) {
+  if (!agnocast::ok()) {
     return false;
   }
 
@@ -170,6 +174,18 @@ void AgnocastOnlyExecutor::add_callback_group(
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   }
+
+  const auto group_type_enum = group_ptr->type();
+  const char * group_type_str = (group_type_enum == rclcpp::CallbackGroupType::MutuallyExclusive)
+                                  ? "mutually_exclusive"
+                                  : "reentrant";
+
+  TRACEPOINT(
+    agnocast_add_callback_group, static_cast<const void *>(this),
+    static_cast<const void *>(node_ptr.get()), static_cast<const void *>(group_ptr.get()),
+    group_type_str);
+
+  EpollUpdateDispatcher::get_instance().request_update(epoll_update_tracker_.id());
 }
 
 void AgnocastOnlyExecutor::remove_callback_group(
@@ -192,6 +208,8 @@ void AgnocastOnlyExecutor::remove_callback_group(
   }
   weak_groups_associated_with_executor_to_nodes_.erase(it);
   group_ptr->get_associated_with_executor_atomic().store(false);
+
+  EpollUpdateDispatcher::get_instance().request_update(epoll_update_tracker_.id());
 }
 
 std::vector<rclcpp::CallbackGroup::WeakPtr> AgnocastOnlyExecutor::get_all_callback_groups()
@@ -254,14 +272,24 @@ void AgnocastOnlyExecutor::add_callback_groups_from_nodes_associated_to_executor
   for (auto & weak_node : weak_nodes_) {
     auto node = weak_node.lock();
     if (node) {
-      node->for_each_callback_group(
-        [this, node](const rclcpp::CallbackGroup::SharedPtr & group_ptr) {
-          if (
-            group_ptr->automatically_add_to_executor_with_node() &&
-            !group_ptr->get_associated_with_executor_atomic().exchange(true)) {
-            weak_groups_to_nodes_associated_with_executor_.insert({group_ptr, node});
-          }
-        });
+      node->for_each_callback_group([this,
+                                     node](const rclcpp::CallbackGroup::SharedPtr & group_ptr) {
+        if (
+          group_ptr->automatically_add_to_executor_with_node() &&
+          !group_ptr->get_associated_with_executor_atomic().exchange(true)) {
+          weak_groups_to_nodes_associated_with_executor_.insert({group_ptr, node});
+
+          const auto group_type_enum = group_ptr->type();
+          const char * group_type_str =
+            (group_type_enum == rclcpp::CallbackGroupType::MutuallyExclusive) ? "mutually_exclusive"
+                                                                              : "reentrant";
+
+          TRACEPOINT(
+            agnocast_add_callback_group, static_cast<const void *>(this),
+            static_cast<const void *>(node.get()), static_cast<const void *>(group_ptr.get()),
+            group_type_str);
+        }
+      });
     }
   }
 }
@@ -287,9 +315,21 @@ void AgnocastOnlyExecutor::add_node(
         group_ptr->automatically_add_to_executor_with_node() &&
         !group_ptr->get_associated_with_executor_atomic().exchange(true)) {
         weak_groups_to_nodes_associated_with_executor_.insert({group_ptr, node_ptr});
+
+        const auto group_type_enum = group_ptr->type();
+        const char * group_type_str =
+          (group_type_enum == rclcpp::CallbackGroupType::MutuallyExclusive) ? "mutually_exclusive"
+                                                                            : "reentrant";
+
+        TRACEPOINT(
+          agnocast_add_callback_group, static_cast<const void *>(this),
+          static_cast<const void *>(node_ptr.get()), static_cast<const void *>(group_ptr.get()),
+          group_type_str);
       }
     });
   weak_nodes_.push_back(node_ptr);
+
+  EpollUpdateDispatcher::get_instance().request_update(epoll_update_tracker_.id());
 }
 
 void AgnocastOnlyExecutor::add_node(const std::shared_ptr<agnocast::Node> & node, bool notify)
@@ -340,6 +380,8 @@ void AgnocastOnlyExecutor::remove_node(
   }
 
   node_ptr->get_associated_with_executor_atomic().store(false);
+
+  EpollUpdateDispatcher::get_instance().request_update(epoll_update_tracker_.id());
 }
 
 void AgnocastOnlyExecutor::remove_node(const std::shared_ptr<agnocast::Node> & node, bool notify)

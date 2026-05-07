@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause */
 #pragma once
 #include <kunit/test.h>
 
@@ -27,7 +28,9 @@
     KUNIT_CASE(test_case_take_msg_pubsub_in_same_process),                                        \
     KUNIT_CASE(test_case_take_msg_2pub_in_same_process),                                          \
     KUNIT_CASE(test_case_take_msg_2sub_in_same_process),                                          \
-    KUNIT_CASE(test_case_take_msg_with_exited_publisher)
+    KUNIT_CASE(test_case_take_msg_with_exited_publisher),                                         \
+    KUNIT_CASE(test_case_take_msg_ignore_local_same_pid_enabled),                                 \
+    KUNIT_CASE(test_case_take_msg_ignore_local_same_pid_disabled)
 
 void test_case_take_msg_no_topic(struct kunit * test);
 void test_case_take_msg_no_subscriber(struct kunit * test);
@@ -57,3 +60,5 @@ void test_case_take_msg_pubsub_in_same_process(struct kunit * test);
 void test_case_take_msg_2pub_in_same_process(struct kunit * test);
 void test_case_take_msg_2sub_in_same_process(struct kunit * test);
 void test_case_take_msg_with_exited_publisher(struct kunit * test);
+void test_case_take_msg_ignore_local_same_pid_enabled(struct kunit * test);
+void test_case_take_msg_ignore_local_same_pid_disabled(struct kunit * test);

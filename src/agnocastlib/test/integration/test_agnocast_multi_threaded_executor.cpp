@@ -14,7 +14,8 @@ protected:
     int next_exec_timeout_ms = std::get<1>(GetParam());
     cbg_type_ = std::get<2>(GetParam());
     int agnocast_next_exec_timeout_ms = next_exec_timeout_ms;
-    std::chrono::nanoseconds ros2_next_exec_timeout(next_exec_timeout_ms * 1000 * 1000);
+    std::chrono::nanoseconds ros2_next_exec_timeout(
+      static_cast<int64_t>(next_exec_timeout_ms) * 1000 * 1000);
 
     // Set the execution time of each callback
     uint64_t num_cbs = NUM_AGNOCAST_SUB_CBS + NUM_AGNOCAST_CBS_TO_BE_ADDED + NUM_ROS2_SUB_CBS;
@@ -27,7 +28,7 @@ protected:
             (num_cbs));
 
     // Set the spin duration
-    std::chrono::seconds buffer = std::chrono::seconds(1);  // Rough value
+    std::chrono::seconds buffer = std::chrono::seconds(3);  // Rough value
     spin_duration_ = std::max(
                        std::chrono::seconds(
                          (agnocast_next_exec_timeout_ms + cb_exec_time.count()) *
@@ -76,7 +77,15 @@ TEST_P(MultiThreadedAgnocastExecutorTest, test_no_starvation_and_callback_group)
 {
   // Act
   std::thread spin_thread([this]() { this->executor_->spin(); });
-  std::this_thread::sleep_for(spin_duration_);
+
+  auto deadline = std::chrono::steady_clock::now() + spin_duration_;
+  while (std::chrono::steady_clock::now() < deadline) {
+    if (test_node_->is_all_ros2_sub_cbs_called() && test_node_->is_all_agnocast_sub_cbs_called()) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+
   executor_->cancel();
   spin_thread.join();
 

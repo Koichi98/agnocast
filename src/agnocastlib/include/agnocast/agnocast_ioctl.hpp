@@ -3,13 +3,14 @@
 #include <sys/ioctl.h>
 #include <sys/types.h>
 
+#include <algorithm>
 #include <cstdint>
 
 namespace agnocast
 {
 
 #define MAX_PUBLISHER_NUM 1024   // Maximum number of publishers per topic
-#define MAX_TOPIC_LOCAL_ID 2048  // Bitmap size for per-entry subscriber reference tracking
+#define MAX_TOPIC_LOCAL_ID 4096  // Bitmap size for per-entry subscriber reference tracking
 #define MAX_SUBSCRIBER_NUM \
   (MAX_TOPIC_LOCAL_ID - MAX_PUBLISHER_NUM)  // Maximum number of subscribers per topic
 /* Maximum number of entries that can be received at one ioctl. This value is heuristically set to
@@ -22,6 +23,8 @@ namespace agnocast
 #define MAX_TOPIC_INFO_RET_NUM std::max(MAX_PUBLISHER_NUM, MAX_SUBSCRIBER_NUM)
 
 #define NODE_NAME_BUFFER_SIZE 256
+#define TOPIC_NAME_BUFFER_SIZE 256
+#define MAX_SUBSCRIPTION_NUM_PER_PROCESS 256
 
 constexpr const char * AGNOCAST_DEVICE_NOT_FOUND_MSG =
   "Failed to open /dev/agnocast: Device not found. "
@@ -51,9 +54,14 @@ struct ioctl_get_version_args
 union ioctl_add_process_args {
   struct
   {
+    bool is_performance_bridge_manager;
+  };
+  struct
+  {
     uint64_t ret_addr;
     uint64_t ret_shm_size;
     bool ret_unlink_daemon_exist;
+    bool ret_performance_bridge_daemon_exist;
   };
 };
 #pragma GCC diagnostic pop
@@ -200,15 +208,28 @@ union ioctl_get_publisher_num_args {
   struct
   {
     uint32_t ret_publisher_num;
-    bool ret_bridge_exist;
+    uint32_t ret_ros2_publisher_num;
+    bool ret_r2a_bridge_exist;
+    bool ret_a2r_bridge_exist;
   };
 };
 #pragma GCC diagnostic pop
 
+struct exit_subscription_mq_info
+{
+  char topic_name[TOPIC_NAME_BUFFER_SIZE];
+  topic_local_id_t subscriber_id;
+};
+
 struct ioctl_get_exit_process_args
 {
+  // input: user-space buffer for subscription MQ info
+  uint64_t subscription_mq_info_buffer_addr;
+  uint32_t subscription_mq_info_buffer_size;
+  // output
   bool ret_daemon_should_exit;
   pid_t ret_pid;
+  uint32_t ret_subscription_mq_info_num;
 };
 
 struct topic_info_ret
@@ -227,6 +248,7 @@ union ioctl_topic_info_args {
   {
     struct name_info topic_name;
     uint64_t topic_info_ret_buffer_addr;
+    uint32_t topic_info_ret_buffer_size;
   };
   uint32_t ret_topic_info_ret_num;
 };
@@ -285,7 +307,6 @@ struct ioctl_add_bridge_args
 {
   struct
   {
-    pid_t pid;
     struct name_info topic_name;
     bool is_r2a;
   };
@@ -300,20 +321,25 @@ struct ioctl_add_bridge_args
 
 struct ioctl_remove_bridge_args
 {
-  pid_t pid;
   struct name_info topic_name;
   bool is_r2a;
 };
 
-struct ioctl_get_process_num_args
+struct ioctl_check_and_request_bridge_shutdown_args
 {
-  uint32_t ret_process_num;
+  bool ret_should_shutdown;
 };
 
 struct ioctl_set_ros2_subscriber_num_args
 {
   struct name_info topic_name;
   uint32_t ros2_subscriber_num;
+};
+
+struct ioctl_set_ros2_publisher_num_args
+{
+  struct name_info topic_name;
+  uint32_t ros2_publisher_num;
 };
 
 #define AGNOCAST_GET_VERSION_CMD _IOR(0xA6, 1, struct ioctl_get_version_args)
@@ -325,7 +351,7 @@ struct ioctl_set_ros2_subscriber_num_args
 #define AGNOCAST_RECEIVE_MSG_CMD _IOWR(0xA6, 8, union ioctl_receive_msg_args)
 #define AGNOCAST_TAKE_MSG_CMD _IOWR(0xA6, 9, union ioctl_take_msg_args)
 #define AGNOCAST_GET_SUBSCRIBER_NUM_CMD _IOWR(0xA6, 10, union ioctl_get_subscriber_num_args)
-#define AGNOCAST_GET_EXIT_PROCESS_CMD _IOR(0xA6, 11, struct ioctl_get_exit_process_args)
+#define AGNOCAST_GET_EXIT_PROCESS_CMD _IOWR(0xA6, 11, struct ioctl_get_exit_process_args)
 #define AGNOCAST_GET_SUBSCRIBER_QOS_CMD _IOWR(0xA6, 12, struct ioctl_get_subscriber_qos_args)
 #define AGNOCAST_GET_PUBLISHER_QOS_CMD _IOWR(0xA6, 13, struct ioctl_get_publisher_qos_args)
 #define AGNOCAST_ADD_BRIDGE_CMD _IOWR(0xA6, 14, struct ioctl_add_bridge_args)
@@ -333,9 +359,12 @@ struct ioctl_set_ros2_subscriber_num_args
 #define AGNOCAST_GET_PUBLISHER_NUM_CMD _IOWR(0xA6, 16, union ioctl_get_publisher_num_args)
 #define AGNOCAST_REMOVE_SUBSCRIBER_CMD _IOW(0xA6, 17, struct ioctl_remove_subscriber_args)
 #define AGNOCAST_REMOVE_PUBLISHER_CMD _IOW(0xA6, 18, struct ioctl_remove_publisher_args)
-#define AGNOCAST_GET_PROCESS_NUM_CMD _IOR(0xA6, 19, struct ioctl_get_process_num_args)
+#define AGNOCAST_CHECK_AND_REQUEST_BRIDGE_SHUTDOWN_CMD \
+  _IOR(0xA6, 19, struct ioctl_check_and_request_bridge_shutdown_args)
 #define AGNOCAST_GET_TOPIC_SUBSCRIBER_INFO_CMD _IOWR(0xA6, 21, union ioctl_topic_info_args)
 #define AGNOCAST_SET_ROS2_SUBSCRIBER_NUM_CMD \
   _IOW(0xA6, 25, struct ioctl_set_ros2_subscriber_num_args)
+#define AGNOCAST_SET_ROS2_PUBLISHER_NUM_CMD _IOW(0xA6, 26, struct ioctl_set_ros2_publisher_num_args)
+#define AGNOCAST_NOTIFY_BRIDGE_SHUTDOWN_CMD _IO(0xA6, 27)
 
 }  // namespace agnocast

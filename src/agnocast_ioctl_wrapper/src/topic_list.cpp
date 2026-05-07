@@ -35,6 +35,7 @@ char ** get_agnocast_topics(int * topic_count)
 
   ioctl_topic_list_args topic_list_args = {};
   topic_list_args.topic_name_buffer_addr = reinterpret_cast<uint64_t>(agnocast_topic_buffer);
+  topic_list_args.topic_name_buffer_size = MAX_TOPIC_NUM;
   if (ioctl(fd, AGNOCAST_GET_TOPIC_LIST_CMD, &topic_list_args) < 0) {
     perror("AGNOCAST_GET_TOPIC_LIST_CMD failed");
     free(agnocast_topic_buffer);
@@ -53,6 +54,8 @@ char ** get_agnocast_topics(int * topic_count)
   char ** topic_array = static_cast<char **>(malloc(*topic_count * sizeof(char *)));
   if (topic_array == nullptr) {
     *topic_count = 0;
+    free(agnocast_topic_buffer);
+    close(fd);
     return nullptr;
   }
 
@@ -65,6 +68,7 @@ char ** get_agnocast_topics(int * topic_count)
       }
       free(topic_array);
       topic_array = nullptr;
+      *topic_count = 0;
       break;
     }
     std::strcpy(topic_array[i], agnocast_topic_buffer + i * TOPIC_NAME_BUFFER_SIZE);

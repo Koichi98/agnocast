@@ -1,5 +1,7 @@
 #include "agnocast/agnocast_publisher.hpp"
 
+#include "agnocast/node/agnocast_node.hpp"
+
 #include <sys/types.h>
 
 #include <array>
@@ -16,16 +18,6 @@ extern "C" uint32_t agnocast_get_borrowed_publisher_num()
 
 void increment_borrowed_publisher_num()
 {
-  if (borrowed_publisher_num == 1) {
-    return;
-
-    // NOTE:
-    //   This is a workaround for the case where borrow_loaned_message() is called but publish() is
-    //   not. This implementation assumes only one loan/publish within a single callback and will
-    //   need to be modified in the future. For this future modification, the type of
-    //   borrowed_publisher_num is left as uint32_t.
-  }
-
   borrowed_publisher_num++;
 }
 
@@ -158,13 +150,13 @@ uint32_t get_subscription_count_core(const std::string & topic_name)
   }
 
   uint32_t inter_count = args.ret_other_process_subscriber_num;
-  // Assumes at most one bridge subscriber per topic
+  // If an A2R bridge exists, exclude the agnocast subscriber created by the bridge
   if (args.ret_a2r_bridge_exist && inter_count > 0) {
     inter_count--;
   }
 
   uint32_t ros2_count = args.ret_ros2_subscriber_num;
-  // Assumes at most one bridge subscriber per topic
+  // If an R2A bridge exists, exclude the ROS 2 subscriber created by the bridge
   if (args.ret_r2a_bridge_exist && ros2_count > 0) {
     ros2_count--;
   }

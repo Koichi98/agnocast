@@ -1,5 +1,9 @@
 #include "agnocast/agnocast_utils.hpp"
 
+#include "agnocast/agnocast_mq.hpp"
+#include "agnocast/node/agnocast_node.hpp"
+
+#include <cstdlib>
 #include <cstring>
 
 namespace agnocast
@@ -73,7 +77,14 @@ std::string create_mq_name_for_agnocast_publish(
 
 std::string create_mq_name_for_bridge(const pid_t pid)
 {
-  return "/agnocast_bridge_manager@" + std::to_string(pid);
+  std::string name = "/agnocast_bridge_manager@" + std::to_string(pid);
+  if (pid == PERFORMANCE_BRIDGE_VIRTUAL_PID) {
+    const char * domain_id = getenv("ROS_DOMAIN_ID");
+    if (domain_id != nullptr) {
+      name += "_d" + std::string(domain_id);
+    }
+  }
+  return name;
 }
 
 std::string create_shm_name(const pid_t pid)
@@ -96,6 +107,11 @@ uint64_t agnocast_get_timestamp()
 {
   auto now = std::chrono::system_clock::now();
   return std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count();
+}
+
+const void * get_node_base_address(agnocast::Node * node)
+{
+  return static_cast<const void *>(node->get_node_base_interface().get());
 }
 
 }  // namespace agnocast

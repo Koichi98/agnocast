@@ -2,17 +2,22 @@
 
 #include "agnocast/agnocast.hpp"
 
+#include <algorithm>
+
 namespace agnocast
 {
 
 AgnocastOnlyMultiThreadedExecutor::AgnocastOnlyMultiThreadedExecutor(
   size_t number_of_threads, bool yield_before_execute, int next_exec_timeout_ms)
 : number_of_threads_(
-    number_of_threads != 0 ? number_of_threads : std::thread::hardware_concurrency()),
+    number_of_threads != 0 ? number_of_threads
+                           : std::max<size_t>(1, std::thread::hardware_concurrency())),
   yield_before_execute_(yield_before_execute),
   next_exec_timeout_ms_(next_exec_timeout_ms)
 {
-  // TODO(atsushi421): CARET tracepoint for executor creation
+  TRACEPOINT(
+    agnocast_construct_executor, static_cast<const void *>(this),
+    "agnocast_only_multi_threaded_executor");
 }
 
 void AgnocastOnlyMultiThreadedExecutor::spin()
@@ -41,8 +46,8 @@ void AgnocastOnlyMultiThreadedExecutor::spin()
 
 void AgnocastOnlyMultiThreadedExecutor::agnocast_spin()
 {
-  while (spinning_.load()) {
-    if (need_epoll_updates.load()) {
+  while (spinning_.load() && agnocast::ok()) {
+    if (epoll_update_tracker_.take_update_request()) {
       add_callback_groups_from_nodes_associated_to_executor();
       agnocast::prepare_epoll_impl(
         epoll_fd_, my_pid_, ready_agnocast_executables_mutex_, ready_agnocast_executables_,
@@ -53,26 +58,20 @@ void AgnocastOnlyMultiThreadedExecutor::agnocast_spin()
 
     agnocast::AgnocastExecutable agnocast_executable;
 
-    if (!spinning_.load()) {
+    if (!spinning_.load() || !agnocast::ok()) {
       return;
     }
 
     // As each thread is dedicated to handling Agnocast callbacks, get_next_agnocast_executable()
     // can block indefinitely without a timeout. However, since we need to periodically check for
     // epoll updates, we should implement a long timeout period instead of an infinite block.
-    bool shutdown_detected = false;
     if (get_next_agnocast_executable(
-          agnocast_executable, next_exec_timeout_ms_ /* timed-blocking*/, shutdown_detected)) {
+          agnocast_executable, next_exec_timeout_ms_ /* timed-blocking*/)) {
       if (yield_before_execute_) {
         std::this_thread::yield();
       }
 
       execute_agnocast_executable(agnocast_executable);
-    }
-
-    if (shutdown_detected) {
-      spinning_.store(false);
-      return;
     }
   }
 }
