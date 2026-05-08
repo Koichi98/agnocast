@@ -337,6 +337,14 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
     }
 
     if (result.entity_handle) {
+      // Plugin-created groups have auto-add disabled, so the executor's monitor loop never sees
+      // them. Attach explicitly via the rclcpp-standard add_callback_group API; teardown happens
+      // via stop_callback_group() (or remove_callback_group()).
+      if (result.callback_group) {
+        executor_->add_callback_group(
+          result.callback_group, container_node_->get_node_base_interface());
+      }
+
       if (is_r2a) {
         if (!update_ros2_publisher_num(container_node_.get(), topic_name)) {
           RCLCPP_ERROR(
@@ -399,6 +407,17 @@ void PerformanceBridgeManager::create_service_bridge_if_needed(
     PerformanceServiceBridgeResult result =
       loader_.create_r2a_service_bridge(container_node_, service_name, service_type, service_qos);
     if (result.entity_handle) {
+      // Plugin-created groups have auto-add disabled, so the executor's monitor loop never sees
+      // them. Attach explicitly via the rclcpp-standard add_callback_group API; teardown happens
+      // via stop_callback_group() (or remove_callback_group()).
+      if (result.ros_srv_cb_group) {
+        executor_->add_callback_group(
+          result.ros_srv_cb_group, container_node_->get_node_base_interface());
+      }
+      if (result.agno_client_cb_group) {
+        executor_->add_callback_group(
+          result.agno_client_cb_group, container_node_->get_node_base_interface());
+      }
       active_r2a_service_bridges_[service_name] = std::move(result);
     }
   } catch (const std::exception & e) {
