@@ -23,8 +23,8 @@ extern "C" PerformancePubsubBridgeResult create_r2a_pubsub_bridge(
     agnocast::PublisherOptions{},
     true);
 
-  // Opt out of automatic discovery by the executor's monitor loop. The bridge manager attaches
-  // and stops this group explicitly via attach_callback_group / stop_callback_group.
+  // The bridge manager attaches/detaches this group explicitly; opt out of monitor-loop
+  // auto-discovery to avoid re-spawn races with stop_callback_group().
   auto ros_cb_group = node->create_callback_group(
     rclcpp::CallbackGroupType::MutuallyExclusive,
     /*automatically_add_to_executor_with_node=*/false);
@@ -54,7 +54,6 @@ extern "C" PerformancePubsubBridgeResult create_a2r_pubsub_bridge(
   auto ros_pub = node->create_publisher<@(cpp_type)>(
     topic_name, rclcpp::QoS(agnocast::DEFAULT_QOS_DEPTH).reliable().transient_local());
 
-  // See create_r2a_pubsub_bridge above for the rationale.
   auto cb_group = node->create_callback_group(
     rclcpp::CallbackGroupType::MutuallyExclusive,
     /*automatically_add_to_executor_with_node=*/false);

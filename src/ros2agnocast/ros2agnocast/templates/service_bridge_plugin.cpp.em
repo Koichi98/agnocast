@@ -16,8 +16,8 @@ extern "C" PerformanceServiceBridgeResult create_r2a_service_bridge(
 {
   using ServiceT = @(cpp_type);
 
-  // Opt out of automatic discovery by the executor's monitor loop. The bridge manager attaches
-  // and stops these groups explicitly via attach_callback_group / stop_callback_group.
+  // The bridge manager attaches/detaches these groups explicitly; opt out of monitor-loop
+  // auto-discovery to avoid re-spawn races with stop_callback_group().
   auto srv_cb_group = node->create_callback_group(
     rclcpp::CallbackGroupType::Reentrant,
     /*automatically_add_to_executor_with_node=*/false);

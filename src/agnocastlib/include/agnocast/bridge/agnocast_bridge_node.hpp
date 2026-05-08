@@ -132,10 +132,8 @@ public:
     agnocast_pub_ = std::make_shared<AgnoPub>(
       parent_node.get(), topic_name, rclcpp::QoS(DEFAULT_QOS_DEPTH).transient_local(), agno_opts,
       true);
-    // Opt out of automatic discovery by the executor's monitor loop. The bridge manager attaches
-    // this group to the executor explicitly, and stops it explicitly during teardown. This avoids
-    // the TOCTOU window where, after stop_callback_group(), the monitor loop could re-spawn a child
-    // executor for a still-alive group whose `associated_with_executor` flag has been cleared.
+    // Bridge groups are attached/detached explicitly by the bridge manager. Opt out of monitor
+    // loop auto-discovery to avoid re-spawn races with stop_callback_group().
     ros_cb_group_ = parent_node->create_callback_group(
       rclcpp::CallbackGroupType::MutuallyExclusive,
       /*automatically_add_to_executor_with_node=*/false);
@@ -185,7 +183,6 @@ public:
     // ROS subscribers without connectivity issues.
     ros_pub_ = parent_node->create_publisher<MessageT>(
       topic_name, rclcpp::QoS(DEFAULT_QOS_DEPTH).reliable().transient_local());
-    // See RosToAgnocastBridge for why we opt out of auto-discovery.
     agno_cb_group_ = parent_node->create_callback_group(
       rclcpp::CallbackGroupType::MutuallyExclusive,
       /*automatically_add_to_executor_with_node=*/false);

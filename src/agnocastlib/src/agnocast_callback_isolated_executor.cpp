@@ -167,20 +167,14 @@ void CallbackIsolatedAgnocastExecutor::add_callback_group(
 {
   (void)notify;
 
-  if (!group_ptr || !node_ptr) {
-    RCLCPP_ERROR(logger, "add_callback_group: group or node is null");
-    return;
-  }
-
   std::weak_ptr<rclcpp::CallbackGroup> weak_group_ptr = group_ptr;
   std::weak_ptr<rclcpp::node_interfaces::NodeBaseInterface> weak_node_ptr = node_ptr;
 
-  // Reject the case where the same group would be both auto-discovered (via add_node) and
-  // manually added: that yields two child executors for one group. A group with
-  // `automatically_add_to_executor_with_node = false` on an already-added node is fine: it stays
-  // hidden from the monitor loop and only this manual path attaches it.
   {
     std::lock_guard<std::mutex> guard{mutex_};
+
+    // Auto-add groups on already-added nodes are picked up by the monitor loop, so manually
+    // adding them here would double-attach. Auto-add=false groups have no such conflict.
     if (group_ptr->automatically_add_to_executor_with_node()) {
       for (const auto & weak_node : weak_nodes_) {
         auto n = weak_node.lock();
@@ -190,9 +184,8 @@ void CallbackIsolatedAgnocastExecutor::add_callback_group(
         if (n->callback_group_in_node(group_ptr)) {
           RCLCPP_ERROR(
             logger,
-            "add_callback_group: group is auto-add and its owning node is already added; this "
-            "would double-attach. Create the group with automatically_add_to_executor_with_node = "
-            "false to manage it manually. Node: %s",
+            "Callback group is auto-add and already discoverable via an added node: %s. Create "
+            "the group with automatically_add_to_executor_with_node=false to add it manually.",
             n->get_fully_qualified_name());
           if (agnocast_fd != -1) {
             close(agnocast_fd);
@@ -212,9 +205,8 @@ void CallbackIsolatedAgnocastExecutor::add_callback_group(
     }
   }
 
-  // Eagerly spawn the child executor when spinning so the group starts dispatching callbacks
-  // immediately instead of waiting for the next spin() startup. When not spinning yet, spin()'s
-  // initial setup will spawn it from weak_groups_to_nodes_.
+  // Spawn now if spin() is already running; otherwise spin()'s initial setup will spawn from
+  // weak_groups_to_nodes_.
   if (!spinning.load()) {
     return;
   }
@@ -223,11 +215,10 @@ void CallbackIsolatedAgnocastExecutor::add_callback_group(
   std::lock_guard<std::mutex> guard{child_resources_mutex_};
   for (const auto & weak_grp : child_callback_groups_) {
     if (weak_grp.lock() == group_ptr) {
-      // Already spawned (e.g., spin()'s initial setup raced ahead). Nothing to do.
+      // spin() initial setup raced ahead and already spawned this group.
       return;
     }
   }
-  // If the group was previously stopped, allow re-attach by clearing its sentinel entry.
   stopped_groups_.erase(group_ptr);
   spawn_child_executor_locked(group_ptr, node_ptr);
 }
@@ -319,8 +310,6 @@ void CallbackIsolatedAgnocastExecutor::remove_callback_group(
     }
   }
 
-  // Tear down the child executor (cancel + join its thread) if one was spawned for this group.
-  // No-op if spin() never spawned it (e.g., remove_callback_group called before any spin()).
   stop_callback_group(group_ptr);
 }
 

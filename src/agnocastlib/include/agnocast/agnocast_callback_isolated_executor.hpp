@@ -58,9 +58,6 @@ class CallbackIsolatedAgnocastExecutor : public rclcpp::Executor
   std::set<rclcpp::CallbackGroup::WeakPtr, std::owner_less<rclcpp::CallbackGroup::WeakPtr>>
     stopped_groups_ RCPPUTILS_TSA_GUARDED_BY(child_resources_mutex_);
 
-  // Lazy-initialized publisher used by child threads to report (tid, callback_group_id) to the
-  // CIE thread configurator. Shared between spin()'s auto-discovery path and
-  // attach_callback_group()'s explicit attach path.
   std::once_flag client_publisher_once_;
   rclcpp::Publisher<agnocast_cie_config_msgs::msg::CallbackGroupInfo>::SharedPtr client_publisher_;
   std::mutex client_publisher_mutex_;
@@ -154,15 +151,11 @@ public:
   void remove_node(rclcpp::Node::SharedPtr node_ptr, bool notify = true) override;
 
 private:
-  // Spawn a child executor for `group` on `node` and start its dedicated thread. Caller must hold
-  // `child_resources_mutex_`. Used by both spin()'s auto-discovery path and
-  // attach_callback_group()'s explicit attach path.
   void spawn_child_executor_locked(
     const rclcpp::CallbackGroup::SharedPtr & group,
     const rclcpp::node_interfaces::NodeBaseInterface::SharedPtr & node)
     RCPPUTILS_TSA_REQUIRES(child_resources_mutex_);
 
-  // Lazy-initialize client_publisher_ on first use. Safe to call concurrently or repeatedly.
   void ensure_client_publisher();
 };
 

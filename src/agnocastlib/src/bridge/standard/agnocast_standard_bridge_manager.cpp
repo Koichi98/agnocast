@@ -244,9 +244,6 @@ bool StandardBridgeManager::activate_bridge(const DirectedBridgeRef bridge_ref)
       return false;
     }
 
-    // Bridges create callback groups with auto-add disabled, so the executor's monitor loop never
-    // sees them. Attach the group explicitly here via the rclcpp-standard add_callback_group API;
-    // teardown happens via stop_callback_group() (or remove_callback_group()).
     if (auto cb_group = bridge->get_callback_group()) {
       executor_->add_callback_group(cb_group, container_node_->get_node_base_interface());
     }
