@@ -49,12 +49,9 @@ class CallbackIsolatedAgnocastExecutor : public rclcpp::Executor
   // Child threads created during spin()
   std::vector<std::thread> child_threads_ RCPPUTILS_TSA_GUARDED_BY(child_resources_mutex_);
 
-  // Callback groups that were explicitly stopped via stop_callback_group(). The monitor loop in
-  // spin() must not re-spawn child executors for these groups, even if they are still discoverable
-  // via the node's callback group list. Without this set, a TOCTOU race between
-  // stop_callback_group() and the monitor loop can cause a stopped group to be re-spawned while
-  // another callback group teardown is still in progress (the stopped group is alive because its
-  // owner has not yet released its SharedPtr, and its `associated_with_executor` flag is false).
+  // Sentinel for groups stopped via stop_callback_group(): suppresses respawn by the monitor
+  // loop while the group is still owned by its caller (associated_with_executor flag is cleared
+  // on stop, but the group may outlive that and look like an orphan to the monitor loop).
   std::set<rclcpp::CallbackGroup::WeakPtr, std::owner_less<rclcpp::CallbackGroup::WeakPtr>>
     stopped_groups_ RCPPUTILS_TSA_GUARDED_BY(child_resources_mutex_);
 
