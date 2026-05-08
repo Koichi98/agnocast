@@ -69,7 +69,7 @@ TEST_F(CreateTimerTest, CreateTimer_SimTimeActivation_CallbackFires)
 
   const int count_before_sim = callback_count.load();
 
-  // Enable ROS time override (triggers RCL_ROS_TIME_ACTIVATED jump → closes timer_fd)
+  // Enable ROS time override (timer transitions from wall-clock driven to sim-time driven)
   auto clock = node->get_clock();
   rcl_clock_t * rcl_clock = clock->get_clock_handle();
   {
@@ -78,12 +78,16 @@ TEST_F(CreateTimerTest, CreateTimer_SimTimeActivation_CallbackFires)
     ASSERT_EQ(ret, RCL_RET_OK) << "Failed to enable ros time override";
   }
 
-  // Small delay to let the executor process the time jump
-  std::this_thread::sleep_for(50ms);
+  // After activation, the wall clock must no longer drive the timer.
+  // Wait > period in wall-clock time without advancing sim time and verify no firing.
+  const int count_at_activation = callback_count.load();
+  std::this_thread::sleep_for(300ms);
+  ASSERT_EQ(callback_count.load(), count_at_activation)
+    << "Wall clock should not drive the timer after ROS time activation";
 
   // First set: ROS time goes from 0 → 1s. Since next_call_time was based on system time (~epoch),
   // this looks like a backward jump from the timer's perspective and resets next_call_time
-  // to 1s + period, but does NOT write to clock_eventfd.
+  // to 1s + period, but does NOT trigger a firing.
   const rcl_time_point_value_t sim_time_1s = 1000000000LL;
   {
     std::lock_guard<std::mutex> lock(clock->get_clock_mutex());
@@ -93,8 +97,7 @@ TEST_F(CreateTimerTest, CreateTimer_SimTimeActivation_CallbackFires)
 
   std::this_thread::sleep_for(50ms);
 
-  // Second set: forward jump from 1s → 1.2s. Now next_call_time = 1.1s <= 1.2s,
-  // so this triggers clock_eventfd write and fires the callback.
+  // Second set: forward jump from 1s → 1.2s, past the (reset) next_call_time of 1.1s.
   const rcl_time_point_value_t sim_time_1200ms = 1200000000LL;
   {
     std::lock_guard<std::mutex> lock(clock->get_clock_mutex());
@@ -102,7 +105,7 @@ TEST_F(CreateTimerTest, CreateTimer_SimTimeActivation_CallbackFires)
     ASSERT_EQ(ret, RCL_RET_OK) << "Failed to set ros time override (1.2s)";
   }
 
-  // Wait for callback to fire via clock_eventfd path
+  // Wait for callback to fire after the sim-time advance
   {
     const auto deadline = std::chrono::steady_clock::now() + 2s;
     while (callback_count.load() <= count_before_sim &&
@@ -115,7 +118,7 @@ TEST_F(CreateTimerTest, CreateTimer_SimTimeActivation_CallbackFires)
   spin_thread.join();
 
   EXPECT_GT(callback_count.load(), count_before_sim)
-    << "Callback should have fired after sim time activation via clock_eventfd";
+    << "Callback should have fired after sim-time advance past next_call_time";
 }
 
 TEST_F(CreateTimerTest, CreateTimer_SimTime_BackwardJump)
@@ -179,6 +182,8 @@ TEST_F(CreateTimerTest, CreateTimer_SimTime_BackwardJump)
       << "Callback should have fired at 1.2s sim time";
   }
 
+  const int count_before_backward = callback_count.load();
+
   // Now jump backward to 0.2s
   const rcl_time_point_value_t time_200ms = 200000000LL;
   {
@@ -187,8 +192,10 @@ TEST_F(CreateTimerTest, CreateTimer_SimTime_BackwardJump)
     ASSERT_EQ(ret, RCL_RET_OK);
   }
 
-  // After backward jump, next_call_time should be reset to now + period
+  // Backward jump itself must not fire the callback.
   std::this_thread::sleep_for(50ms);
+  ASSERT_EQ(callback_count.load(), count_before_backward)
+    << "Backward sim-time jump should not fire the callback";
 
   // Advance clock past new next_call_time to trigger callback
   const int count_before_advance = callback_count.load();
@@ -389,8 +396,11 @@ TEST_F(CreateTimerTest, CreateTimer_RosTimeAlreadyActive)
 
   std::thread spin_thread([&executor]() { executor->spin(); });
 
-  // Small delay for executor to start
-  std::this_thread::sleep_for(50ms);
+  // Wall clock must not drive the timer when ROS time is active at create.
+  // Wait > period in wall-clock without advancing sim time and verify no firing.
+  std::this_thread::sleep_for(300ms);
+  ASSERT_EQ(callback_count.load(), 0)
+    << "Wall clock should not drive the timer when ROS time was already active at create";
 
   // Forward jump to trigger callback (1s → 1.2s, next_call = 1.1s)
   const rcl_time_point_value_t time_1200ms = 1200000000LL;
@@ -412,7 +422,7 @@ TEST_F(CreateTimerTest, CreateTimer_RosTimeAlreadyActive)
   spin_thread.join();
 
   EXPECT_GT(callback_count.load(), 0)
-    << "Callback should have fired via clock_eventfd when ROS time was already active";
+    << "Callback should have fired after sim-time advance when ROS time was already active";
 }
 
 TEST_F(CreateTimerTest, CreateTimer_ZeroPeriod_AlwaysReady)
@@ -486,7 +496,8 @@ TEST_F(CreateTimerTest, CreateTimer_LargeForwardJump_SingleCallback)
   const int count_before_jump = callback_count.load();
 
   // Large forward jump: 1s → 2s (10 periods worth of jump)
-  // This should trigger only ONE callback write to clock_eventfd, not 10
+  // The jump itself should fire the callback at most a small bounded number of times,
+  // not once per skipped period.
   const rcl_time_point_value_t time_2s = 2000000000LL;
   {
     std::lock_guard<std::mutex> lock(clock->get_clock_mutex());
