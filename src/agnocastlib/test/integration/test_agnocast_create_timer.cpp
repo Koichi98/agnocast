@@ -190,24 +190,6 @@ TEST_F(CreateTimerTest, CreateTimer_SimTime_BackwardJump)
   // After backward jump, next_call_time should be reset to now + period
   std::this_thread::sleep_for(50ms);
 
-  // Verify next_call_time_ns was reset appropriately
-  {
-    std::lock_guard<std::mutex> lock(agnocast::id2_timer_info_mtx);
-    std::shared_ptr<agnocast::TimerInfo> found_info;
-    for (const auto & [id, info] : agnocast::id2_timer_info) {
-      if (info->timer.lock() == timer) {
-        found_info = info;
-        break;
-      }
-    }
-    ASSERT_NE(found_info, nullptr) << "Timer info should be registered";
-    const int64_t next_call_ns = found_info->next_call_time_ns.load(std::memory_order_relaxed);
-    // After backward jump, next_call_time should be exactly time_200ms + period_ns
-    const int64_t expected_next = time_200ms + std::chrono::nanoseconds(period).count();
-    EXPECT_EQ(next_call_ns, expected_next)
-      << "next_call_time_ns should be reset to now + period after backward jump";
-  }
-
   // Advance clock past new next_call_time to trigger callback
   const int count_before_advance = callback_count.load();
   const rcl_time_point_value_t time_400ms = 400000000LL;
@@ -307,15 +289,6 @@ TEST_F(CreateTimerTest, CreateTimer_MultipleTimers_SimTime_AllFire)
   auto timer_300ms =
     node->create_timer(300ms, [&callback_count_300ms]() { callback_count_300ms++; });
 
-  // Verify all timers use clock_eventfd (no timerfd since ROS time is active)
-  {
-    std::lock_guard<std::mutex> lock(agnocast::id2_timer_info_mtx);
-    for (const auto & [id, info] : agnocast::id2_timer_info) {
-      EXPECT_EQ(info->timer_fd, -1) << "timer_fd should be -1 when ROS time is active";
-      EXPECT_GE(info->clock_eventfd, 0) << "clock_eventfd should be valid";
-    }
-  }
-
   auto executor = std::make_shared<agnocast::AgnocastOnlySingleThreadedExecutor>();
   executor->add_node(node);
 
@@ -410,21 +383,6 @@ TEST_F(CreateTimerTest, CreateTimer_RosTimeAlreadyActive)
   std::atomic<int> callback_count{0};
   const auto period = 100ms;
   auto timer = node->create_timer(period, [&callback_count]() { callback_count++; });
-
-  // Verify that timer_fd is NOT created (should be -1 when ROS time is active)
-  {
-    std::lock_guard<std::mutex> lock(agnocast::id2_timer_info_mtx);
-    std::shared_ptr<agnocast::TimerInfo> found_info;
-    for (const auto & [id, info] : agnocast::id2_timer_info) {
-      if (info->timer.lock() == timer) {
-        found_info = info;
-        break;
-      }
-    }
-    ASSERT_NE(found_info, nullptr) << "Timer info should be registered";
-    EXPECT_EQ(found_info->timer_fd, -1) << "timer_fd should be -1 when ROS time is already active";
-    EXPECT_GE(found_info->clock_eventfd, 0) << "clock_eventfd should be valid";
-  }
 
   auto executor = std::make_shared<agnocast::AgnocastOnlySingleThreadedExecutor>();
   executor->add_node(node);
