@@ -92,7 +92,12 @@ void handle_post_time_jump(TimerInfo & timer_info, const rcl_time_jump_t & jump)
       "ROS time deactivation is not yet supported. Timer behavior may be incorrect.");
   } else if (next_call_ns <= now_ns) {
     // Post forward jump and timer is ready
-    if (timer_info.clock_eventfd >= 0) {
+    auto timer = timer_info.timer.lock();
+    if (!timer) {
+      RCLCPP_WARN(rclcpp::get_logger("Agnocast"), "Failed to lock timer.");
+      return;
+    }
+    if (timer_info.clock_eventfd >= 0 && !timer->is_canceled()) {
       const uint64_t val = 1;
       if (write(timer_info.clock_eventfd, &val, sizeof(val)) == -1) {
         RCLCPP_WARN(
