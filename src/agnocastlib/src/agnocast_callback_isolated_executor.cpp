@@ -152,8 +152,22 @@ void CallbackIsolatedAgnocastExecutor::spin()
     if (!spinning.load() || !rclcpp::ok()) {
       break;
     }
+    // Prune stopped_groups_ entries whose target callback group has died, to keep the set bounded.
+    for (auto it = stopped_groups_.begin(); it != stopped_groups_.end();) {
+      if (it->expired()) {
+        it = stopped_groups_.erase(it);
+      } else {
+        ++it;
+      }
+    }
     for (auto & [group, node] : new_groups) {
       if (group->get_associated_with_executor_atomic().load()) {
+        continue;
+      }
+      // Skip groups that were explicitly stopped via stop_callback_group(). They may still be
+      // discoverable via the node (if their owner has not yet released the SharedPtr), but must
+      // not be re-spawned.
+      if (stopped_groups_.find(group) != stopped_groups_.end()) {
         continue;
       }
       spawn_child_executor(group, node);
@@ -429,6 +443,9 @@ void CallbackIsolatedAgnocastExecutor::stop_callback_group(
         break;
       }
     }
+    // Record the group as stopped so the monitor loop in spin() does not re-spawn a child executor
+    // for it, even if the group is still reachable via the owning node.
+    stopped_groups_.insert(group_ptr);
   }
 
   if (found && thread_to_join.joinable()) {
