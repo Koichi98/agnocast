@@ -98,6 +98,30 @@ target_include_directories(sim_time_timer PRIVATE
   ${agnocastlib_INCLUDE_DIRS}
 )
 
+add_executable(rclcpp_pubsub_test src/rclcpp_pubsub_test.cpp)
+ament_target_dependencies(rclcpp_pubsub_test rclcpp agnocastlib agnocast_sample_interfaces)
+target_include_directories(rclcpp_pubsub_test PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
+add_executable(agnocast_pubsub_test src/agnocast_pubsub_test.cpp)
+ament_target_dependencies(agnocast_pubsub_test agnocastlib agnocast_sample_interfaces)
+target_include_directories(agnocast_pubsub_test PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
+add_executable(agnocast_publisher_only_pubsub_test src/agnocast_publisher_only_pubsub_test.cpp)
+ament_target_dependencies(agnocast_publisher_only_pubsub_test rclcpp agnocastlib agnocast_sample_interfaces)
+target_include_directories(agnocast_publisher_only_pubsub_test PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
+add_executable(agnocast_subscriber_only_pubsub_test src/agnocast_subscriber_only_pubsub_test.cpp)
+ament_target_dependencies(agnocast_subscriber_only_pubsub_test rclcpp agnocastlib agnocast_sample_interfaces)
+target_include_directories(agnocast_subscriber_only_pubsub_test PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
 add_library(listener_component SHARED src/minimal_subscriber.cpp)
 ament_target_dependencies(listener_component rclcpp rclcpp_components agnocastlib agnocast_sample_interfaces)
 target_include_directories(listener_component PRIVATE ${agnocastlib_INCLUDE_DIRS})
@@ -163,6 +187,18 @@ install(TARGETS no_rclcpp_client
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS sim_time_timer
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS rclcpp_pubsub_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS agnocast_pubsub_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS agnocast_publisher_only_pubsub_test
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS agnocast_subscriber_only_pubsub_test
   DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY launch

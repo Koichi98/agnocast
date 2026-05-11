@@ -1,0 +1,13 @@
+<launch>
+    <arg name="node_name" default="agnocast_subscriber_only_pubsub_test_node" />
+    <arg name="topic_count" default="1" />
+    <arg name="pub_topic_prefix" default="/my_pub_topic" />
+    <arg name="sub_topic_prefix" default="/my_sub_topic" />
+
+    <node pkg="agnocast_sample_application" exec="agnocast_subscriber_only_pubsub_test" name="$(var node_name)" output="screen">
+        <env name="LD_PRELOAD" value="libagnocast_heaphook.so:$(env LD_PRELOAD '')" />
+        <param name="publish_count" value="$(var topic_count)" />
+        <param name="pub_topic_prefix" value="$(var pub_topic_prefix)" />
+        <param name="sub_topic_prefix" value="$(var sub_topic_prefix)" />
+    </node>
+</launch>
