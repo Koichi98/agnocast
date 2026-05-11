@@ -4,9 +4,6 @@
 #include "rclcpp/clock.hpp"
 #include "rclcpp/macros.hpp"
 
-#include <sys/timerfd.h>
-#include <unistd.h>
-
 #include <atomic>
 #include <chrono>
 #include <functional>
