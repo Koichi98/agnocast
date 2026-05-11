@@ -21,6 +21,9 @@ void TimerBase::reset()
   }
   const int64_t now_ns = timer_info->clock->now().nanoseconds();
   timer_info->next_call_time_ns.store(now_ns + period_.count(), std::memory_order_relaxed);
+
+  std::shared_lock fd_lock(timer_info->fd_mutex);
+
   if (timer_info->timer_fd != -1) {
     struct itimerspec spec = {};
     const auto period_count = period_.count();
