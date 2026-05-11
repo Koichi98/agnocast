@@ -55,6 +55,23 @@ public:
   AGNOCAST_PUBLIC
   virtual bool is_steady() const { return true; }
 
+  AGNOCAST_PUBLIC
+  void set_on_reset_callback(const std::function<void(size_t)> & callback)
+  {
+    if (!callback) {
+      throw std::invalid_argument("callback is nullptr");
+    }
+    std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
+    on_reset_callback_ = callback;
+  };
+
+  AGNOCAST_PUBLIC
+  void clear_on_reset_callback()
+  {
+    std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
+    on_reset_callback_ = nullptr;
+  };
+
   /** @brief Get the clock associated with this timer.
    *  @return Shared pointer to the clock. */
   AGNOCAST_PUBLIC
@@ -72,6 +89,21 @@ protected:
   std::weak_ptr<TimerInfo> timer_info_;
   std::chrono::nanoseconds period_;
   std::atomic<bool> canceled_;
+  std::function<void(size_t)> on_reset_callback_{nullptr};
+  mutable std::recursive_mutex callback_mutex_;
+  void trigger_on_reset_callback()
+  {
+    std::function<void(size_t)> callback_to_run = nullptr;
+
+    {
+      std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
+      callback_to_run = on_reset_callback_;
+    }
+
+    if (callback_to_run) {
+      callback_to_run(1);
+    }
+  }
 };
 
 /**
