@@ -39,9 +39,10 @@ void TimerBase::reset()
     spec.it_value = spec.it_interval;
 
     if (timerfd_settime(timer_info->timer_fd, 0, &spec, nullptr) == -1) {
+      const int saved_errno = errno;
       throw std::runtime_error(
         "timerfd_settime failed for timer_id=" + std::to_string(timer_info->timer_id) +
-        ", period=" + std::to_string(period_count) + +std::strerror(errno));
+        ", period=" + std::to_string(period_count) + "ns: " + +std::strerror(saved_errno));
     }
   }
   canceled_.store(false);
