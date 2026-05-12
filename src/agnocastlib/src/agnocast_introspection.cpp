@@ -279,6 +279,22 @@ std::optional<StampOffsets> resolve_header_stamp_offsets(const std::string & typ
   return out;
 }
 
+std::optional<FieldInfo> resolve_field_offset(
+  const std::string & type_name, const std::string & field_name)
+{
+  const MessageMembers * members = load_message_members(type_name);
+  if (members == nullptr) return std::nullopt;
+
+  const MessageMember * m = find_member(members, field_name.c_str());
+  if (m == nullptr) return std::nullopt;
+
+  FieldInfo out{};
+  out.offset = static_cast<size_t>(m->offset_);
+  out.type_id = m->type_id_;
+  out.is_array = m->is_array_;
+  return out;
+}
+
 std::optional<std::string> dump_message_yaml(
   const std::string & type_name, const void * payload)
 {

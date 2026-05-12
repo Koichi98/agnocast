@@ -1,0 +1,19 @@
+<launch>
+    <arg name="topic" default="/my_topic"
+         description="Agnocast topic to subscribe to."/>
+    <arg name="type" default="agnocast_sample_interfaces/msg/DynamicSizeArray"
+         description="Message type name resolved at runtime via rosidl_typesupport_introspection_cpp."/>
+    <arg name="field" default="id"
+         description="Integer field whose value is logged per arrival (matches the typed listener style)."/>
+    <node_container pkg="agnocast_components" exec="agnocast_component_container"
+                    name="generic_listener_container" namespace="" output="screen">
+        <env name="LD_PRELOAD" value="libagnocast_heaphook.so:$(env LD_PRELOAD '')" />
+
+        <composable_node pkg="agnocast_sample_application" plugin="GenericSubscriber"
+                         name="generic_listener_node" namespace="">
+            <param name="topic" value="$(var topic)"/>
+            <param name="type" value="$(var type)"/>
+            <param name="field" value="$(var field)"/>
+        </composable_node>
+    </node_container>
+</launch>

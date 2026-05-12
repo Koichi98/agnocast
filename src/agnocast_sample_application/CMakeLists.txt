@@ -20,6 +20,12 @@ target_include_directories(talker PRIVATE
   ${agnocastlib_INCLUDE_DIRS}
 )
 
+add_executable(complex_talker src/complex_publisher.cpp)
+ament_target_dependencies(complex_talker rclcpp agnocastlib agnocast_sample_interfaces)
+target_include_directories(complex_talker PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
 add_executable(cie_tutorial_node src/cie_tutorial_node.cpp)
 ament_target_dependencies(cie_tutorial_node rclcpp agnocastlib)
 
@@ -98,6 +104,27 @@ target_include_directories(sim_time_timer PRIVATE
   ${agnocastlib_INCLUDE_DIRS}
 )
 
+add_library(agnocast_generic_listener_component SHARED src/generic_subscriber.cpp)
+ament_target_dependencies(agnocast_generic_listener_component rclcpp rclcpp_components agnocastlib)
+target_include_directories(agnocast_generic_listener_component PRIVATE ${agnocastlib_INCLUDE_DIRS})
+
+agnocast_components_register_node(
+  agnocast_generic_listener_component
+  PLUGIN "GenericSubscriber"
+  EXECUTABLE generic_listener
+)
+
+add_library(agnocast_no_rclcpp_generic_listener_component SHARED src/no_rclcpp_generic_subscriber.cpp)
+ament_target_dependencies(agnocast_no_rclcpp_generic_listener_component rclcpp rclcpp_components agnocastlib)
+target_include_directories(agnocast_no_rclcpp_generic_listener_component PRIVATE ${agnocastlib_INCLUDE_DIRS})
+
+agnocast_components_register_node(
+  agnocast_no_rclcpp_generic_listener_component
+  PLUGIN "NoRclcppGenericSubscriber"
+  EXECUTABLE no_rclcpp_generic_listener
+  EXECUTOR AgnocastOnlySingleThreadedExecutor
+)
+
 add_library(agnocast_listener_component SHARED src/minimal_subscriber.cpp)
 ament_target_dependencies(agnocast_listener_component rclcpp rclcpp_components agnocastlib agnocast_sample_interfaces)
 target_include_directories(agnocast_listener_component PRIVATE ${agnocastlib_INCLUDE_DIRS})
@@ -125,6 +152,9 @@ install(TARGETS agnocast_cie_listener_component
 )
 
 install(TARGETS talker
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS complex_talker
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS cie_talker
@@ -164,6 +194,22 @@ install(TARGETS no_rclcpp_client
 
 install(TARGETS sim_time_timer
   DESTINATION lib/${PROJECT_NAME})
+
+ament_export_targets(export_agnocast_generic_listener_component)
+install(TARGETS agnocast_generic_listener_component
+        EXPORT export_agnocast_generic_listener_component
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+)
+
+ament_export_targets(export_agnocast_no_rclcpp_generic_listener_component)
+install(TARGETS agnocast_no_rclcpp_generic_listener_component
+        EXPORT export_agnocast_no_rclcpp_generic_listener_component
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+)
 
 install(DIRECTORY launch
   DESTINATION share/${PROJECT_NAME}/

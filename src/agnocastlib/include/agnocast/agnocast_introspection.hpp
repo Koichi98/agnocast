@@ -28,6 +28,21 @@ struct StampOffsets
 AGNOCAST_PUBLIC
 std::optional<StampOffsets> resolve_header_stamp_offsets(const std::string & type_name);
 
+// Metadata of a top-level field inside a message struct.
+struct FieldInfo
+{
+  size_t offset;     // byte offset from the start of the struct
+  uint8_t type_id;   // rosidl_typesupport_introspection_cpp::ROS_TYPE_*
+  bool is_array;
+};
+
+// Looks up a top-level field by name. Returns std::nullopt when the type cannot be loaded
+// or when the field is absent. Nested-field traversal is not supported here; callers that
+// need dotted paths should compose multiple lookups manually.
+AGNOCAST_PUBLIC
+std::optional<FieldInfo> resolve_field_offset(
+  const std::string & type_name, const std::string & field_name);
+
 // Renders a payload (the C++ struct image returned by GenericSubscription::drain) into a
 // YAML-like multi-line string using rosidl_typesupport_introspection_cpp. Supports nested
 // messages, fixed arrays, and bounded/unbounded sequences for all builtin field types.

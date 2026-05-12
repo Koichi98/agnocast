@@ -1,0 +1,15 @@
+<launch>
+    <arg name="topic" default="/my_topic"
+         description="Agnocast topic to subscribe to."/>
+    <arg name="type" default="agnocast_sample_interfaces/msg/DynamicSizeArray"
+         description="Message type name resolved at runtime via rosidl_typesupport_introspection_cpp."/>
+    <arg name="field" default="id"
+         description="Integer field whose value is logged per arrival."/>
+    <node pkg="agnocast_sample_application" exec="no_rclcpp_generic_listener"
+          name="no_rclcpp_generic_listener_node" output="screen">
+        <env name="LD_PRELOAD" value="libagnocast_heaphook.so:$(env LD_PRELOAD '')" />
+        <param name="topic" value="$(var topic)"/>
+        <param name="type" value="$(var type)"/>
+        <param name="field" value="$(var field)"/>
+    </node>
+</launch>
