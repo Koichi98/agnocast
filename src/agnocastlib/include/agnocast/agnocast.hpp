@@ -3,6 +3,8 @@
 #include "agnocast/agnocast_callback_info.hpp"
 #include "agnocast/agnocast_callback_isolated_executor.hpp"
 #include "agnocast/agnocast_client.hpp"
+#include "agnocast/agnocast_generic_subscription.hpp"
+#include "agnocast/agnocast_introspection.hpp"
 #include "agnocast/agnocast_multi_threaded_executor.hpp"
 #include "agnocast/agnocast_public_api.hpp"
 #include "agnocast/agnocast_publisher.hpp"

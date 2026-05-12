@@ -28,6 +28,7 @@ find_package(agnocast_cie_thread_configurator REQUIRED)
 find_package(rosgraph_msgs REQUIRED)
 find_package(ament_index_cpp REQUIRED)
 find_package(message_filters REQUIRED)
+find_package(rosidl_typesupport_introspection_cpp REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_msgs REQUIRED)
@@ -36,6 +37,7 @@ find_package(glog REQUIRED)
 
 add_library(agnocast SHARED
   src/agnocast.cpp src/agnocast_utils.cpp src/agnocast_publisher.cpp src/agnocast_subscription.cpp
+  src/agnocast_generic_subscription.cpp src/agnocast_introspection.cpp
   src/agnocast_smart_pointer.cpp src/agnocast_callback_info.cpp src/agnocast_epoll.cpp src/agnocast_epoll_update_dispatcher.cpp src/agnocast_timer_info.cpp src/agnocast_timer.cpp src/agnocast_executor.cpp
   src/agnocast_single_threaded_executor.cpp src/agnocast_multi_threaded_executor.cpp
   src/agnocast_callback_isolated_executor.cpp
@@ -49,12 +51,13 @@ add_library(agnocast SHARED
   src/bridge/performance/agnocast_performance_bridge_ipc_event_loop.cpp src/bridge/performance/agnocast_performance_bridge_loader.cpp src/bridge/performance/agnocast_performance_bridge_manager.cpp
   src/node/tf2/buffer.cpp src/node/tf2/transform_broadcaster.cpp src/node/tf2/transform_listener.cpp src/node/tf2/static_transform_broadcaster.cpp)
 
-ament_target_dependencies(agnocast rclcpp agnocast_cie_thread_configurator rosgraph_msgs agnocast_cie_config_msgs ament_index_cpp message_filters tf2 tf2_ros tf2_msgs geometry_msgs)
+ament_target_dependencies(agnocast rclcpp agnocast_cie_thread_configurator rosgraph_msgs agnocast_cie_config_msgs ament_index_cpp message_filters rosidl_typesupport_introspection_cpp tf2 tf2_ros tf2_msgs geometry_msgs)
 
 target_link_libraries(agnocast
   ${rcl_yaml_param_parser_LIBRARIES}
   ${tracetools_LIBRARIES}
   ${LTTNGUST_LIBRARIES}
+  ${CMAKE_DL_LIBS}
 )
 
 target_include_directories(agnocast PUBLIC
@@ -294,5 +297,5 @@ endif()
 
 ament_export_targets(export_${PROJECT_NAME} HAS_LIBRARY_TARGET)
 ament_export_include_directories(include)
-ament_export_dependencies(agnocast_cie_thread_configurator agnocast_cie_config_msgs message_filters tf2 tf2_ros tf2_msgs geometry_msgs)
+ament_export_dependencies(agnocast_cie_thread_configurator agnocast_cie_config_msgs message_filters rosidl_typesupport_introspection_cpp tf2 tf2_ros tf2_msgs geometry_msgs)
 ament_package()
