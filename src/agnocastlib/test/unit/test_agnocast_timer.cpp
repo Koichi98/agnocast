@@ -670,3 +670,92 @@ TEST_F(TestRegisterTimerInfo, attaches_jump_handler_only_for_ros_time)
     EXPECT_NE(info->jump_handler, nullptr);
   }
 }
+
+// =============================================================================
+// unregister_timer_info — removes TimerInfo from the registry
+// =============================================================================
+
+TEST_F(TestRegisterTimerInfo, unregister_removes_timer_from_registry)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
+  const auto period = std::chrono::nanoseconds{kPeriodNs};
+  const uint32_t timer_id = 10;
+  auto timer = make_generic_timer(timer_id, period, clock);
+  agnocast::register_timer_info(timer_id, timer, period, default_callback_group(), clock);
+  ASSERT_NE(find_registered(timer_id), nullptr);
+
+  // Act
+  agnocast::unregister_timer_info(timer_id);
+
+  // Assert
+  EXPECT_EQ(find_registered(timer_id), nullptr);
+}
+
+TEST_F(TestRegisterTimerInfo, unregister_is_noop_for_nonexistent_id)
+{
+  // Arrange — ensure the id is not in the registry.
+  const uint32_t timer_id = 999;
+  ASSERT_EQ(find_registered(timer_id), nullptr);
+
+  // Act & Assert — no crash or exception.
+  EXPECT_NO_THROW(agnocast::unregister_timer_info(timer_id));
+}
+
+// =============================================================================
+// handle_post_time_jump — exception handling for clock->now()
+// =============================================================================
+
+TEST_F(TestTimer, handle_post_time_jump_swallows_exception_from_clock_now)
+{
+  // Arrange — RCL_CLOCK_UNINITIALIZED has no get_now hook, so clock->now() throws.
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_CLOCK_UNINITIALIZED);
+  auto info = make_timer_info(clock, /*now_ns=*/0);
+  const int64_t snapshot_last = info->last_call_time_ns.load(std::memory_order_relaxed);
+  const int64_t snapshot_next = info->next_call_time_ns.load(std::memory_order_relaxed);
+  rcl_time_jump_t jump = {};
+  jump.clock_change = RCL_ROS_TIME_NO_CHANGE;
+
+  // Act & Assert — exception must not escape, state unchanged.
+  EXPECT_NO_THROW(agnocast::handle_post_time_jump(*info, jump));
+  EXPECT_EQ(info->last_call_time_ns.load(std::memory_order_relaxed), snapshot_last);
+  EXPECT_EQ(info->next_call_time_ns.load(std::memory_order_relaxed), snapshot_next);
+}
+
+// =============================================================================
+// TimerInfo destructor — closes file descriptors
+// =============================================================================
+
+TEST_F(TestTimer, timer_info_destructor_closes_timer_fd)
+{
+  // Arrange
+  auto info = std::make_shared<agnocast::TimerInfo>();
+  info->timer_fd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  ASSERT_GE(info->timer_fd, 0);
+  const int fd = info->timer_fd;
+
+  // Act
+  info.reset();
+
+  // Assert — writing to closed fd should fail with EBADF.
+  uint64_t val = 1;
+  EXPECT_EQ(write(fd, &val, sizeof(val)), -1);
+  EXPECT_EQ(errno, EBADF);
+}
+
+TEST_F(TestTimer, timer_info_destructor_closes_clock_eventfd)
+{
+  // Arrange
+  auto info = std::make_shared<agnocast::TimerInfo>();
+  info->clock_eventfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  ASSERT_GE(info->clock_eventfd, 0);
+  const int fd = info->clock_eventfd;
+
+  // Act
+  info.reset();
+
+  // Assert — writing to closed fd should fail with EBADF.
+  uint64_t val = 1;
+  EXPECT_EQ(write(fd, &val, sizeof(val)), -1);
+  EXPECT_EQ(errno, EBADF);
+}

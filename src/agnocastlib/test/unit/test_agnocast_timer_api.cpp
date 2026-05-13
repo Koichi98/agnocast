@@ -207,6 +207,84 @@ TEST_F(CreateTimerFreeFunctionTest, time_until_trigger_cancel_and_reset_ros_time
 }
 
 // =========================================
+// is_steady tests
+// =========================================
+
+TEST_F(CreateTimerFreeFunctionTest, is_steady_returns_true_for_steady_clock)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
+  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
+
+  // Act
+  auto timer = agnocast::create_timer(node.get(), clock, period, []() {});
+
+  // Assert
+  EXPECT_TRUE(timer->is_steady());
+}
+
+TEST_F(CreateTimerFreeFunctionTest, is_steady_returns_false_for_ros_time)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
+  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
+
+  // Act
+  auto timer = agnocast::create_timer(node.get(), clock, period, []() {});
+
+  // Assert
+  EXPECT_FALSE(timer->is_steady());
+}
+
+TEST_F(CreateTimerFreeFunctionTest, is_steady_returns_false_for_system_time)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_SYSTEM_TIME);
+  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
+
+  // Act
+  auto timer = agnocast::create_timer(node.get(), clock, period, []() {});
+
+  // Assert
+  EXPECT_FALSE(timer->is_steady());
+}
+
+// =========================================
+// Callback signature tests
+// =========================================
+
+TEST_F(CreateTimerFreeFunctionTest, callback_with_timer_ref_receives_reference)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
+  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
+  agnocast::TimerBase * received_timer = nullptr;
+
+  auto timer = agnocast::create_timer(
+    node.get(), clock, period, [&received_timer](agnocast::TimerBase & t) { received_timer = &t; });
+
+  // Act
+  timer->execute_callback();
+
+  // Assert
+  EXPECT_EQ(received_timer, timer.get());
+}
+
+// =========================================
+// WallTimer tests
+// =========================================
+
+TEST_F(CreateTimerFreeFunctionTest, create_wall_timer_uses_steady_clock)
+{
+  // Arrange & Act
+  auto timer = node->create_wall_timer(std::chrono::milliseconds(100), []() {});
+
+  // Assert
+  ASSERT_NE(timer, nullptr);
+  EXPECT_EQ(timer->get_clock()->get_clock_type(), RCL_STEADY_TIME);
+}
+
+// =========================================
 // ID overflow tests
 // =========================================
 
