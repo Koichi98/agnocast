@@ -30,15 +30,12 @@ public:
 
   virtual ~TimerBase();
 
-  // TODO: The following methods are planned to be added for rclcpp API compatibility:
-  // void cancel(), bool is_canceled(), void reset(), std::chrono::nanoseconds time_until_trigger(),
-  // etc.
-
   AGNOCAST_PUBLIC
   void cancel() { canceled_.store(true); }
 
+  // Non-const to align with rclcpp::TimerBase::is_canceled().
   AGNOCAST_PUBLIC
-  bool is_canceled() const { return canceled_.load(); }
+  bool is_canceled() { return canceled_.load(); }
 
   AGNOCAST_PUBLIC
   void reset();
@@ -51,7 +48,7 @@ public:
   /** @brief Return whether this timer uses a steady clock.
    *  @return True if the clock is steady. */
   AGNOCAST_PUBLIC
-  virtual bool is_steady() const { return true; }
+  virtual bool is_steady() const = 0;
 
   /** @brief Get the clock associated with this timer.
    *  @return Shared pointer to the clock. */
