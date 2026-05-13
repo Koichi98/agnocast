@@ -266,6 +266,29 @@ TEST_F(TestTimer, handle_post_time_jump_forward_jump_writes_clock_eventfd_when_r
   EXPECT_TRUE(consume_eventfd(info->clock_eventfd));
 }
 
+TEST_F(TestTimer, handle_post_time_jump_forward_jump_does_not_write_when_canceled)
+{
+  // Arrange — timer would be ready (now past next_call_time), but it is canceled.
+  const int64_t now_ns = 1'200'000'000;
+  auto clock = make_ros_clock_at(now_ns);
+  auto info = make_timer_info(clock, /*now_ns=*/now_ns - 200'000'000);
+  info->next_call_time_ns.store(now_ns - 100'000'000, std::memory_order_relaxed);
+  info->clock_eventfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+  ASSERT_GE(info->clock_eventfd, 0);
+  auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
+    /*timer_id=*/0u, std::chrono::nanoseconds{kPeriodNs}, clock, std::function<void()>{[]() {}});
+  info->timer = timer;
+  timer->cancel();
+  rcl_time_jump_t jump = {};
+  jump.clock_change = RCL_ROS_TIME_NO_CHANGE;
+
+  // Act
+  agnocast::handle_post_time_jump(*info, jump);
+
+  // Assert
+  EXPECT_FALSE(consume_eventfd(info->clock_eventfd));
+}
+
 TEST_F(TestTimer, handle_post_time_jump_forward_jump_does_not_write_when_not_ready)
 {
   // Arrange — next_call_time is still in the future after the jump.
@@ -347,6 +370,30 @@ TEST_F(TestTimer, handle_timer_event_is_noop_when_timer_weakptr_is_expired)
   // Assert
   EXPECT_EQ(info->last_call_time_ns.load(std::memory_order_relaxed), snapshot_last);
   EXPECT_EQ(info->next_call_time_ns.load(std::memory_order_relaxed), snapshot_next);
+}
+
+TEST_F(TestTimer, handle_timer_event_is_noop_when_timer_is_canceled)
+{
+  // Arrange — timer is ready (now past next_call_time) but was canceled.
+  const int64_t now_ns = 1'000'000'000;
+  auto clock = make_ros_clock_at(now_ns);
+  auto info = make_timer_info(clock, now_ns - kPeriodNs);
+  int call_count = 0;
+  std::function<void()> cb = [&call_count]() { ++call_count; };
+  auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
+    /*timer_id=*/0u, std::chrono::nanoseconds{kPeriodNs}, clock, std::move(cb));
+  info->timer = timer;
+  timer->cancel();
+  const int64_t snapshot_last = info->last_call_time_ns.load(std::memory_order_relaxed);
+  const int64_t snapshot_next = info->next_call_time_ns.load(std::memory_order_relaxed);
+
+  // Act
+  agnocast::handle_timer_event(*info);
+
+  // Assert — canceled timer must not invoke callback or mutate anchors.
+  EXPECT_EQ(info->last_call_time_ns.load(std::memory_order_relaxed), snapshot_last);
+  EXPECT_EQ(info->next_call_time_ns.load(std::memory_order_relaxed), snapshot_next);
+  EXPECT_EQ(call_count, 0);
 }
 
 TEST_F(TestTimer, handle_timer_event_advances_next_call_by_one_period_and_invokes_callback)
