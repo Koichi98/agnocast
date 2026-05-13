@@ -468,22 +468,21 @@ void CallbackIsolatedAgnocastExecutor::spawn_child_executor_locked(
   } else {
     executor = std::make_shared<SingleThreadedAgnocastExecutor>(
       rclcpp::ExecutorOptions{}, next_exec_timeout_ms_);
-    std::static_pointer_cast<SingleThreadedAgnocastExecutor>(executor)
-      ->dedicate_to_callback_group(group, node);
+    std::static_pointer_cast<SingleThreadedAgnocastExecutor>(executor)->dedicate_to_callback_group(
+      group, node);
   }
 
   child_callback_groups_.push_back(group);
   weak_child_executors_.push_back(executor);
 
-  child_threads_.emplace_back(
-    [this, executor, callback_group_id = std::move(callback_group_id)]() {
-      auto tid = static_cast<pid_t>(syscall(SYS_gettid));
-      {
-        std::lock_guard<std::mutex> lock{client_publisher_mutex_};
-        agnocast::publish_callback_group_info(client_publisher_, tid, callback_group_id);
-      }
-      executor->spin();
-    });
+  child_threads_.emplace_back([this, executor, callback_group_id = std::move(callback_group_id)]() {
+    auto tid = static_cast<pid_t>(syscall(SYS_gettid));
+    {
+      std::lock_guard<std::mutex> lock{client_publisher_mutex_};
+      agnocast::publish_callback_group_info(client_publisher_, tid, callback_group_id);
+    }
+    executor->spin();
+  });
 }
 
 }  // namespace agnocast

@@ -348,8 +348,8 @@ TEST_F(CallbackIsolatedAgnocastExecutorTest, remove_callback_group_stops_dispatc
     rclcpp::CallbackGroupType::MutuallyExclusive,
     /*automatically_add_to_executor_with_node=*/false);
   std::atomic_int callback_count{0};
-  auto timer = node->create_wall_timer(
-    std::chrono::milliseconds(10), [&]() { callback_count++; }, group);
+  auto timer =
+    node->create_wall_timer(std::chrono::milliseconds(10), [&]() { callback_count++; }, group);
 
   executor->add_callback_group(group, node->get_node_base_interface());
 
@@ -418,8 +418,8 @@ TEST_F(CallbackIsolatedAgnocastExecutorTest, re_add_after_remove_succeeds)
     rclcpp::CallbackGroupType::MutuallyExclusive,
     /*automatically_add_to_executor_with_node=*/false);
   std::atomic_int callback_count{0};
-  auto timer = node->create_wall_timer(
-    std::chrono::milliseconds(10), [&]() { callback_count++; }, group);
+  auto timer =
+    node->create_wall_timer(std::chrono::milliseconds(10), [&]() { callback_count++; }, group);
 
   std::thread spin_thread([this]() { executor->spin(); });
 
