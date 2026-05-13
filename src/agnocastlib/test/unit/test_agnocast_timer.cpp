@@ -256,6 +256,9 @@ TEST_F(TestTimer, handle_post_time_jump_forward_jump_writes_clock_eventfd_when_r
   info->next_call_time_ns.store(now_ns - 100'000'000, std::memory_order_relaxed);
   info->clock_eventfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
   ASSERT_GE(info->clock_eventfd, 0);
+  auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
+    /*timer_id=*/0u, std::chrono::nanoseconds{kPeriodNs}, clock, std::function<void()>{[]() {}});
+  info->timer = timer;
   rcl_time_jump_t jump = {};
   jump.clock_change = RCL_ROS_TIME_NO_CHANGE;
 
