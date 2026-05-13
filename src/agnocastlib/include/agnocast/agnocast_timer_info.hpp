@@ -16,6 +16,7 @@
 namespace agnocast
 {
 
+constexpr int64_t NANOSECONDS_PER_SECOND = 1000000000;
 // Capped slightly below UINT32_MAX to provide a safe margin against
 // atomic wrap-around (overflow back to 0) during concurrent fetch_add calls.
 constexpr uint32_t MAX_TIMER_ID_SAFETY_MARGIN = 1000;
@@ -26,6 +27,8 @@ struct AgnocastExecutable;
 struct TimerInfo
 {
   ~TimerInfo();
+
+  void reset();
 
   // Mutex to protect timer_fd access.
   // - shared_lock: for reading timer_fd (read(), epoll_ctl()).

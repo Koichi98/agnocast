@@ -16,8 +16,6 @@ namespace agnocast
 
 struct TimerInfo;
 
-constexpr int64_t NANOSECONDS_PER_SECOND = 1000000000;
-
 /**
  * @brief Base class for Agnocast timers providing periodic callback execution.
  *
@@ -63,14 +61,13 @@ public:
   virtual void execute_callback() = 0;
 
 protected:
-  TimerBase(uint32_t timer_id, std::chrono::nanoseconds period)
-  : timer_id_(timer_id), timer_info_(), period_(period), canceled_(false)
+  TimerBase(uint32_t timer_id, [[maybe_unused]] std::chrono::nanoseconds period)
+  : timer_id_(timer_id), timer_info_(), canceled_(false)
   {
   }
 
   uint32_t timer_id_;
   std::weak_ptr<TimerInfo> timer_info_;
-  std::chrono::nanoseconds period_;
   std::atomic<bool> canceled_;
 };
 
