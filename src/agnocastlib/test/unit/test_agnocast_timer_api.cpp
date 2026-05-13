@@ -110,6 +110,23 @@ TEST_F(CreateTimerFreeFunctionTest, callback_is_invoked)
 // cancel and reset and time_until_trigger function tests
 // =========================================
 
+TEST_F(CreateTimerFreeFunctionTest, new_timer_starts_running)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
+  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
+
+  // Act: agnocast does not support autostart=false, so a freshly created timer
+  // must already be running (not canceled) with the next trigger within one period.
+  auto timer = agnocast::create_timer(node.get(), clock, period, []() {});
+
+  // Assert
+  EXPECT_FALSE(timer->is_canceled());
+  const auto tut = timer->time_until_trigger();
+  EXPECT_GT(tut, std::chrono::nanoseconds(0));
+  EXPECT_LE(tut, period.to_chrono<std::chrono::nanoseconds>());
+}
+
 TEST_F(CreateTimerFreeFunctionTest, cancel_timer)
 {
   // Arrange
