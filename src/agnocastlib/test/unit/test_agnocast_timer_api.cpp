@@ -107,6 +107,76 @@ TEST_F(CreateTimerFreeFunctionTest, callback_is_invoked)
 }
 
 // =========================================
+// cancel and reset and time_until_trigger function tests
+// =========================================
+
+TEST_F(CreateTimerFreeFunctionTest, cancel_timer)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
+  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
+  bool called = false;
+  auto timer = agnocast::create_timer(node.get(), clock, period, [&called]() { called = true; });
+
+  // Act
+  timer->cancel();
+
+  // Assert
+  EXPECT_TRUE(timer->is_canceled());
+  EXPECT_FALSE(called);
+}
+
+TEST_F(CreateTimerFreeFunctionTest, time_until_trigger_cancel_and_reset)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
+  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
+  bool called = false;
+  auto timer = agnocast::create_timer(node.get(), clock, period, [&called]() { called = true; });
+
+  // Act
+  auto tut_before_cancel = timer->time_until_trigger();
+  timer->cancel();
+  auto tut_after_cancel = timer->time_until_trigger();
+  timer->reset();
+  auto tut_after_reset = timer->time_until_trigger();
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  auto tut_after_wait = timer->time_until_trigger();
+
+  // Assert
+  EXPECT_TRUE(tut_before_cancel < std::chrono::milliseconds(100));
+  EXPECT_EQ(tut_after_cancel, std::chrono::nanoseconds::max());
+  EXPECT_TRUE(tut_after_reset < std::chrono::milliseconds(100));
+  EXPECT_LT(tut_after_wait, std::chrono::nanoseconds(0));
+  EXPECT_FALSE(called);
+}
+
+TEST_F(CreateTimerFreeFunctionTest, time_until_trigger_cancel_and_reset_ros_time)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
+  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
+  bool called = false;
+  auto timer = agnocast::create_timer(node.get(), clock, period, [&called]() { called = true; });
+
+  // Act
+  auto tut_before_cancel = timer->time_until_trigger();
+  timer->cancel();
+  auto tut_after_cancel = timer->time_until_trigger();
+  timer->reset();
+  auto tut_after_reset = timer->time_until_trigger();
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));
+  auto tut_after_wait = timer->time_until_trigger();
+
+  // Assert
+  EXPECT_TRUE(tut_before_cancel < std::chrono::milliseconds(100));
+  EXPECT_EQ(tut_after_cancel, std::chrono::nanoseconds::max());
+  EXPECT_TRUE(tut_after_reset < std::chrono::milliseconds(100));
+  EXPECT_LT(tut_after_wait, std::chrono::nanoseconds(0));
+  EXPECT_FALSE(called);
+}
+
+// =========================================
 // ID overflow tests
 // =========================================
 
@@ -134,74 +204,4 @@ TEST(AllocateTimerIdTest, succeeds_just_below_reserved_range)
 
   // Cleanup
   next_timer_id.store(original);
-}
-
-// =========================================
-// cancel and reset and time_until_trigger function tests
-// =========================================
-
-TEST_F(CreateTimerFreeFunctionTest, cancel_timer)
-{
-  // Arrange
-  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
-  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
-  bool called = false;
-  auto timer = agnocast::create_timer(node.get(), clock, period, [&called]() { called = true; });
-
-  // Act
-  timer->cancel();
-
-  // Assert
-  EXPECT_TRUE(timer->is_canceled());
-  EXPECT_FALSE(called);
-}
-
-TEST_F(CreateTimerFreeFunctionTest, time_until_trigger_cancel_and_rest)
-{
-  // Arrange
-  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
-  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
-  bool called = false;
-  auto timer = agnocast::create_timer(node.get(), clock, period, [&called]() { called = true; });
-
-  // Act
-  auto tut_before_cancel = timer->time_until_trigger();
-  timer->cancel();
-  auto tut_after_cancel = timer->time_until_trigger();
-  timer->reset();
-  auto tut_after_reset = timer->time_until_trigger();
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-  auto tut_after_wait = timer->time_until_trigger();
-
-  // Assert
-  EXPECT_TRUE(tut_before_cancel < std::chrono::milliseconds(100));
-  EXPECT_EQ(tut_after_cancel, std::chrono::nanoseconds::max());
-  EXPECT_TRUE(tut_after_reset < std::chrono::milliseconds(100));
-  EXPECT_LT(tut_after_wait, std::chrono::nanoseconds(0));
-  EXPECT_FALSE(called);
-}
-
-TEST_F(CreateTimerFreeFunctionTest, time_until_trigger_cancel_and_rest_ros_time)
-{
-  // Arrange
-  auto clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
-  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
-  bool called = false;
-  auto timer = agnocast::create_timer(node.get(), clock, period, [&called]() { called = true; });
-
-  // Act
-  auto tut_before_cancel = timer->time_until_trigger();
-  timer->cancel();
-  auto tut_after_cancel = timer->time_until_trigger();
-  timer->reset();
-  auto tut_after_reset = timer->time_until_trigger();
-  std::this_thread::sleep_for(std::chrono::milliseconds(200));
-  auto tut_after_wait = timer->time_until_trigger();
-
-  // Assert
-  EXPECT_TRUE(tut_before_cancel < std::chrono::milliseconds(100));
-  EXPECT_EQ(tut_after_cancel, std::chrono::nanoseconds::max());
-  EXPECT_TRUE(tut_after_reset < std::chrono::milliseconds(100));
-  EXPECT_LT(tut_after_wait, std::chrono::nanoseconds(0));
-  EXPECT_FALSE(called);
 }
