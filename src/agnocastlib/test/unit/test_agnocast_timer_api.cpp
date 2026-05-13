@@ -177,7 +177,7 @@ TEST_F(CreateTimerFreeFunctionTest, time_until_trigger_cancel_and_rest)
   EXPECT_TRUE(tut_before_cancel < std::chrono::milliseconds(100));
   EXPECT_EQ(tut_after_cancel, std::chrono::nanoseconds::max());
   EXPECT_TRUE(tut_after_reset < std::chrono::milliseconds(100));
-  EXPECT_EQ(tut_after_wait, std::chrono::milliseconds(0));
+  EXPECT_LT(tut_after_wait, std::chrono::nanoseconds(0));
   EXPECT_FALSE(called);
 }
 
@@ -202,6 +202,6 @@ TEST_F(CreateTimerFreeFunctionTest, time_until_trigger_cancel_and_rest_ros_time)
   EXPECT_TRUE(tut_before_cancel < std::chrono::milliseconds(100));
   EXPECT_EQ(tut_after_cancel, std::chrono::nanoseconds::max());
   EXPECT_TRUE(tut_after_reset < std::chrono::milliseconds(100));
-  EXPECT_EQ(tut_after_wait, std::chrono::milliseconds(0));
+  EXPECT_LT(tut_after_wait, std::chrono::nanoseconds(0));
   EXPECT_FALSE(called);
 }
