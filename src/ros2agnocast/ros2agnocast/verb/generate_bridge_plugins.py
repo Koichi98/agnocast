@@ -164,6 +164,7 @@ class GenerateBridgePluginsVerb(VerbExtension):
                 'msg_type': typ,
                 'cpp_type': cpp_type,
                 'header_path': header_path,
+                'snake_type_name': flat_type,
             }
             template_file = templates_pkg.joinpath('pubsub_bridge_plugin.cpp.em')
         else:
@@ -171,6 +172,7 @@ class GenerateBridgePluginsVerb(VerbExtension):
                 'srv_type': typ,
                 'cpp_type': cpp_type,
                 'header_path': header_path,
+                'snake_type_name': flat_type,
             }
             template_file = templates_pkg.joinpath('service_bridge_plugin.cpp.em')
 
