@@ -232,3 +232,22 @@ TEST_F(CreateTimerFreeFunctionTest, reset_re_anchors_next_call_when_time_has_adv
   EXPECT_EQ(tut_before_reset, std::chrono::nanoseconds(kPeriodNs - kHalfPeriodNs));
   EXPECT_EQ(tut_after_reset, std::chrono::nanoseconds(kPeriodNs));
 }
+
+TEST_F(CreateTimerFreeFunctionTest, time_reset_callback)
+{
+  // Arrange
+  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
+  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
+  bool called = false;
+  auto timer = agnocast::create_timer(node.get(), clock, period, []() {});
+
+  // Act
+  timer->set_on_reset_callback([&](size_t s) {
+    (void)s;
+    called = true;
+  });
+  timer->reset();
+
+  // Assert
+  EXPECT_TRUE(called);
+}
