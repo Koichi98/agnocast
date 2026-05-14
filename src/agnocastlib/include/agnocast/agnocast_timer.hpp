@@ -16,8 +16,6 @@ namespace agnocast
 
 struct TimerInfo;
 
-constexpr int64_t NANOSECONDS_PER_SECOND = 1000000000;
-
 /**
  * @brief Base class for Agnocast timers providing periodic callback execution.
  *
@@ -32,15 +30,12 @@ public:
 
   virtual ~TimerBase();
 
-  // TODO: The following methods are planned to be added for rclcpp API compatibility:
-  // void cancel(), bool is_canceled(), void reset(), std::chrono::nanoseconds time_until_trigger(),
-  // etc.
-
   AGNOCAST_PUBLIC
   void cancel() { canceled_.store(true); }
 
+  // Non-const to align with rclcpp::TimerBase::is_canceled().
   AGNOCAST_PUBLIC
-  bool is_canceled() const { return canceled_.load(); }
+  bool is_canceled() { return canceled_.load(); }
 
   AGNOCAST_PUBLIC
   void reset();
@@ -53,7 +48,7 @@ public:
   /** @brief Return whether this timer uses a steady clock.
    *  @return True if the clock is steady. */
   AGNOCAST_PUBLIC
-  virtual bool is_steady() const { return true; }
+  virtual bool is_steady() const = 0;
 
   AGNOCAST_PUBLIC
   void set_on_reset_callback(const std::function<void(size_t)> & callback)
@@ -80,14 +75,13 @@ public:
   virtual void execute_callback() = 0;
 
 protected:
-  TimerBase(uint32_t timer_id, std::chrono::nanoseconds period)
-  : timer_id_(timer_id), timer_info_(), period_(period), canceled_(false)
+  TimerBase(uint32_t timer_id, [[maybe_unused]] std::chrono::nanoseconds period)
+  : timer_id_(timer_id), timer_info_(), canceled_(false)
   {
   }
 
   uint32_t timer_id_;
   std::weak_ptr<TimerInfo> timer_info_;
-  std::chrono::nanoseconds period_;
   std::atomic<bool> canceled_;
   std::function<void(size_t)> on_reset_callback_{nullptr};
   mutable std::recursive_mutex callback_mutex_;
