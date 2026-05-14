@@ -19,8 +19,8 @@ struct TimerInfo;
 /**
  * @brief Base class for Agnocast timers providing periodic callback execution.
  *
- * Defines the common interface for all timer types, including callback execution,
- * clock access, and period storage.
+ * Defines the common interface for all timer types, including callback execution
+ * and clock access.
  */
 AGNOCAST_PUBLIC
 class TimerBase
@@ -58,10 +58,7 @@ public:
   virtual void execute_callback() = 0;
 
 protected:
-  TimerBase(uint32_t timer_id, [[maybe_unused]] std::chrono::nanoseconds period)
-  : timer_id_(timer_id), timer_info_(), canceled_(false)
-  {
-  }
+  explicit TimerBase(uint32_t timer_id) : timer_id_(timer_id), timer_info_(), canceled_(false) {}
 
   uint32_t timer_id_;
   std::weak_ptr<TimerInfo> timer_info_;
@@ -84,12 +81,8 @@ class GenericTimer : public TimerBase
 public:
   RCLCPP_SMART_PTR_DEFINITIONS(GenericTimer)
 
-  GenericTimer(
-    uint32_t timer_id, std::chrono::nanoseconds period, rclcpp::Clock::SharedPtr clock,
-    FunctorT && callback)
-  : TimerBase(timer_id, period),
-    clock_(std::move(clock)),
-    callback_(std::forward<FunctorT>(callback))
+  GenericTimer(uint32_t timer_id, rclcpp::Clock::SharedPtr clock, FunctorT && callback)
+  : TimerBase(timer_id), clock_(std::move(clock)), callback_(std::forward<FunctorT>(callback))
   {
     if (!clock_) {
       throw std::invalid_argument("clock cannot be null");
@@ -137,10 +130,9 @@ class WallTimer : public GenericTimer<FunctorT>
 public:
   RCLCPP_SMART_PTR_DEFINITIONS(WallTimer)
 
-  WallTimer(uint32_t timer_id, std::chrono::nanoseconds period, FunctorT && callback)
+  WallTimer(uint32_t timer_id, FunctorT && callback)
   : GenericTimer<FunctorT>(
-      timer_id, period, std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME),
-      std::forward<FunctorT>(callback))
+      timer_id, std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME), std::forward<FunctorT>(callback))
   {
   }
 

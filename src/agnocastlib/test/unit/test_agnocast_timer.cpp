@@ -257,7 +257,7 @@ TEST_F(TestTimer, handle_post_time_jump_forward_jump_writes_clock_eventfd_when_r
   info->clock_eventfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
   ASSERT_GE(info->clock_eventfd, 0);
   auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
-    /*timer_id=*/0u, std::chrono::nanoseconds{kPeriodNs}, clock, std::function<void()>{[]() {}});
+    /*timer_id=*/0u, clock, std::function<void()>{[]() {}});
   info->timer = timer;
   rcl_time_jump_t jump = {};
   jump.clock_change = RCL_ROS_TIME_NO_CHANGE;
@@ -279,7 +279,7 @@ TEST_F(TestTimer, handle_post_time_jump_forward_jump_does_not_write_when_cancele
   info->clock_eventfd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
   ASSERT_GE(info->clock_eventfd, 0);
   auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
-    /*timer_id=*/0u, std::chrono::nanoseconds{kPeriodNs}, clock, std::function<void()>{[]() {}});
+    /*timer_id=*/0u, clock, std::function<void()>{[]() {}});
   info->timer = timer;
   timer->cancel();
   rcl_time_jump_t jump = {};
@@ -384,7 +384,7 @@ TEST_F(TestTimer, handle_timer_event_is_noop_when_timer_is_canceled)
   int call_count = 0;
   std::function<void()> cb = [&call_count]() { ++call_count; };
   auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
-    /*timer_id=*/0u, std::chrono::nanoseconds{kPeriodNs}, clock, std::move(cb));
+    /*timer_id=*/0u, clock, std::move(cb));
   info->timer = timer;
   timer->cancel();
   const int64_t snapshot_last = info->last_call_time_ns.load(std::memory_order_relaxed);
@@ -409,7 +409,7 @@ TEST_F(TestTimer, handle_timer_event_advances_next_call_by_one_period_and_invoke
   int call_count = 0;
   std::function<void()> cb = [&call_count]() { ++call_count; };
   auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
-    /*timer_id=*/0u, std::chrono::nanoseconds{kPeriodNs}, clock, std::move(cb));
+    /*timer_id=*/0u, clock, std::move(cb));
   info->timer = timer;
 
   // Act
@@ -430,8 +430,8 @@ TEST_F(TestTimer, handle_timer_event_just_past_two_period_boundary_advances_extr
   auto clock = make_ros_clock_at(now_ns);
   auto info = make_timer_info(clock, stored_next - kPeriodNs);
   std::function<void()> cb = []() {};
-  auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
-    0u, std::chrono::nanoseconds{kPeriodNs}, clock, std::move(cb));
+  auto timer =
+    std::make_shared<agnocast::GenericTimer<std::function<void()>>>(0u, clock, std::move(cb));
   info->timer = timer;
 
   // Act
@@ -451,8 +451,8 @@ TEST_F(TestTimer, handle_timer_event_catches_up_many_periods_at_once)
   auto info = make_timer_info(clock, stored_next - kPeriodNs);
   int call_count = 0;
   std::function<void()> cb = [&call_count]() { ++call_count; };
-  auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
-    0u, std::chrono::nanoseconds{kPeriodNs}, clock, std::move(cb));
+  auto timer =
+    std::make_shared<agnocast::GenericTimer<std::function<void()>>>(0u, clock, std::move(cb));
   info->timer = timer;
 
   // Act
@@ -473,8 +473,8 @@ TEST_F(TestTimer, handle_timer_event_with_zero_period_sets_next_call_to_now)
   auto info = make_timer_info(clock, stored_next, /*period_ns=*/0);
   int call_count = 0;
   std::function<void()> cb = [&call_count]() { ++call_count; };
-  auto timer = std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
-    0u, std::chrono::nanoseconds{0}, clock, std::move(cb));
+  auto timer =
+    std::make_shared<agnocast::GenericTimer<std::function<void()>>>(0u, clock, std::move(cb));
   info->timer = timer;
 
   // Act
@@ -509,10 +509,10 @@ protected:
   }
 
   std::shared_ptr<agnocast::TimerBase> make_generic_timer(
-    uint32_t timer_id, std::chrono::nanoseconds period, rclcpp::Clock::SharedPtr clock)
+    uint32_t timer_id, rclcpp::Clock::SharedPtr clock)
   {
     return std::make_shared<agnocast::GenericTimer<std::function<void()>>>(
-      timer_id, period, std::move(clock), std::function<void()>{[]() {}});
+      timer_id, std::move(clock), std::function<void()>{[]() {}});
   }
 
   std::shared_ptr<agnocast::TimerInfo> find_registered(uint32_t timer_id) const
@@ -533,7 +533,7 @@ TEST_F(TestRegisterTimerInfo, steady_time_clock_creates_timer_fd_only)
   auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
   const auto period = std::chrono::nanoseconds{kPeriodNs};
   const uint32_t timer_id = 1;
-  auto timer = make_generic_timer(timer_id, period, clock);
+  auto timer = make_generic_timer(timer_id, clock);
 
   // Act
   agnocast::register_timer_info(timer_id, timer, period, default_callback_group(), clock);
@@ -552,7 +552,7 @@ TEST_F(TestRegisterTimerInfo, ros_time_clock_inactive_creates_both_timer_fd_and_
   ASSERT_FALSE(clock->ros_time_is_active());
   const auto period = std::chrono::nanoseconds{kPeriodNs};
   const uint32_t timer_id = 2;
-  auto timer = make_generic_timer(timer_id, period, clock);
+  auto timer = make_generic_timer(timer_id, clock);
 
   // Act
   agnocast::register_timer_info(timer_id, timer, period, default_callback_group(), clock);
@@ -577,7 +577,7 @@ TEST_F(TestRegisterTimerInfo, ros_time_clock_active_skips_timer_fd)
   ASSERT_TRUE(clock->ros_time_is_active());
   const auto period = std::chrono::nanoseconds{kPeriodNs};
   const uint32_t timer_id = 3;
-  auto timer = make_generic_timer(timer_id, period, clock);
+  auto timer = make_generic_timer(timer_id, clock);
 
   // Act
   agnocast::register_timer_info(timer_id, timer, period, default_callback_group(), clock);
@@ -602,7 +602,7 @@ TEST_F(TestRegisterTimerInfo, populates_timer_info_from_arguments_and_clock)
   }
   const auto period = std::chrono::nanoseconds{kPeriodNs};
   const uint32_t timer_id = 42;
-  auto timer = make_generic_timer(timer_id, period, clock);
+  auto timer = make_generic_timer(timer_id, clock);
   auto cb_group = default_callback_group();
 
   // Act
@@ -627,7 +627,7 @@ TEST_F(TestRegisterTimerInfo, sets_epoll_update_flags_per_created_fds)
   auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
   const auto period = std::chrono::nanoseconds{kPeriodNs};
   const uint32_t timer_id = 5;
-  auto timer = make_generic_timer(timer_id, period, clock);
+  auto timer = make_generic_timer(timer_id, clock);
 
   // Act
   agnocast::register_timer_info(timer_id, timer, period, default_callback_group(), clock);
@@ -647,7 +647,7 @@ TEST_F(TestRegisterTimerInfo, attaches_jump_handler_only_for_ros_time)
     auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
     const auto period = std::chrono::nanoseconds{kPeriodNs};
     const uint32_t timer_id = 6;
-    auto timer = make_generic_timer(timer_id, period, clock);
+    auto timer = make_generic_timer(timer_id, clock);
 
     agnocast::register_timer_info(timer_id, timer, period, default_callback_group(), clock);
 
@@ -661,7 +661,7 @@ TEST_F(TestRegisterTimerInfo, attaches_jump_handler_only_for_ros_time)
     auto clock = std::make_shared<rclcpp::Clock>(RCL_ROS_TIME);
     const auto period = std::chrono::nanoseconds{kPeriodNs};
     const uint32_t timer_id = 7;
-    auto timer = make_generic_timer(timer_id, period, clock);
+    auto timer = make_generic_timer(timer_id, clock);
 
     agnocast::register_timer_info(timer_id, timer, period, default_callback_group(), clock);
 

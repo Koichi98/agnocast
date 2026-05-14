@@ -279,8 +279,8 @@ TimerBase::SharedPtr create_timer(
   const void * callback_addr = static_cast<const void *>(&callback);
   const char * callback_symbol = tracetools::get_symbol(callback);
 
-  auto timer = std::make_shared<GenericTimer<CallbackT>>(
-    timer_id, period_ns, clock, std::forward<CallbackT>(callback));
+  auto timer =
+    std::make_shared<GenericTimer<CallbackT>>(timer_id, clock, std::forward<CallbackT>(callback));
 
   register_timer_info(timer_id, timer, period_ns, group, clock);
 
