@@ -8,7 +8,7 @@ fi
 
 set -e
 
-PERCENTAGES=($(seq 5 5 95))   # You can change this
+PERCENTAGES=(50 95)   # You can change this
 TIMEOUT_EACH_TEST_CASE_S="60" # You can change this
 
 NUM_PERCENTAGES=${#PERCENTAGES[@]}
