@@ -61,7 +61,8 @@ for i in $(seq 1 $NUM_LOOP); do
     run-stress-ng $(($i - 1))
     STRESS_TEST_TIMEOUT=$TIMEOUT_EACH_TEST_CASE_S ./scripts/test/e2e_test_1to1.bash
     STRESS_TEST_TIMEOUT=$TIMEOUT_EACH_TEST_CASE_S ./scripts/test/e2e_test_2to2.bash
-    STRESS_TEST_TIMEOUT=$TIMEOUT_EACH_TEST_CASE_S ./scripts/test/e2e_test_agnocast_node.bash
+    STRESS_TEST_TIMEOUT=$TIMEOUT_EACH_TEST_CASE_S ./scripts/test/e2e_test_1to1_agnocast_node.bash
+    STRESS_TEST_TIMEOUT=$TIMEOUT_EACH_TEST_CASE_S ./scripts/test/e2e_test_2to2_agnocast_node.bash
 
     wait
 done
