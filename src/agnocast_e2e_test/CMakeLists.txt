@@ -125,6 +125,23 @@ install(TARGETS agnocast_test_cie_publisher_component agnocast_test_cie_subscrip
         RUNTIME DESTINATION bin
 )
 
+# Standalone executables built on agnocast::Node (the pure-Agnocast node).
+add_executable(test_agnocast_node_publisher src/test_agnocast_node_publisher.cpp)
+ament_target_dependencies(test_agnocast_node_publisher std_msgs agnocastlib)
+target_include_directories(test_agnocast_node_publisher PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
+add_executable(test_agnocast_node_subscriber src/test_agnocast_node_subscriber.cpp)
+ament_target_dependencies(test_agnocast_node_subscriber std_msgs agnocastlib)
+target_include_directories(test_agnocast_node_subscriber PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
+install(TARGETS test_agnocast_node_publisher test_agnocast_node_subscriber
+        DESTINATION lib/${PROJECT_NAME}
+)
+
 install(DIRECTORY test
   DESTINATION share/${PROJECT_NAME}/
 )
@@ -136,6 +153,8 @@ if(BUILD_TESTING)
   add_launch_test(test/functional/test_multi_domain_cie_talker_launch.py TIMEOUT 120)
   add_launch_test(test/functional/test_thread_configurator_restart_launch.py TIMEOUT 120)
   add_launch_test(test/functional/test_thread_configurator_reapply_launch.py TIMEOUT 120)
+  add_launch_test(test/functional/test_agnocast_node_1to1_launch.py TIMEOUT 120)
+  add_launch_test(test/functional/test_agnocast_node_2to2_launch.py TIMEOUT 120)
 endif()
 
 ament_package()
