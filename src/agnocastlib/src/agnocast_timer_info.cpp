@@ -12,6 +12,7 @@
 #include <sys/timerfd.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cerrno>
 #include <cstring>
 #include <stdexcept>
@@ -64,7 +65,7 @@ void handle_post_time_jump(TimerInfo & timer_info, const rcl_time_jump_t & jump)
 
   const int64_t last_call_ns = timer_info.last_call_time_ns.load(std::memory_order_relaxed);
   const int64_t next_call_ns = timer_info.next_call_time_ns.load(std::memory_order_relaxed);
-  const int64_t period_ns = timer_info.period.count();
+  const int64_t period_ns = timer_info.period_ns.load(std::memory_order_relaxed);
 
   if (jump.clock_change == RCL_ROS_TIME_ACTIVATED) {
     // ROS time activated: close timerfd (simulation time will use clock_eventfd)
@@ -97,7 +98,12 @@ void handle_post_time_jump(TimerInfo & timer_info, const rcl_time_jump_t & jump)
       "ROS time deactivation is not yet supported. Timer behavior may be incorrect.");
   } else if (next_call_ns <= now_ns) {
     // Post forward jump and timer is ready
-    if (timer_info.clock_eventfd >= 0) {
+    auto timer = timer_info.timer.lock();
+    if (!timer) {
+      RCLCPP_WARN(rclcpp::get_logger("Agnocast"), "Failed to lock timer.");
+      return;
+    }
+    if (timer_info.clock_eventfd >= 0 && !timer->is_canceled()) {
       const uint64_t val = 1;
       if (write(timer_info.clock_eventfd, &val, sizeof(val)) == -1) {
         RCLCPP_WARN(
@@ -155,6 +161,48 @@ TimerInfo::~TimerInfo()
   }
 }
 
+static struct timespec ns_to_armed_timespec(int64_t ns)
+{
+  // {0, 0} disarms the timerfd; use 1ns instead to keep it armed.
+  if (ns == 0) {
+    return {0, 1};
+  }
+  return {ns / NANOSECONDS_PER_SECOND, ns % NANOSECONDS_PER_SECOND};
+}
+
+// Wraps timerfd_settime; throws std::runtime_error on failure.
+static void set_timer_fd(int timer_fd, uint32_t timer_id, const struct itimerspec & spec)
+{
+  if (timerfd_settime(timer_fd, 0, &spec, nullptr) == -1) {
+    const int saved_errno = errno;
+    throw std::runtime_error(
+      "timerfd_settime failed for timer_id=" + std::to_string(timer_id) + ": " +
+      std::strerror(saved_errno));
+  }
+}
+
+// Arms the timerfd to fire after `period` from now and then every `period`.
+static void arm_timer_fd(int timer_fd, uint32_t timer_id, std::chrono::nanoseconds period)
+{
+  struct itimerspec spec = {};
+  spec.it_interval = ns_to_armed_timespec(period.count());
+  spec.it_value = spec.it_interval;
+  set_timer_fd(timer_fd, timer_id, spec);
+}
+
+void TimerInfo::reset()
+{
+  const int64_t now_ns = clock->now().nanoseconds();
+  const int64_t cur_period_ns = period_ns.load(std::memory_order_relaxed);
+  next_call_time_ns.store(now_ns + cur_period_ns, std::memory_order_relaxed);
+
+  std::shared_lock fd_lock(fd_mutex);
+
+  if (timer_fd != -1) {
+    arm_timer_fd(timer_fd, timer_id, std::chrono::nanoseconds{cur_period_ns});
+  }
+}
+
 int create_timer_fd(uint32_t timer_id, std::chrono::nanoseconds period, rcl_clock_type_t clock_type)
 {
   // Use CLOCK_MONOTONIC for STEADY_TIME, CLOCK_REALTIME for others (SYSTEM_TIME, ROS_TIME)
@@ -169,25 +217,11 @@ int create_timer_fd(uint32_t timer_id, std::chrono::nanoseconds period, rcl_cloc
       std::strerror(errno));
   }
 
-  struct itimerspec spec = {};
-  const auto period_count = period.count();
-  if (period_count == 0) {
-    // Workaround: timerfd_settime() disarms the timer when both it_value and it_interval
-    // are zero. Use 1ns to keep the timer armed and achieve "always ready" semantics.
-    spec.it_interval.tv_sec = 0;
-    spec.it_interval.tv_nsec = 1;
-  } else {
-    spec.it_interval.tv_sec = period_count / NANOSECONDS_PER_SECOND;
-    spec.it_interval.tv_nsec = period_count % NANOSECONDS_PER_SECOND;
-  }
-  spec.it_value = spec.it_interval;
-
-  if (timerfd_settime(timer_fd, 0, &spec, nullptr) == -1) {
-    const int saved_errno = errno;
+  try {
+    arm_timer_fd(timer_fd, timer_id, period);
+  } catch (...) {
     close(timer_fd);
-    throw std::runtime_error(
-      "timerfd_settime failed for timer_id=" + std::to_string(timer_id) +
-      ", period=" + std::to_string(period_count) + "ns: " + std::strerror(saved_errno));
+    throw;
   }
 
   return timer_fd;
@@ -214,7 +248,7 @@ void register_timer_info(
   timer_info->timer = timer;
   timer_info->last_call_time_ns.store(now_ns, std::memory_order_relaxed);
   timer_info->next_call_time_ns.store(now_ns + period.count(), std::memory_order_relaxed);
-  timer_info->period = period;
+  timer_info->period_ns.store(period.count(), std::memory_order_relaxed);
   timer_info->callback_group = callback_group;
   timer_info->need_epoll_update = true;
   timer_info->clock = clock;
@@ -238,6 +272,8 @@ void register_timer_info(
     timer_info->timer_fd = create_timer_fd(timer_id, period, clock->get_clock_type());
   }
 
+  timer->set_timer_info(timer_info);
+
   setup_time_jump_callback(timer_info, clock);
 
   if (timer_info->timer_fd >= 0) {
@@ -258,18 +294,20 @@ void register_timer_info(
 
 void handle_timer_event(TimerInfo & timer_info)
 {
-  // TODO(Koichi98): Add canceled check here
-
   auto timer = timer_info.timer.lock();
   if (!timer) {
     return;  // Timer object has been destroyed
+  }
+
+  if (timer->is_canceled()) {
+    return;
   }
 
   const int64_t now_ns = timer_info.clock->now().nanoseconds();
 
   timer_info.last_call_time_ns.store(now_ns, std::memory_order_relaxed);
 
-  const int64_t period_ns = timer_info.period.count();
+  const int64_t period_ns = timer_info.period_ns.load(std::memory_order_relaxed);
   int64_t next_call_time_ns =
     timer_info.next_call_time_ns.load(std::memory_order_relaxed) + period_ns;
 
@@ -295,6 +333,28 @@ void unregister_timer_info(uint32_t timer_id)
 {
   std::lock_guard<std::mutex> lock(id2_timer_info_mtx);
   id2_timer_info.erase(timer_id);
+}
+
+void TimerInfo::set_period(std::chrono::nanoseconds new_period)
+{
+  // rcl_timer_exchange_period semantics.
+  period_ns.store(new_period.count(), std::memory_order_relaxed);
+
+  std::shared_lock fd_lock(fd_mutex);
+  if (timer_fd == -1) {
+    return;
+  }
+
+  // it_value preserves the existing next firing; it_interval applies the new period to
+  // subsequent firings.
+  const int64_t now_ns = clock->now().nanoseconds();
+  const int64_t next_call_ns = next_call_time_ns.load(std::memory_order_relaxed);
+  const int64_t remaining_ns = std::max<int64_t>(next_call_ns - now_ns, 0);
+
+  struct itimerspec spec = {};
+  spec.it_value = ns_to_armed_timespec(remaining_ns);
+  spec.it_interval = ns_to_armed_timespec(new_period.count());
+  set_timer_fd(timer_fd, timer_id, spec);
 }
 
 void TimerEventHandler::prepare_epoll(

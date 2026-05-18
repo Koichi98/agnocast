@@ -72,12 +72,6 @@ public:
       "Callback must be callable with ipc_shared_ptr<ServiceT::Request> and "
       "ipc_shared_ptr<ServiceT::Response> (const&, &&, or by-value)");
 
-    RCLCPP_WARN(
-      node->get_logger(),
-      "Agnocast service/client is not officially supported yet and the API may change in the "
-      "future: %s",
-      service_name_.c_str());
-
     auto subscriber_callback = [this, callback = std::forward<Func>(callback)](
                                  ipc_shared_ptr<RequestT> && request) {
       typename ServiceResponsePublisher::SharedPtr publisher;
@@ -123,7 +117,7 @@ public:
     subscriber_ = std::make_shared<BasicSubscription<RequestT, NoBridgeRequestPolicy>>(
       node, topic_name, qos_, std::move(subscriber_callback), options);
 
-    BridgeRequestPolicy::template request_bridge<ServiceT>(service_name_);
+    BridgeRequestPolicy::template request_bridge<NodeT, ServiceT>(node, service_name_);
   }
 };
 
