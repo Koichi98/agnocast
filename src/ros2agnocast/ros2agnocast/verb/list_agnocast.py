@@ -5,6 +5,13 @@ from ros2cli.node.strategy import NodeStrategy
 from ros2topic.api import get_topic_names_and_types
 from ros2topic.verb import VerbExtension
 
+from ros2agnocast.discovery import (
+    DEFAULT_COLLECT_TIMEOUT_SEC,
+    all_topic_names,
+    collect_announcements,
+    filter_fresh,
+)
+
 class BridgeStatus(Enum):
     NONE = 0
     ROS2_TO_AGNOCAST = 1
@@ -23,6 +30,14 @@ class TopicInfoRet(ctypes.Structure):
     ]
 class ListAgnocastVerb(VerbExtension):
     "Output a list of available topics including Agnocast"
+
+    def add_arguments(self, parser, cli_name):
+        parser.add_argument(
+            '--gossip-timeout',
+            type=float,
+            default=DEFAULT_COLLECT_TIMEOUT_SEC,
+            help='Seconds to wait for /_agnocast_discovery gossip from peer '
+                 'namespaces / ECUs (default: %(default)ss).')
 
     def main(self, *, args):
         with NodeStrategy(None) as node:
@@ -112,7 +127,15 @@ class ListAgnocastVerb(VerbExtension):
                 lib.free_agnocast_topics(agnocast_topic_array, topic_count)
 
             agnocast_topics = remove_service_topic(agnocast_topics)
-            
+
+            # Merge in topics seen via /_agnocast_discovery gossip (other IPC
+            # namespaces and other ECUs in the same ROS_DOMAIN_ID).
+            snapshots = filter_fresh(collect_announcements(
+                node, timeout_sec=args.gossip_timeout))
+            for name in all_topic_names(snapshots):
+                if not name.startswith('/AGNOCAST_SRV_'):
+                    agnocast_topics.append(name)
+
             # Get ros2 topics
             ros2_topics_data = get_topic_names_and_types(node=node)
             ros2_all_topics = set(name for name, _ in ros2_topics_data)

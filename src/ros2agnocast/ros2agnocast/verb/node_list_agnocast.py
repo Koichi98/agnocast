@@ -5,6 +5,13 @@ from ros2cli.node.strategy import NodeStrategy
 from ros2node.api import get_node_names
 from ros2topic.verb import VerbExtension
 
+from ros2agnocast.discovery import (
+    DEFAULT_COLLECT_TIMEOUT_SEC,
+    all_nodes,
+    collect_announcements,
+    filter_fresh,
+)
+
 def split_fqn(fqn):
     namespace, _, name = fqn.rpartition('/')
     return (namespace or '/'), name
@@ -33,6 +40,12 @@ class ListAgnocastVerb(VerbExtension):
         parser.add_argument(
             '-d', '--debug', action='store_true',
             help='Include internal bridge nodes (agnocast_bridge_node_*) in the output')
+        parser.add_argument(
+            '--gossip-timeout',
+            type=float,
+            default=DEFAULT_COLLECT_TIMEOUT_SEC,
+            help='Seconds to wait for /_agnocast_discovery gossip from peer '
+                 'namespaces / ECUs (default: %(default)ss).')
 
     def main(self, *, args):
         with NodeStrategy(None) as node:
@@ -86,6 +99,12 @@ class ListAgnocastVerb(VerbExtension):
             agnocast_node_name = set()
             for topic in agnocast_topics:
                 agnocast_node_name = agnocast_node_name | get_node_name_set(topic)
+
+            # Merge in nodes seen via /_agnocast_discovery gossip (other IPC
+            # namespaces and other ECUs in the same ROS_DOMAIN_ID).
+            snapshots = filter_fresh(collect_announcements(
+                node, timeout_sec=args.gossip_timeout))
+            agnocast_node_name |= all_nodes(snapshots)
 
             # TODO(bdm-k): The current impl determines shadow nodes in a heuristic way. We need to
             # invent a deterministic way to identify shadow nodes.

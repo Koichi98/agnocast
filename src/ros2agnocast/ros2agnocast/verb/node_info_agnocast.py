@@ -9,6 +9,13 @@ from ros2node.api import (
 from ros2topic.api import get_topic_names_and_types
 from ros2node.verb import VerbExtension
 
+from ros2agnocast.discovery import (
+    DEFAULT_COLLECT_TIMEOUT_SEC,
+    collect_announcements,
+    filter_fresh,
+    topics_of_node,
+)
+
 class BridgeStatus(Enum):
     NONE = 0
     ROS2_TO_AGNOCAST = 1
@@ -45,6 +52,12 @@ class NodeInfoAgnocastVerb(VerbExtension):
         parser.add_argument(
             'node_name',
             help='Fully qualified node name to request information with Agnocast topics')
+        parser.add_argument(
+            '--gossip-timeout',
+            type=float,
+            default=DEFAULT_COLLECT_TIMEOUT_SEC,
+            help='Seconds to wait for /_agnocast_discovery gossip from peer '
+                 'namespaces / ECUs (default: %(default)ss).')
 
     def main(self, *, args):
         node_name = args.node_name
@@ -188,6 +201,18 @@ class NodeInfoAgnocastVerb(VerbExtension):
             # Get Agnocast node info directly by node name (2 ioctl calls instead of 2*N)
             node_name_bytes = node_name.encode('utf-8')
             agnocast_subscribers, agnocast_publishers, agnocast_servers, agnocast_clients = get_agnocast_node_topics(node_name_bytes)
+
+            # Merge in cross-NS / cross-ECU topics for this node from
+            # /_agnocast_discovery gossip.
+            snapshots = filter_fresh(collect_announcements(
+                node, timeout_sec=args.gossip_timeout))
+            gossip_pubs, gossip_subs = topics_of_node(snapshots, node_name)
+            for entry in gossip_pubs:
+                if entry['topic_name'] not in agnocast_publishers:
+                    agnocast_publishers.append(entry['topic_name'])
+            for entry in gossip_subs:
+                if entry['topic_name'] not in agnocast_subscribers:
+                    agnocast_subscribers.append(entry['topic_name'])
 
             # Get ros2 all node names
             ros2_node_name_list = get_node_names(node=node, include_hidden_nodes=True)

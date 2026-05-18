@@ -4,6 +4,13 @@ from ros2cli.node.strategy import NodeStrategy
 from ros2topic.api import TopicNameCompleter
 from ros2node.verb import VerbExtension
 
+from ros2agnocast.discovery import (
+    DEFAULT_COLLECT_TIMEOUT_SEC,
+    collect_announcements,
+    filter_fresh,
+    topic_endpoints,
+)
+
 class TopicInfoRet(ctypes.Structure):
     _fields_ = [
         ("node_name", ctypes.c_char * 256),
@@ -36,6 +43,12 @@ class TopicInfoAgnocastVerb(VerbExtension):
             '-d',
             action='store_true',
             help='Include internal bridge nodes (agnocast_bridge_node_*) in the output')
+        parser.add_argument(
+            '--gossip-timeout',
+            type=float,
+            default=DEFAULT_COLLECT_TIMEOUT_SEC,
+            help='Seconds to wait for /_agnocast_discovery gossip from peer '
+                 'namespaces / ECUs (default: %(default)ss).')
         arg.completer = TopicNameCompleter(
             include_hidden_topics_key='include_hidden_topics')
 
@@ -170,6 +183,41 @@ class TopicInfoAgnocastVerb(VerbExtension):
             if pub_topic_info_ret_count.value != 0 and pub_topic_info_ret_array is not None:
                 lib.free_agnocast_topic_info_ret(pub_topic_info_ret_array)
 
+            # Merge in endpoints visible via /_agnocast_discovery gossip
+            # (other IPC namespaces and other ECUs in the same ROS_DOMAIN_ID).
+            snapshots = filter_fresh(collect_announcements(
+                node, timeout_sec=args.gossip_timeout))
+            gossip_pubs, gossip_subs = topic_endpoints(snapshots, topic_name)
+            seen_pub_keys = {(r['node_name'], r['qos_depth']) for r in pub_topic_info_rets}
+            seen_sub_keys = {(r['node_name'], r['qos_depth']) for r in sub_topic_info_rets}
+            for endpoint in gossip_pubs:
+                key = (endpoint.node_name, endpoint.qos_depth)
+                if key in seen_pub_keys:
+                    continue
+                pub_topic_info_rets.append({
+                    "node_name": endpoint.node_name,
+                    "qos_depth": endpoint.qos_depth,
+                    "qos_is_transient_local": endpoint.qos_is_transient_local,
+                    "is_bridge": endpoint.is_bridge,
+                })
+            for endpoint in gossip_subs:
+                key = (endpoint.node_name, endpoint.qos_depth)
+                if key in seen_sub_keys:
+                    continue
+                sub_topic_info_rets.append({
+                    "node_name": endpoint.node_name,
+                    "qos_depth": endpoint.qos_depth,
+                    "qos_is_transient_local": endpoint.qos_is_transient_local,
+                    "is_bridge": endpoint.is_bridge,
+                })
+
+            # Resolve type from gossip when DDS does not provide one.
+            gossip_type_name = next(
+                (topic.type_name for snap in snapshots
+                 for topic in snap.topics
+                 if topic.topic_name == topic_name and topic.type_name),
+                '')
+
             # get bridge node names
             bridge_node_names = set()
             for info in sub_topic_info_rets + pub_topic_info_rets:
@@ -203,10 +251,13 @@ class TopicInfoAgnocastVerb(VerbExtension):
 
             # check if topic exists
             if not topic_types:
-                if sub_topic_info_ret_count.value == 0 and pub_topic_info_ret_count.value == 0:
+                if (sub_topic_info_ret_count.value == 0
+                        and pub_topic_info_ret_count.value == 0
+                        and not pub_topic_info_rets
+                        and not sub_topic_info_rets):
                     return 'Unknown topic: %s' % topic_name
                 else:
-                    topic_types = ['<UNKNOWN>']
+                    topic_types = [gossip_type_name] if gossip_type_name else ['<UNKNOWN>']
 
             ########################################################################
             # print topic info
