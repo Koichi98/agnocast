@@ -47,6 +47,17 @@ fi
 
 # ROS 2
 source /opt/ros/${ROS_DISTRO}/setup.bash
+
+# External source dependencies (dynmsg). Must run before rosdep so that agnocastlib's
+# `dynmsg` dependency resolves to this source package rather than a (non-existent) apt
+# package.
+vcs import src < dependencies.repos
+# agnocast only uses the `dynmsg` package from that repo; skip its sibling packages so a
+# plain `colcon build` does not build them.
+for pkg in dynmsg_demo dynmsg_msgs test_dynmsg; do
+  touch "src/dynamic_message_introspection/${pkg}/COLCON_IGNORE"
+done
+
 rosdep install -y --from-paths src --ignore-src --rosdistro $ROS_DISTRO
 
 # Rust

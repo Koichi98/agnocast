@@ -72,6 +72,10 @@ Run the setup script to install dependencies:
 bash scripts/dev/setup.bash
 ```
 
+This also fetches external source dependencies listed in `dependencies.repos` (currently
+`dynmsg`) into `src/` via `vcs import`. If you set up the workspace without the script, run
+`vcs import src < dependencies.repos` manually before building.
+
 ### Setup pre-commit
 
 The following command allows `clang-format`, `markdownlint`, and [KUNIT Test](./agnocast_kmod/agnocast_kunit.c) to be run before each commit.

@@ -21,6 +21,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <depend>ament_index_cpp</depend>
+  <depend>dynmsg</depend>
   <depend>libgoogle-glog-dev</depend>
   <depend>liblttng-ust-dev</depend>
   <depend>message_filters</depend>

@@ -17,3 +17,6 @@ __pycache__
 *.build
 *.upload
 *.o.d
+
+# Source dependencies fetched via `vcs import src < dependencies.repos`
+/src/dynamic_message_introspection
