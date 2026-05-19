@@ -5,8 +5,10 @@
 // loaded into agnocast_component_container by launch/generic_listener.launch.xml.
 //
 // The difference from MinimalSubscriber: the message type is NOT linked at compile time.
-// It is supplied as a ROS parameter (`type`) and resolved at runtime via
-// rosidl_typesupport_introspection_cpp.
+// It is supplied as a ROS parameter (`type`) and passed to GenericSubscription, which
+// delivers the payload as a type-erased agnocast::ipc_shared_ptr<const void>. The callback
+// is dispatched by the same agnocast executor that drives typed subscriptions -- there is no
+// dedicated worker thread.
 //
 // Per arrival, prints one line matching the typed listener output:
 //   [INFO] [...] [generic_subscriber]: subscribe message: id=N
@@ -17,16 +19,11 @@
 #include "rclcpp/rclcpp.hpp"
 #include "rosidl_typesupport_introspection_cpp/field_types.hpp"
 
-#include <mqueue.h>
-#include <poll.h>
-
-#include <atomic>
 #include <cstdint>
-#include <cstring>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
-#include <thread>
 
 namespace
 {
@@ -68,58 +65,32 @@ class GenericSubscriber : public rclcpp::Node
   std::unique_ptr<agnocast::GenericSubscription> sub_;
   std::optional<agnocast::FieldInfo> id_field_;
   std::string field_name_;
-  std::thread worker_;
-  std::atomic<bool> stop_{false};
 
-  // GenericSubscription is not callback-driven (it exposes mq_fd() + drain()), so we run a
-  // dedicated worker thread that wakes on MQ events. This is independent of the rclcpp
-  // executor that spins the Node itself.
-  void worker_loop()
+  // Dispatched by the agnocast executor on every publish, exactly like a typed callback.
+  // `msg` is type-erased; the payload is interpreted via the offset resolved at construction.
+  void callback(const agnocast::ipc_shared_ptr<const void> & msg)
   {
-    while (!stop_.load(std::memory_order_relaxed)) {
-      struct pollfd pfd
-      {
-      };
-      pfd.fd = sub_->mq_fd();
-      pfd.events = POLLIN;
-      const int pret = ::poll(&pfd, 1, 500);
-      if (pret <= 0 || !(pfd.revents & POLLIN)) {
-        continue;
-      }
-      char buf[64];
-      while (true) {
-        const ssize_t r = ::mq_receive(sub_->mq_fd(), buf, sizeof(buf), nullptr);
-        if (r < 0) {
-          if (errno == EAGAIN) break;
-          RCLCPP_ERROR(get_logger(), "mq_receive failed: %s", std::strerror(errno));
-          break;
-        }
-      }
-      sub_->drain([this](const void * payload, int64_t entry_id) {
-        if (id_field_.has_value()) {
-          const auto value =
-            read_integer_field(static_cast<const uint8_t *>(payload), id_field_.value());
-          if (value.has_value()) {
-            RCLCPP_INFO(
-              get_logger(), "subscribe message: %s=%ld", field_name_.c_str(),
-              static_cast<long>(value.value()));
-            return;
-          }
-        }
+    if (id_field_.has_value()) {
+      const auto value =
+        read_integer_field(static_cast<const uint8_t *>(msg.get()), id_field_.value());
+      if (value.has_value()) {
         RCLCPP_INFO(
-          get_logger(), "subscribe message: entry_id=%ld", static_cast<long>(entry_id));
-      });
+          get_logger(), "subscribe message: %s=%ld", field_name_.c_str(),
+          static_cast<long>(value.value()));
+        return;
+      }
     }
+    RCLCPP_INFO(
+      get_logger(), "subscribe message: entry_id=%ld", static_cast<long>(msg.get_entry_id()));
   }
 
 public:
   explicit GenericSubscriber(const rclcpp::NodeOptions & options)
   : Node("generic_subscriber", options)
   {
-    const std::string topic_name =
-      declare_parameter<std::string>("topic", "/my_topic");
-    const std::string type_name = declare_parameter<std::string>(
-      "type", "agnocast_sample_interfaces/msg/DynamicSizeArray");
+    const std::string topic_name = declare_parameter<std::string>("topic", "/my_topic");
+    const std::string type_name =
+      declare_parameter<std::string>("type", "agnocast_sample_interfaces/msg/DynamicSizeArray");
     field_name_ = declare_parameter<std::string>("field", "id");
 
     id_field_ = agnocast::resolve_field_offset(type_name, field_name_);
@@ -129,16 +100,13 @@ public:
         field_name_.c_str(), type_name.c_str());
     }
 
-    sub_ = std::make_unique<agnocast::GenericSubscription>(this, topic_name, rclcpp::QoS(10));
-    worker_ = std::thread(&GenericSubscriber::worker_loop, this);
-  }
+    auto group = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    agnocast::SubscriptionOptions agnocast_options;
+    agnocast_options.callback_group = group;
 
-  ~GenericSubscriber() override
-  {
-    stop_.store(true, std::memory_order_relaxed);
-    if (worker_.joinable()) {
-      worker_.join();
-    }
+    sub_ = std::make_unique<agnocast::GenericSubscription>(
+      this, topic_name, type_name, rclcpp::QoS(10),
+      std::bind(&GenericSubscriber::callback, this, std::placeholders::_1), agnocast_options);
   }
 };
 

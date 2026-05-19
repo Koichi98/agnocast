@@ -1,97 +1,71 @@
 #include "agnocast/agnocast_generic_subscription.hpp"
 
 #include "agnocast/agnocast.hpp"
+#include "agnocast/agnocast_callback_info.hpp"
 #include "agnocast/node/agnocast_node.hpp"
 
-#include <array>
 #include <mutex>
+#include <utility>
 
 namespace agnocast
 {
 
-void GenericSubscription::initialize_with(
-  const rclcpp::QoS & qos, const SubscriptionOptions & options, const std::string & node_name)
+template <typename NodeT>
+void GenericSubscription::constructor_impl(
+  NodeT * node, const rclcpp::QoS & qos, Callback callback,
+  const rclcpp::CallbackGroup::SharedPtr & callback_group, const SubscriptionOptions & options)
 {
   validate_subscription_qos(qos);
 
-  // is_take_sub=false: registers as a callback-style subscriber so that publishers will
-  // notify our MQ on each publish. The kmod (agnocast_ioctl.c, see the publish path)
-  // explicitly skips take-style subscribers when emitting MQ notifications, so generic
-  // event-driven consumption requires the callback-style registration even though we do
-  // not run a typed callback through the executor.
+  // is_take_sub=false: register as a callback-style subscriber so publishers notify our MQ and
+  // the executor dispatches the callback on each publish. is_bridge=false: GenericSubscription
+  // never participates in bridging.
   union ioctl_add_subscriber_args add_subscriber_args = initialize(
     qos, /*is_take_sub=*/false, options.ignore_local_publications, /*is_bridge=*/false,
-    node_name);
-
+    node->get_fully_qualified_name());
   id_ = add_subscriber_args.ret_id;
 
-  open_mq_for_subscription(topic_name_, id_, mq_subscription_);
+  mqd_t mq = open_mq_for_subscription(topic_name_, id_, mq_subscription_);
+
+  const bool is_transient_local = qos.durability() == rclcpp::DurabilityPolicy::TransientLocal;
+
+  // register_callback<void> instantiates the type-erased dispatch path: the kernel payload
+  // pointer is wrapped in ipc_shared_ptr<void> by the message_creator and handed to `callback`,
+  // which converts it to ipc_shared_ptr<const void>. The executor itself needs no changes --
+  // CallbackInfo already stores a fully type-erased callback.
+  callback_info_id_ = agnocast::register_callback<void>(
+    std::move(callback), topic_name_, id_, is_transient_local, mq, callback_group);
 }
 
 GenericSubscription::GenericSubscription(
-  rclcpp::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
-  SubscriptionOptions options)
-: SubscriptionBase(node, topic_name)
+  rclcpp::Node * node, const std::string & topic_name, const std::string & type_name,
+  const rclcpp::QoS & qos, Callback callback, SubscriptionOptions options)
+: SubscriptionBase(node, topic_name), type_name_(type_name)
 {
-  initialize_with(qos, options, node->get_fully_qualified_name());
+  rclcpp::CallbackGroup::SharedPtr callback_group = get_valid_callback_group(node, options);
+  constructor_impl(node, qos, std::move(callback), callback_group, options);
 }
 
 GenericSubscription::GenericSubscription(
-  agnocast::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
-  SubscriptionOptions options)
-: SubscriptionBase(node, topic_name)
+  agnocast::Node * node, const std::string & topic_name, const std::string & type_name,
+  const rclcpp::QoS & qos, Callback callback, SubscriptionOptions options)
+: SubscriptionBase(node, topic_name), type_name_(type_name)
 {
-  initialize_with(qos, options, node->get_fully_qualified_name());
+  rclcpp::CallbackGroup::SharedPtr callback_group = get_valid_callback_group(node, options);
+  constructor_impl(node, qos, std::move(callback), callback_group, options);
 }
 
 GenericSubscription::~GenericSubscription()
 {
-  // Best-effort: drain anything pending so kmod doesn't keep references around. Ignore
-  // payloads; the kernel reference is released by drain() automatically.
-  drain([](const void *, int64_t) {});
+  // Mirror BasicSubscription::~BasicSubscription: drop the callback info before closing the mq
+  // so that a later-reused fd number cannot collide with a stale id2_callback_info entry when
+  // the executor's epoll is updated.
+  {
+    std::lock_guard<std::mutex> lock(id2_callback_info_mtx);
+    id2_callback_info.erase(callback_info_id_);
+  }
   remove_mq(mq_subscription_);
   // SubscriptionBase destructor issues AGNOCAST_REMOVE_SUBSCRIBER_CMD.
-}
-
-size_t GenericSubscription::drain(const EntryCallback & cb)
-{
-  size_t total = 0;
-  bool call_again = true;
-  while (call_again) {
-    std::array<publisher_shm_info, MAX_PUBLISHER_NUM> pub_shm_infos{};
-
-    union ioctl_receive_msg_args receive_args = {};
-    receive_args.topic_name = {topic_name_.c_str(), topic_name_.size()};
-    receive_args.subscriber_id = id_;
-    receive_args.pub_shm_info_addr = reinterpret_cast<uint64_t>(pub_shm_infos.data());
-    receive_args.pub_shm_info_size = MAX_PUBLISHER_NUM;
-
-    {
-      std::lock_guard<std::mutex> lock(mmap_mtx);
-
-      if (ioctl(agnocast_fd, AGNOCAST_RECEIVE_MSG_CMD, &receive_args) < 0) {
-        RCLCPP_ERROR(logger, "AGNOCAST_RECEIVE_MSG_CMD failed: %s", strerror(errno));
-        close(agnocast_fd);
-        exit(EXIT_FAILURE);
-      }
-
-      for (uint32_t i = 0; i < receive_args.ret_pub_shm_num; i++) {
-        map_read_only_area(
-          pub_shm_infos[i].pid, pub_shm_infos[i].shm_addr, pub_shm_infos[i].shm_size);
-      }
-    }
-
-    for (uint16_t i = 0; i < receive_args.ret_entry_num; i++) {
-      const int64_t entry_id = receive_args.ret_entry_ids[i];
-      const auto * payload = reinterpret_cast<const void *>(receive_args.ret_entry_addrs[i]);
-      cb(payload, entry_id);
-      release_subscriber_reference(topic_name_, id_, entry_id);
-      ++total;
-    }
-
-    call_again = receive_args.ret_call_again;
-  }
-  return total;
 }
 
 }  // namespace agnocast

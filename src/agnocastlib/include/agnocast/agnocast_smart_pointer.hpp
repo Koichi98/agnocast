@@ -298,8 +298,12 @@ public:
   /// Dereference the managed message. Calls std::terminate() if the pointer has been invalidated
   /// by publish().
   /// @return Reference to the managed message.
+  /// @note The return type is spelled `std::add_lvalue_reference_t<T>` rather than `T &` so that
+  /// the type-erased specialization `ipc_shared_ptr<void>` (used by GenericSubscription) can be
+  /// instantiated: `void &` is not a type, but `add_lvalue_reference_t<void>` is `void`. The
+  /// body is never instantiated for `void` because generic subscribers never dereference.
   AGNOCAST_PUBLIC
-  T & operator*() const noexcept
+  std::add_lvalue_reference_t<T> operator*() const noexcept
   {
     if (AGNOCAST_UNLIKELY(is_invalidated_())) {
       std::fprintf(
@@ -361,7 +365,12 @@ public:
         // Publisher side, last reference, not published: delete the memory.
         // This handles the case where borrow_loaned_message() was called but publish() was not.
         decrement_borrowed_publisher_num();
-        delete ptr_;
+        // `delete` of a `void *` is ill-formed, so guard it out for the type-erased
+        // ipc_shared_ptr<void> specialization. Generic subscribers are subscriber-side only
+        // (entry_id is always assigned), so this publisher-side branch is dead code for `void`.
+        if constexpr (!std::is_void_v<std::remove_cv_t<T>>) {
+          delete ptr_;
+        }
       }
       delete control_;
     }
