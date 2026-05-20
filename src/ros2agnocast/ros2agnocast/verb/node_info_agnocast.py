@@ -14,6 +14,7 @@ from ros2agnocast.discovery import (
     collect_announcements,
     filter_fresh,
     topics_of_node,
+    warn_if_no_announcements,
 )
 
 class BridgeStatus(Enum):
@@ -204,8 +205,10 @@ class NodeInfoAgnocastVerb(VerbExtension):
 
             # Merge in cross-NS / cross-ECU topics for this node from
             # /_agnocast_discovery gossip.
-            snapshots = filter_fresh(collect_announcements(
-                node, timeout_sec=args.gossip_timeout))
+            raw_snapshots = collect_announcements(
+                node, timeout_sec=args.gossip_timeout)
+            warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
+            snapshots = filter_fresh(raw_snapshots)
             gossip_pubs, gossip_subs = topics_of_node(snapshots, node_name)
             for entry in gossip_pubs:
                 if entry['topic_name'] not in agnocast_publishers:

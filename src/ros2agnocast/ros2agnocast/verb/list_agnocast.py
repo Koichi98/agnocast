@@ -10,6 +10,7 @@ from ros2agnocast.discovery import (
     all_topic_names,
     collect_announcements,
     filter_fresh,
+    warn_if_no_announcements,
 )
 
 class BridgeStatus(Enum):
@@ -130,8 +131,10 @@ class ListAgnocastVerb(VerbExtension):
 
             # Merge in topics seen via /_agnocast_discovery gossip (other IPC
             # namespaces and other ECUs in the same ROS_DOMAIN_ID).
-            snapshots = filter_fresh(collect_announcements(
-                node, timeout_sec=args.gossip_timeout))
+            raw_snapshots = collect_announcements(
+                node, timeout_sec=args.gossip_timeout)
+            warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
+            snapshots = filter_fresh(raw_snapshots)
             for name in all_topic_names(snapshots):
                 if not name.startswith('/AGNOCAST_SRV_'):
                     agnocast_topics.append(name)

@@ -5,6 +5,7 @@ per-IPC-NS daemon reachable on the same ROS_DOMAIN_ID and to fold the
 combined view into the existing local-ioctl / DDS merge.
 """
 
+import sys
 import time
 
 import rclpy
@@ -60,6 +61,27 @@ def collect_announcements(
         node.destroy_subscription(sub)
 
     return list(snapshots.values())
+
+
+def warn_if_no_announcements(snapshots: list, timeout_sec: float) -> None:
+    """Print a stderr hint when zero gossip snapshots were collected.
+
+    A non-zero timeout that yielded no AgnocastDaemonState messages usually
+    means the per-IPC-namespace discovery agent is not running in this IPC
+    namespace, so the CLI sees only its own local ioctl view. This warning
+    is best-effort and does not change exit codes.
+    """
+    if timeout_sec <= 0:
+        return
+    if snapshots:
+        return
+    print(
+        'WARNING: no /_agnocast_discovery announcements received within '
+        f'{timeout_sec:.1f}s — cross-namespace / cross-ECU Agnocast endpoints '
+        "will not appear. Start the discovery agent in this IPC namespace via "
+        '`ros2 run ros2agnocast_discovery_agent discovery_agent`, or pass '
+        '`--gossip-timeout 0` to skip this check.',
+        file=sys.stderr)
 
 
 def is_stale(msg: AgnocastDaemonState, now_sec: float,

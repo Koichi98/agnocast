@@ -21,6 +21,7 @@ from ros2agnocast.discovery import (
     is_stale,
     topic_endpoints,
     topics_of_node,
+    warn_if_no_announcements,
 )
 
 
@@ -115,3 +116,21 @@ def test_filter_fresh_drops_old_snapshots():
     old = _state('b', 2, ts_sec=int(time.time()) - 999)
     kept = filter_fresh([fresh, old], stale_after_sec=10)
     assert kept == [fresh]
+
+
+def test_warn_if_no_announcements_silent_when_snapshots_present(capsys):
+    snap = _state('a', 1)
+    warn_if_no_announcements([snap], timeout_sec=2.0)
+    assert capsys.readouterr().err == ''
+
+
+def test_warn_if_no_announcements_silent_when_timeout_zero(capsys):
+    warn_if_no_announcements([], timeout_sec=0)
+    assert capsys.readouterr().err == ''
+
+
+def test_warn_if_no_announcements_emits_hint_when_empty(capsys):
+    warn_if_no_announcements([], timeout_sec=2.0)
+    err = capsys.readouterr().err
+    assert 'WARNING' in err
+    assert 'discovery_agent' in err

@@ -9,6 +9,7 @@ from ros2agnocast.discovery import (
     collect_announcements,
     filter_fresh,
     topic_endpoints,
+    warn_if_no_announcements,
 )
 
 class TopicInfoRet(ctypes.Structure):
@@ -185,8 +186,10 @@ class TopicInfoAgnocastVerb(VerbExtension):
 
             # Merge in endpoints visible via /_agnocast_discovery gossip
             # (other IPC namespaces and other ECUs in the same ROS_DOMAIN_ID).
-            snapshots = filter_fresh(collect_announcements(
-                node, timeout_sec=args.gossip_timeout))
+            raw_snapshots = collect_announcements(
+                node, timeout_sec=args.gossip_timeout)
+            warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
+            snapshots = filter_fresh(raw_snapshots)
             gossip_pubs, gossip_subs = topic_endpoints(snapshots, topic_name)
             seen_pub_keys = {(r['node_name'], r['qos_depth']) for r in pub_topic_info_rets}
             seen_sub_keys = {(r['node_name'], r['qos_depth']) for r in sub_topic_info_rets}
