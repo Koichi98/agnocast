@@ -3,7 +3,7 @@
 Reads the local Agnocast state via the existing NS-scoped ioctl wrapper
 (libagnocast_ioctl_wrapper.so) and publishes it as AgnocastDaemonState on
 ``/_agnocast_discovery`` so other namespaces and ECUs running ros2agnocast
-tooling can observe and (in F1) make bridge generation decisions.
+tooling can observe and make bridge generation decisions.
 
 One daemon process is intended to run per IPC namespace. Lifecycle is the
 user's responsibility (systemd unit, ros2 launch include, container
@@ -76,8 +76,8 @@ def _load_ioctl_wrapper():
 def _ioctl_to_endpoint(info: TopicInfoRet) -> AgnocastEndpoint:
     """Convert one `topic_info_ret` row to an AgnocastEndpoint msg.
 
-    `pid` is best-effort 0 because the existing ioctl does not expose it; F1 may
-    fill it via `/proc` walk when routing bridge requests.
+    `pid` is best-effort 0 because the existing ioctl does not expose it; the
+    bridge decider may fill it via `/proc` walk when routing bridge requests.
     """
     ep = AgnocastEndpoint()
     ep.node_name = info.node_name.decode('utf-8', errors='replace')
@@ -167,9 +167,9 @@ def _gossip_qos() -> QoSProfile:
 class DiscoveryAgent(Node):
     """rclpy Node that publishes the local Agnocast state every PUBLISH_INTERVAL_SEC.
 
-    Also subscribes to its own gossip topic so subsequent F1 logic can observe
-    remote namespace state; today the callback only records the latest snapshot
-    keyed by ``(host_uuid, ipc_ns_inode)``.
+    Also subscribes to its own gossip topic so the bridge decider can observe
+    remote namespace state; the callback records the latest snapshot keyed by
+    ``(host_uuid, ipc_ns_inode)``.
     """
 
     def __init__(self, ioctl_lib=None):

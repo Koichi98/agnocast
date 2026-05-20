@@ -7,7 +7,7 @@
     Per-IPC-namespace daemon that reads the local Agnocast state via the
     existing NS-scoped ioctl and publishes it on /_agnocast_discovery so
     other namespaces and ECUs running ros2agnocast tooling can build a
-    cross-NS / cross-ECU view (F3) and request bridges on demand (F1).
+    cross-NS / cross-ECU view and request bridges on demand.
   </description>
 
   <maintainer email="keita.morisaki@tier4.jp">Keita Morisaki</maintainer>
