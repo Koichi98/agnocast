@@ -43,8 +43,6 @@ public:
   AGNOCAST_PUBLIC
   std::chrono::nanoseconds time_until_trigger();
 
-  void set_timer_info(std::weak_ptr<TimerInfo> timer_info) { timer_info_ = timer_info; }
-
   /** @brief Return whether this timer uses a steady clock.
    *  @return True if the clock is steady. */
   AGNOCAST_PUBLIC
@@ -98,6 +96,9 @@ protected:
       callback_to_run(1);
     }
   }
+  friend void set_timer_info(
+    const std::shared_ptr<TimerBase> & timer,
+    std::weak_ptr<TimerInfo> timer_info);  // { timer_info_ = timer_info; }
 };
 
 /**
