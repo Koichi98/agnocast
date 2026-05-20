@@ -90,6 +90,16 @@ static int add_topic(
   return 0;
 }
 
+// Returns true for parameter service topics, whose registration logs are
+// suppressed to avoid flooding the kernel log when many agnocast nodes start up.
+static bool is_parameter_service_topic(const char * key)
+{
+  if (strncmp(key, "/AGNOCAST_SRV_", 14) != 0) return false;
+  return strstr(key, "/get_parameters") || strstr(key, "/set_parameters") ||
+         strstr(key, "/get_parameter_types") || strstr(key, "/describe_parameters") ||
+         strstr(key, "/list_parameters");
+}
+
 static struct subscriber_info * find_subscriber_info(
   const struct topic_wrapper * wrapper, const topic_local_id_t subscriber_id)
 {
@@ -165,11 +175,13 @@ static int insert_subscriber_info(
   uint32_t hash_val = hash_min(new_id, SUB_INFO_HASH_BITS);
   hash_add(wrapper->topic.sub_info_htable, &(*new_info)->node, hash_val);
 
-  dev_info(
-    agnocast_device,
-    "Subscriber (topic_local_id=%d, pid=%d, node_name=%s) is added to the topic (topic_name=%s). "
-    "(%s)\n",
-    new_id, subscriber_pid, node_name, wrapper->key, __func__);
+  if (!is_parameter_service_topic(wrapper->key)) {
+    dev_info(
+      agnocast_device,
+      "Subscriber (topic_local_id=%d, pid=%d, node_name=%s) is added to the topic (topic_name=%s). "
+      "(%s)\n",
+      new_id, subscriber_pid, node_name, wrapper->key, __func__);
+  }
 
   // Check if the topic has any volatile publishers.
   if (qos_is_transient_local) {
@@ -257,11 +269,13 @@ static int insert_publisher_info(
   uint32_t hash_val = hash_min(new_id, PUB_INFO_HASH_BITS);
   hash_add(wrapper->topic.pub_info_htable, &(*new_info)->node, hash_val);
 
-  dev_info(
-    agnocast_device,
-    "Publisher (topic_local_id=%d, pid=%d, node_name=%s) is added to the topic (topic_name=%s). "
-    "(%s)\n",
-    new_id, publisher_pid, node_name, wrapper->key, __func__);
+  if (!is_parameter_service_topic(wrapper->key)) {
+    dev_info(
+      agnocast_device,
+      "Publisher (topic_local_id=%d, pid=%d, node_name=%s) is added to the topic (topic_name=%s). "
+      "(%s)\n",
+      new_id, publisher_pid, node_name, wrapper->key, __func__);
+  }
 
   // Check if the topic has any transient local subscribers.
   if (!qos_is_transient_local) {
@@ -863,7 +877,7 @@ static int receive_msg_core(
   for (; node; node = rb_next(node)) {
     struct entry_node * en = container_of(node, struct entry_node, node);
 
-    if (MAX_RECEIVE_NUM == ioctl_ret->ret_entry_num) {
+    if (ioctl_ret->ret_entry_num == MAX_RECEIVE_NUM) {
       ioctl_ret->ret_call_again = true;
       break;
     }
@@ -1551,7 +1565,7 @@ int agnocast_ioctl_get_topic_subscriber_info(
 
   struct topic_info_ret * topic_info_mem = NULL;
   if (subscriber_num > 0) {
-    topic_info_mem = kvzalloc(sizeof(struct topic_info_ret) * subscriber_num, GFP_KERNEL);
+    topic_info_mem = kvcalloc(subscriber_num, sizeof(struct topic_info_ret), GFP_KERNEL);
     if (!topic_info_mem) {
       ret = -ENOMEM;
       goto unlock;
@@ -1637,7 +1651,7 @@ int agnocast_ioctl_get_topic_publisher_info(
 
   struct topic_info_ret * topic_info_mem = NULL;
   if (publisher_num > 0) {
-    topic_info_mem = kvzalloc(sizeof(struct topic_info_ret) * publisher_num, GFP_KERNEL);
+    topic_info_mem = kvcalloc(publisher_num, sizeof(struct topic_info_ret), GFP_KERNEL);
     if (!topic_info_mem) {
       ret = -ENOMEM;
       goto unlock;
@@ -1781,8 +1795,10 @@ int agnocast_ioctl_remove_subscriber(
   kfree(sub_info->node_name);
   kfree(sub_info);
 
-  dev_info(
-    agnocast_device, "Subscriber (id=%d) removed from topic %s.\n", subscriber_id, topic_name);
+  if (!is_parameter_service_topic(topic_name)) {
+    dev_info(
+      agnocast_device, "Subscriber (id=%d) removed from topic %s.\n", subscriber_id, topic_name);
+  }
 
   if (subscriber_id < 0 || subscriber_id >= MAX_TOPIC_LOCAL_ID) {
     dev_warn(
@@ -1894,8 +1910,10 @@ int agnocast_ioctl_remove_publisher(
     kfree(pub_info->node_name);
     kfree(pub_info);
 
-    dev_info(
-      agnocast_device, "Publisher (id=%d) removed from topic %s.\n", publisher_id, topic_name);
+    if (!is_parameter_service_topic(topic_name)) {
+      dev_info(
+        agnocast_device, "Publisher (id=%d) removed from topic %s.\n", publisher_id, topic_name);
+    }
   }
 
   if (

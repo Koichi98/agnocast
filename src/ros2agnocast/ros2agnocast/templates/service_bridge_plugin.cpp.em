@@ -4,12 +4,13 @@
 #include "agnocast/agnocast.hpp"
 
 #include "rclcpp/rclcpp.hpp"
+#include "rclcpp/version.h"
 
 #include <utility>
 
 #include "@(header_path)"
 
-extern "C" PerformanceServiceBridgeResult create_r2a_service_bridge(
+extern "C" PerformanceServiceBridgeResult create_r2a_service_bridge_@(snake_type_name)(
   rclcpp::Node::SharedPtr node,
   const std::string & service_name,
   const rclcpp::QoS & qos /*QoS for the target Agnocast service*/)
@@ -27,16 +28,26 @@ extern "C" PerformanceServiceBridgeResult create_r2a_service_bridge(
   auto ros_srv = node->create_service<ServiceT>(
     service_name,
     [agno_client](
-      const ServiceT::Request::SharedPtr ros_req, ServiceT::Response::SharedPtr ros_res) {
+      typename rclcpp::Service<ServiceT>::SharedPtr service_handle,
+      std::shared_ptr<rmw_request_id_t> request_header,
+      typename ServiceT::Request::SharedPtr ros_req) {
       auto agno_req = agno_client->borrow_loaned_request();
       *agno_req = *ros_req;
 
-      auto future = agno_client->async_send_request(std::move(agno_req));
-
-      auto agno_res = future.get();
-      *ros_res = *agno_res;
+      agno_client->async_send_request(
+        std::move(agno_req),
+        [service_handle, request_header](typename agnocast::Client<ServiceT>::SharedFuture future) {
+          auto agno_res = future.get();
+          typename ServiceT::Response ros_res;
+          ros_res = *agno_res;
+          service_handle->send_response(*request_header, ros_res);
+        });
     },
+#if RCLCPP_VERSION_MAJOR >= 28
+    qos, srv_cb_group);
+#else
     qos.get_rmw_qos_profile(), srv_cb_group);
+#endif
 
   return {ros_srv, srv_cb_group, client_cb_group};
 }
