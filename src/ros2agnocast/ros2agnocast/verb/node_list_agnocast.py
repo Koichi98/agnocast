@@ -10,6 +10,7 @@ from ros2agnocast.discovery import (
     all_nodes,
     collect_announcements,
     filter_fresh,
+    warn_if_no_announcements,
 )
 
 def split_fqn(fqn):
@@ -102,8 +103,10 @@ class ListAgnocastVerb(VerbExtension):
 
             # Merge in nodes seen via /_agnocast_discovery gossip (other IPC
             # namespaces and other ECUs in the same ROS_DOMAIN_ID).
-            snapshots = filter_fresh(collect_announcements(
-                node, timeout_sec=args.gossip_timeout))
+            raw_snapshots = collect_announcements(
+                node, timeout_sec=args.gossip_timeout)
+            warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
+            snapshots = filter_fresh(raw_snapshots)
             agnocast_node_name |= all_nodes(snapshots)
 
             # TODO(bdm-k): The current impl determines shadow nodes in a heuristic way. We need to
