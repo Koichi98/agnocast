@@ -478,7 +478,14 @@ struct initialize_agnocast_result initialize_agnocast(
   auto bridge_mode = get_bridge_mode();
 
   // Create a shm_unlink daemon process if it doesn't exist in its ipc namespace.
-  if (!add_process_args.ret_unlink_daemon_exist) {
+  // Test-only: AGNOCAST_SKIP_UNLINK_DAEMON skips the spawn so a benchmark can
+  // run without the daemon's periodic GET_EXIT_PROCESS / COMMIT_EXIT_PROCESS
+  // ioctls (which take down_write on global_htables_rwsem once per second).
+  // Used by scripts/verify_daemon_hypothesis.sh to isolate the daemon's effect
+  // on the bimodal Agnocast e2e tail. Skipping the daemon leaks shm/mq files
+  // and kmod proc_info entries — caller must clean those up after the run.
+  const char * skip_unlink_daemon = std::getenv("AGNOCAST_SKIP_UNLINK_DAEMON");
+  if (!add_process_args.ret_unlink_daemon_exist && skip_unlink_daemon == nullptr) {
     spawn_daemon_process([]() { poll_for_unlink(); });
   }
   if (

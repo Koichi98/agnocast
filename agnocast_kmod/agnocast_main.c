@@ -1175,6 +1175,8 @@ int agnocast_ioctl_receive_msg(
   u64 t_enter = ktime_get_ns();
 
   down_read(&global_htables_rwsem);
+  u64 t_after_global = ktime_get_ns();
+  ioctl_ret->ret_t_after_global_ns = (int64_t)(t_after_global - t_enter);
 
   struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
   if (!wrapper) {
@@ -1184,6 +1186,8 @@ int agnocast_ioctl_receive_msg(
     ret = -EINVAL;
     goto unlock_only_global;
   }
+  u64 t_after_topic_lookup = ktime_get_ns();
+  ioctl_ret->ret_t_after_topic_lookup_ns = (int64_t)(t_after_topic_lookup - t_enter);
 
   // Read lock is sufficient here. The receive path's writes fall into three categories,
   // none of which require exclusive (write) access to the per-topic rwsem:

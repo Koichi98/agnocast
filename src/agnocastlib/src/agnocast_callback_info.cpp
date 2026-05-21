@@ -14,6 +14,8 @@ namespace agnocast
 thread_local int64_t last_receive_ioctl_ns = 0;
 thread_local int64_t last_receive_lock_wait_ns = 0;
 thread_local int64_t last_receive_lock_hold_ns = 0;
+thread_local int64_t last_receive_t_after_global_ns = 0;
+thread_local int64_t last_receive_t_after_topic_lookup_ns = 0;
 
 int64_t get_last_receive_ioctl_ns()
 {
@@ -28,6 +30,16 @@ int64_t get_last_receive_lock_wait_ns()
 int64_t get_last_receive_lock_hold_ns()
 {
   return last_receive_lock_hold_ns;
+}
+
+int64_t get_last_receive_t_after_global_ns()
+{
+  return last_receive_t_after_global_ns;
+}
+
+int64_t get_last_receive_t_after_topic_lookup_ns()
+{
+  return last_receive_t_after_topic_lookup_ns;
 }
 
 std::mutex id2_callback_info_mtx;
@@ -73,6 +85,8 @@ void receive_and_execute_message(
     last_receive_ioctl_ns = (ts1.tv_sec - ts0.tv_sec) * 1'000'000'000LL + (ts1.tv_nsec - ts0.tv_nsec);
     last_receive_lock_wait_ns = receive_args.ret_lock_wait_ns;
     last_receive_lock_hold_ns = receive_args.ret_lock_hold_ns;
+    last_receive_t_after_global_ns = receive_args.ret_t_after_global_ns;
+    last_receive_t_after_topic_lookup_ns = receive_args.ret_t_after_topic_lookup_ns;
 
     // Map the shared memory region with read permissions whenever a new publisher is discovered.
     for (uint32_t i = 0; i < receive_args.ret_pub_shm_num; i++) {

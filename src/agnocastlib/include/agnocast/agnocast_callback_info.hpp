@@ -117,6 +117,8 @@ uint32_t register_callback(
 int64_t get_last_receive_ioctl_ns();
 int64_t get_last_receive_lock_wait_ns();
 int64_t get_last_receive_lock_hold_ns();
+int64_t get_last_receive_t_after_global_ns();
+int64_t get_last_receive_t_after_topic_lookup_ns();
 
 void receive_and_execute_message(
   uint32_t callback_info_id, pid_t my_pid, const CallbackInfo & callback_info,

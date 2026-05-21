@@ -137,6 +137,9 @@ union ioctl_receive_msg_args {
     uint32_t ret_pub_shm_num;
     int64_t ret_lock_wait_ns;
     int64_t ret_lock_hold_ns;
+    // Diagnostic checkpoints: ns elapsed since the receive ioctl entered.
+    int64_t ret_t_after_global_ns;
+    int64_t ret_t_after_topic_lookup_ns;
   };
 };
 #pragma GCC diagnostic pop

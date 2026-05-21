@@ -108,6 +108,12 @@ union ioctl_receive_msg_args {
     uint32_t ret_pub_shm_num;
     int64_t ret_lock_wait_ns;
     int64_t ret_lock_hold_ns;
+    // Diagnostic checkpoints for lock_wait_ns decomposition (ns since ioctl entry):
+    //   pre_global   = time spent before down_read(global) returns
+    //   pre_topic    = time spent before find_topic + down_read(topic_rwsem)
+    //   (lock_wait_ns above is the total to both locks acquired)
+    int64_t ret_t_after_global_ns;
+    int64_t ret_t_after_topic_lookup_ns;
   };
 };
 
