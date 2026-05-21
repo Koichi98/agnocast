@@ -36,14 +36,22 @@ PUBLISH_INTERVAL_SEC = 1.0
 LIVELINESS_LEASE_SEC = 30.0
 MACHINE_ID_PATH = '/etc/machine-id'
 SELF_IPC_NS_PATH = '/proc/self/ns/ipc'
+# Kept separate from TOPIC_NAME_BUFFER_SIZE because the C side (`agnocast_kmod`)
+# defines NODE_NAME_BUFFER_SIZE and TOPIC_NAME_BUFFER_SIZE as independent
+# constants — they happen to share the value 256 today.
+NODE_NAME_BUFFER_SIZE = 256
 TOPIC_NAME_BUFFER_SIZE = 256
+# How long a remote daemon's last snapshot may sit in _remote_states without
+# being refreshed before we drop it. Matches the gossip Liveliness lease so
+# DDS-side liveliness loss and local prune happen on the same timescale.
+REMOTE_STATE_STALE_SEC = 30.0
 
 
 class TopicInfoRet(ctypes.Structure):
     """Mirror of ``struct topic_info_ret`` in agnocast_ioctl.hpp."""
 
     _fields_ = [
-        ('node_name', ctypes.c_char * TOPIC_NAME_BUFFER_SIZE),
+        ('node_name', ctypes.c_char * NODE_NAME_BUFFER_SIZE),
         ('qos_depth', ctypes.c_uint32),
         ('qos_is_transient_local', ctypes.c_bool),
         ('qos_is_reliable', ctypes.c_bool),
@@ -193,7 +201,32 @@ class DiscoveryAgent(Node):
             f'hostname={self._host_hostname} ipc_ns_inode={self._ipc_ns_inode}')
 
     def _on_tick(self) -> None:
+        self._prune_stale_remote_states()
         self.publish_snapshot()
+
+    def _prune_stale_remote_states(
+            self, now_sec: float | None = None,
+            stale_after_sec: float = REMOTE_STATE_STALE_SEC) -> None:
+        """Drop remote-snapshot entries whose timestamp is older than the threshold.
+
+        Without this, a daemon that disappears (host dies, NS torn down, etc.)
+        would leave its last snapshot in ``_remote_states`` forever, slowly
+        growing memory in long-running deployments. The DDS Liveliness lease
+        already forces the publisher off the topic at the same timescale; we
+        mirror it here so the in-memory cache agrees.
+
+        ``now_sec`` is exposed for tests; production code lets the method read
+        ``self.get_clock()`` directly.
+        """
+        if now_sec is None:
+            now_sec = self.get_clock().now().nanoseconds / 1e9
+        stale_keys = [
+            key for key, msg in self._remote_states.items()
+            if now_sec - (msg.timestamp.sec + msg.timestamp.nanosec / 1e9)
+            > stale_after_sec
+        ]
+        for key in stale_keys:
+            del self._remote_states[key]
 
     def publish_snapshot(self) -> None:
         """Build and publish the current local AgnocastDaemonState."""
