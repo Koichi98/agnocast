@@ -210,12 +210,20 @@ class NodeInfoAgnocastVerb(VerbExtension):
             warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
             snapshots = filter_fresh(raw_snapshots)
             gossip_pubs, gossip_subs = topics_of_node(snapshots, node_name)
+            # Remember each topic's type_name from gossip so Agnocast-only
+            # topics (not visible to DDS, so absent from ros2_topic_dir) can
+            # still show their resolved type in the printed output.
+            gossip_topic_types: dict = {}
             for entry in gossip_pubs:
                 if entry['topic_name'] not in agnocast_publishers:
                     agnocast_publishers.append(entry['topic_name'])
+                if entry.get('type_name'):
+                    gossip_topic_types[entry['topic_name']] = entry['type_name']
             for entry in gossip_subs:
                 if entry['topic_name'] not in agnocast_subscribers:
                     agnocast_subscribers.append(entry['topic_name'])
+                if entry.get('type_name'):
+                    gossip_topic_types[entry['topic_name']] = entry['type_name']
 
             # Get ros2 all node names
             ros2_node_name_list = get_node_names(node=node, include_hidden_nodes=True)
@@ -276,7 +284,8 @@ class NodeInfoAgnocastVerb(VerbExtension):
                     topic_types = '; '.join([', '.join(topic['types']) for topic in matching_topics])
                     print(f"    {agnocast_sub}: {topic_types} {get_agnocast_label(agnocast_sub, ros2_sub_topics, ros2_pub_topics)}")
                 else:
-                    print(f"    {agnocast_sub}: <UNKNOWN> {get_agnocast_label(agnocast_sub, ros2_sub_topics, ros2_pub_topics)}")
+                    type_label = gossip_topic_types.get(agnocast_sub, '<UNKNOWN>')
+                    print(f"    {agnocast_sub}: {type_label} {get_agnocast_label(agnocast_sub, ros2_sub_topics, ros2_pub_topics)}")
 
             # ======== Publishers ========
             print("  Publishers:")
@@ -297,7 +306,8 @@ class NodeInfoAgnocastVerb(VerbExtension):
                     topic_types = '; '.join([', '.join(topic['types']) for topic in matching_topics])
                     print(f"    {agnocast_pub}: {topic_types} {get_agnocast_label(agnocast_pub, ros2_sub_topics, ros2_pub_topics)}")
                 else:
-                    print(f"    {agnocast_pub}: <UNKNOWN> {get_agnocast_label(agnocast_pub, ros2_sub_topics, ros2_pub_topics)}")
+                    type_label = gossip_topic_types.get(agnocast_pub, '<UNKNOWN>')
+                    print(f"    {agnocast_pub}: {type_label} {get_agnocast_label(agnocast_pub, ros2_sub_topics, ros2_pub_topics)}")
 
             # ======== Service ========
             print("  Service Servers:")
