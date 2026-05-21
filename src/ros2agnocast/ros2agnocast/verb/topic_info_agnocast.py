@@ -189,7 +189,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
             raw_snapshots = collect_announcements(
                 node, timeout_sec=args.gossip_timeout)
             warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
-            snapshots = filter_fresh(raw_snapshots)
+            snapshots = filter_fresh(raw_snapshots, node=node)
             gossip_pubs, gossip_subs = topic_endpoints(snapshots, topic_name)
             seen_pub_keys = {(r['node_name'], r['qos_depth']) for r in pub_topic_info_rets}
             seen_sub_keys = {(r['node_name'], r['qos_depth']) for r in sub_topic_info_rets}
@@ -197,6 +197,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
                 key = (endpoint.node_name, endpoint.qos_depth)
                 if key in seen_pub_keys:
                     continue
+                seen_pub_keys.add(key)
                 pub_topic_info_rets.append({
                     "node_name": endpoint.node_name,
                     "qos_depth": endpoint.qos_depth,
@@ -207,6 +208,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
                 key = (endpoint.node_name, endpoint.qos_depth)
                 if key in seen_sub_keys:
                     continue
+                seen_sub_keys.add(key)
                 sub_topic_info_rets.append({
                     "node_name": endpoint.node_name,
                     "qos_depth": endpoint.qos_depth,

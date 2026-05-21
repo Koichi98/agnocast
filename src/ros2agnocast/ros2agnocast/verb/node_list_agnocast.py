@@ -106,7 +106,7 @@ class ListAgnocastVerb(VerbExtension):
             raw_snapshots = collect_announcements(
                 node, timeout_sec=args.gossip_timeout)
             warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
-            snapshots = filter_fresh(raw_snapshots)
+            snapshots = filter_fresh(raw_snapshots, node=node)
             agnocast_node_name |= all_nodes(snapshots)
 
             # TODO(bdm-k): The current impl determines shadow nodes in a heuristic way. We need to
