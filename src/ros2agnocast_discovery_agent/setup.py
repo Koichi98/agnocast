@@ -20,7 +20,6 @@ setup(
     description='Per-IPC-namespace daemon publishing Agnocast state on '
                 '/_agnocast_discovery for cross-NS/ECU observability and bridge generation.',
     license='Apache License 2.0',
-    tests_require=['pytest'],
     entry_points={
         'console_scripts': [
             'discovery_agent = ros2agnocast_discovery_agent.agent:main',
