@@ -134,7 +134,7 @@ class ListAgnocastVerb(VerbExtension):
             raw_snapshots = collect_announcements(
                 node, timeout_sec=args.gossip_timeout)
             warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
-            snapshots = filter_fresh(raw_snapshots)
+            snapshots = filter_fresh(raw_snapshots, node=node)
             for name in all_topic_names(snapshots):
                 if not name.startswith('/AGNOCAST_SRV_'):
                     agnocast_topics.append(name)

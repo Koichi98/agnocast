@@ -22,10 +22,19 @@ LIVELINESS_LEASE_SEC = 30.0
 
 
 def gossip_qos() -> QoSProfile:
-    """QoS profile matching the discovery agent's publisher.
+    """QoS profile for subscribing to the gossip topic.
 
-    Subscribers must match these settings to receive the late-joiner snapshot
-    via TransientLocal.
+    Reliability, durability, liveliness, and lease duration must match the
+    discovery agent's publisher (see
+    ``ros2agnocast_discovery_agent/agent.py::_gossip_qos``) so that DDS
+    accepts the match and the TransientLocal late-joiner snapshot is
+    delivered. ``depth`` is intentionally larger here: the publisher only
+    keeps the latest snapshot per (host, NS) (depth=1 is enough — one
+    daemon writes exactly one msg per NS, so no overwriting collisions),
+    while CLI subscribers may receive snapshots from many daemons at once
+    and want enough history buffer to absorb a burst at startup. Mismatched
+    ``depth`` does not affect QoS compatibility (it's a per-endpoint
+    setting).
     """
     return QoSProfile(
         reliability=ReliabilityPolicy.RELIABLE,
@@ -92,9 +101,20 @@ def is_stale(msg: AgnocastDaemonState, now_sec: float,
 
 
 def filter_fresh(snapshots: list,
-                 stale_after_sec: float = DEFAULT_STALE_AFTER_SEC) -> list:
-    """Drop snapshots older than ``stale_after_sec`` seconds (best-effort)."""
-    now_sec = time.time()
+                 stale_after_sec: float = DEFAULT_STALE_AFTER_SEC,
+                 node=None) -> list:
+    """Drop snapshots older than ``stale_after_sec`` seconds (best-effort).
+
+    Pass ``node`` so the staleness check uses the same ROS clock the
+    discovery agent stamps ``msg.timestamp`` with. Otherwise we fall back
+    to wall-clock ``time.time()`` — fine for default `use_sim_time=false`
+    but it will produce false stale/fresh classifications when sim time is
+    in use (a wall second is not a sim second).
+    """
+    if node is not None:
+        now_sec = node.get_clock().now().nanoseconds * 1e-9
+    else:
+        now_sec = time.time()
     return [m for m in snapshots if not is_stale(m, now_sec, stale_after_sec)]
 
 

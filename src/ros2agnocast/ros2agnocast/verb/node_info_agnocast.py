@@ -208,7 +208,7 @@ class NodeInfoAgnocastVerb(VerbExtension):
             raw_snapshots = collect_announcements(
                 node, timeout_sec=args.gossip_timeout)
             warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
-            snapshots = filter_fresh(raw_snapshots)
+            snapshots = filter_fresh(raw_snapshots, node=node)
             gossip_pubs, gossip_subs = topics_of_node(snapshots, node_name)
             # Remember each topic's type_name from gossip so Agnocast-only
             # topics (not visible to DDS, so absent from ros2_topic_dir) can
