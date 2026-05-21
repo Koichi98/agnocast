@@ -40,7 +40,7 @@ TOPIC_NAME_BUFFER_SIZE = 256
 
 
 class TopicInfoRet(ctypes.Structure):
-    """Mirror of `struct topic_info_ret` in agnocast_ioctl.hpp."""
+    """Mirror of ``struct topic_info_ret`` in agnocast_ioctl.hpp."""
 
     _fields_ = [
         ('node_name', ctypes.c_char * TOPIC_NAME_BUFFER_SIZE),
@@ -74,10 +74,10 @@ def _load_ioctl_wrapper():
 
 
 def _ioctl_to_endpoint(info: TopicInfoRet) -> AgnocastEndpoint:
-    """Convert one `topic_info_ret` row to an AgnocastEndpoint msg.
+    """Convert one ``topic_info_ret`` row to an AgnocastEndpoint msg.
 
-    `pid` is best-effort 0 because the existing ioctl does not expose it; the
-    bridge decider may fill it via `/proc` walk when routing bridge requests.
+    ``pid`` is best-effort 0 because the existing ioctl does not expose it; the
+    bridge decider may fill it via ``/proc`` walk when routing bridge requests.
     """
     ep = AgnocastEndpoint()
     ep.node_name = info.node_name.decode('utf-8', errors='replace')
