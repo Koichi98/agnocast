@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from ros2agnocast_discovery_agent.agent import (
-    TOPIC_NAME_BUFFER_SIZE,
+    NODE_NAME_BUFFER_SIZE,
     TopicInfoRet,
     _ioctl_to_endpoint,
     _read_machine_id,
@@ -24,7 +24,7 @@ def _make_info(node_name: str, qos_depth: int = 10,
                is_bridge: bool = False) -> TopicInfoRet:
     info = TopicInfoRet()
     encoded = node_name.encode('utf-8')
-    info.node_name = encoded + b'\x00' * (TOPIC_NAME_BUFFER_SIZE - len(encoded))
+    info.node_name = encoded + b'\x00' * (NODE_NAME_BUFFER_SIZE - len(encoded))
     info.qos_depth = qos_depth
     info.qos_is_transient_local = qos_is_transient_local
     info.qos_is_reliable = qos_is_reliable
