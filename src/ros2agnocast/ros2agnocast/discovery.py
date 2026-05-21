@@ -41,7 +41,7 @@ def collect_announcements(
     node,
     timeout_sec: float = DEFAULT_COLLECT_TIMEOUT_SEC,
 ) -> list:
-    """Subscribe to the gossip topic and collect snapshots for `timeout_sec`.
+    """Subscribe to the gossip topic and collect snapshots for ``timeout_sec``.
 
     Returns a list of AgnocastDaemonState messages, one (latest) per (host_uuid,
     ipc_ns_inode) pair seen during the window.
@@ -86,14 +86,14 @@ def warn_if_no_announcements(snapshots: list, timeout_sec: float) -> None:
 
 def is_stale(msg: AgnocastDaemonState, now_sec: float,
              stale_after_sec: float = DEFAULT_STALE_AFTER_SEC) -> bool:
-    """Return True if the snapshot is older than `stale_after_sec` seconds."""
+    """Return True if the snapshot is older than ``stale_after_sec`` seconds."""
     msg_sec = msg.timestamp.sec + msg.timestamp.nanosec * 1e-9
     return (now_sec - msg_sec) > stale_after_sec
 
 
 def filter_fresh(snapshots: list,
                  stale_after_sec: float = DEFAULT_STALE_AFTER_SEC) -> list:
-    """Drop snapshots older than `stale_after_sec` seconds (best-effort)."""
+    """Drop snapshots older than ``stale_after_sec`` seconds (best-effort)."""
     now_sec = time.time()
     return [m for m in snapshots if not is_stale(m, now_sec, stale_after_sec)]
 
@@ -120,7 +120,7 @@ def all_nodes(snapshots: list) -> set:
 
 
 def topic_endpoints(snapshots: list, topic_name: str) -> tuple:
-    """Return (publishers, subscribers) across all snapshots for `topic_name`.
+    """Return (publishers, subscribers) across all snapshots for ``topic_name``.
 
     Each element is an AgnocastEndpoint message. The same (node_name) appearing
     in multiple snapshots is preserved (the caller is responsible for dedup).
@@ -137,7 +137,7 @@ def topic_endpoints(snapshots: list, topic_name: str) -> tuple:
 
 
 def topics_of_node(snapshots: list, node_name: str) -> tuple:
-    """Return (publish_topics, subscribe_topics) for `node_name`.
+    """Return (publish_topics, subscribe_topics) for ``node_name``.
 
     Each list contains AgnocastTopic-like dicts with topic_name and type_name.
     """
