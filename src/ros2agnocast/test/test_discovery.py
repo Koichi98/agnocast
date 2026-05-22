@@ -133,4 +133,5 @@ def test_warn_if_no_announcements_emits_hint_when_empty(capsys):
     warn_if_no_announcements([], timeout_sec=2.0)
     err = capsys.readouterr().err
     assert 'WARNING' in err
-    assert 'discovery_agent' in err
+    assert 'discovery agent' in err
+    assert 'ROS_DOMAIN_ID' in err
