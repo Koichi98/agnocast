@@ -6,10 +6,11 @@ from ros2topic.api import get_topic_names_and_types
 from ros2topic.verb import VerbExtension
 
 from ros2agnocast.discovery import (
-    DEFAULT_COLLECT_TIMEOUT_SEC,
+    add_gossip_timeout_arg,
     all_topic_names,
     collect_announcements,
-    filter_fresh,
+    gossip_has_bridge_endpoint,
+    warn_if_gossip_timeout_overridden,
     warn_if_no_announcements,
 )
 
@@ -33,14 +34,10 @@ class ListAgnocastVerb(VerbExtension):
     "Output a list of available topics including Agnocast"
 
     def add_arguments(self, parser, cli_name):
-        parser.add_argument(
-            '--gossip-timeout',
-            type=float,
-            default=DEFAULT_COLLECT_TIMEOUT_SEC,
-            help='Seconds to wait for /_agnocast_discovery gossip from peer '
-                 'namespaces / ECUs (default: %(default)ss).')
+        add_gossip_timeout_arg(parser)
 
     def main(self, *, args):
+        warn_if_gossip_timeout_overridden(args)
         with NodeStrategy(None) as node:
             lib = ctypes.CDLL("libagnocast_ioctl_wrapper.so")
             lib.get_agnocast_topics.argtypes = [ctypes.POINTER(ctypes.c_int)]
@@ -66,7 +63,7 @@ class ListAgnocastVerb(VerbExtension):
                     if array:
                         lib.free_agnocast_topic_info_ret(array)
 
-            def get_bridge_status(topic_name):
+            def get_bridge_status(topic_name, snapshots):
                 name_b = topic_name.encode('utf-8')
 
                 has_sub_bridge = False
@@ -86,6 +83,12 @@ class ListAgnocastVerb(VerbExtension):
                             has_pub_bridge = True
                         else:
                             has_agnocast_pub = True
+
+                # ioctl can't see bridge endpoints in other IPC NSes.
+                gossip_pub_bridge, gossip_sub_bridge = gossip_has_bridge_endpoint(
+                    snapshots, topic_name)
+                has_pub_bridge = has_pub_bridge or gossip_pub_bridge
+                has_sub_bridge = has_sub_bridge or gossip_sub_bridge
 
                 mapping = {
                     (True, True):   BridgeStatus.BIDIRECTION,
@@ -129,15 +132,11 @@ class ListAgnocastVerb(VerbExtension):
 
             agnocast_topics = remove_service_topic(agnocast_topics)
 
-            # Merge in topics seen via /_agnocast_discovery gossip (other IPC
-            # namespaces and other ECUs in the same ROS_DOMAIN_ID).
-            raw_snapshots = collect_announcements(
+            # Merge topics visible only via gossip (other IPC NSes / ECUs).
+            snapshots = collect_announcements(
                 node, timeout_sec=args.gossip_timeout)
-            warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
-            snapshots = filter_fresh(raw_snapshots, node=node)
-            for name in all_topic_names(snapshots):
-                if not name.startswith('/AGNOCAST_SRV_'):
-                    agnocast_topics.append(name)
+            warn_if_no_announcements(node, snapshots, args.gossip_timeout)
+            agnocast_topics.extend(remove_service_topic(all_topic_names(snapshots)))
 
             # Get ros2 topics
             ros2_topics_data = get_topic_names_and_types(node=node)
@@ -163,7 +162,7 @@ class ListAgnocastVerb(VerbExtension):
                 elif topic in ros2_topics_set and topic not in agnocast_topics_set:
                     suffix = ""
                 else:
-                    bridge_status, has_agnocast_pub, has_agnocast_sub = get_bridge_status(topic)
+                    bridge_status, has_agnocast_pub, has_agnocast_sub = get_bridge_status(topic, snapshots)
                     needs_r2a = has_agnocast_sub and topic in ros2_pub_topics_set
                     needs_a2r = has_agnocast_pub and topic in ros2_sub_topics_set
                     match bridge_status:

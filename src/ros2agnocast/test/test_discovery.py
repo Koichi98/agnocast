@@ -4,9 +4,7 @@ These tests do not require DDS; they exercise the projection helpers with
 hand-built AgnocastDaemonState messages.
 """
 
-import time
-
-from builtin_interfaces.msg import Time
+from unittest.mock import MagicMock
 
 from ros2agnocast_discovery_msgs.msg import (
     AgnocastDaemonState,
@@ -15,10 +13,10 @@ from ros2agnocast_discovery_msgs.msg import (
 )
 
 from ros2agnocast.discovery import (
+    _resolve_spin_node,
     all_nodes,
     all_topic_names,
-    filter_fresh,
-    is_stale,
+    gossip_has_bridge_endpoint,
     topic_endpoints,
     topics_of_node,
     warn_if_no_announcements,
@@ -46,13 +44,12 @@ def _topic(topic_name: str, *, pubs=None, subs=None, type_name: str = '') -> Agn
     return topic
 
 
-def _state(host: str, ipc_ns: int, *, topics=None, ts_sec: int = 0) -> AgnocastDaemonState:
+def _state(host: str, ipc_ns: int, *, topics=None) -> AgnocastDaemonState:
     state = AgnocastDaemonState()
     state.schema_version = 1
     state.agnocast_version = ''
     state.host_uuid = host
     state.host_hostname = host
-    state.timestamp = Time(sec=ts_sec, nanosec=0) if ts_sec else Time(sec=int(time.time()), nanosec=0)
     state.ipc_ns_inode = ipc_ns
     state.topics = topics or []
     return state
@@ -105,32 +102,65 @@ def test_topics_of_node_collects_pub_and_sub_topics():
     assert subs == [{'topic_name': '/bar', 'type_name': ''}]
 
 
-def test_is_stale_detects_old_timestamp():
-    msg = _state('a', 1, ts_sec=100)
-    assert is_stale(msg, now_sec=200, stale_after_sec=10) is True
-    assert is_stale(msg, now_sec=105, stale_after_sec=10) is False
+def test_gossip_has_bridge_endpoint_picks_up_bridge_endpoints():
+    bridge_pub = _endpoint('/agnocast_bridge_node_xxx', is_bridge=True)
+    sub = _endpoint('/listener')
+    snap = _state('a', 1, topics=[_topic('/foo', pubs=[bridge_pub], subs=[sub])])
+    pub_b, sub_b = gossip_has_bridge_endpoint([snap], '/foo')
+    assert pub_b is True
+    assert sub_b is False
 
 
-def test_filter_fresh_drops_old_snapshots():
-    fresh = _state('a', 1, ts_sec=int(time.time()))
-    old = _state('b', 2, ts_sec=int(time.time()) - 999)
-    kept = filter_fresh([fresh, old], stale_after_sec=10)
-    assert kept == [fresh]
+def test_gossip_has_bridge_endpoint_returns_false_when_no_bridge():
+    pub = _endpoint('/talker')
+    snap = _state('a', 1, topics=[_topic('/foo', pubs=[pub])])
+    pub_b, sub_b = gossip_has_bridge_endpoint([snap], '/foo')
+    assert pub_b is False
+    assert sub_b is False
+
+
+def test_resolve_spin_node_returns_node_as_is_when_not_nodestrategy():
+    plain = MagicMock(spec=[])
+    assert _resolve_spin_node(plain) is plain
+
+
+def test_resolve_spin_node_unwraps_nodestrategy_to_underlying_node():
+    inner_node = MagicMock(spec=[])
+    direct_node = MagicMock()
+    direct_node.node = inner_node
+    strategy = MagicMock()
+    strategy.direct_node = direct_node
+    assert _resolve_spin_node(strategy) is inner_node
+
+
+def _plain_node(publishers=None):
+    """Build a mock that _resolve_spin_node treats as a plain rclpy.Node (no NodeStrategy)."""
+    node = MagicMock(spec=['get_publishers_info_by_topic'])
+    node.get_publishers_info_by_topic.return_value = publishers or []
+    return node
 
 
 def test_warn_if_no_announcements_silent_when_snapshots_present(capsys):
     snap = _state('a', 1)
-    warn_if_no_announcements([snap], timeout_sec=2.0)
+    warn_if_no_announcements(_plain_node(), [snap], timeout_sec=2.0)
     assert capsys.readouterr().err == ''
 
 
 def test_warn_if_no_announcements_silent_when_timeout_zero(capsys):
-    warn_if_no_announcements([], timeout_sec=0)
+    warn_if_no_announcements(_plain_node(), [], timeout_sec=0)
     assert capsys.readouterr().err == ''
 
 
-def test_warn_if_no_announcements_emits_hint_when_empty(capsys):
-    warn_if_no_announcements([], timeout_sec=2.0)
+def test_warn_if_no_announcements_says_no_publisher_when_dds_sees_none(capsys):
+    warn_if_no_announcements(_plain_node(publishers=[]), [], timeout_sec=2.0)
     err = capsys.readouterr().err
     assert 'WARNING' in err
-    assert 'discovery_agent' in err
+    assert 'no /_agnocast_discovery publisher visible' in err
+    assert 'ROS_DOMAIN_ID' in err
+
+
+def test_warn_if_no_announcements_says_qos_or_pythonpath_when_publisher_visible(capsys):
+    warn_if_no_announcements(_plain_node(publishers=[MagicMock()]), [], timeout_sec=2.0)
+    err = capsys.readouterr().err
+    assert 'WARNING' in err
+    assert 'publisher(s) visible but no snapshot' in err

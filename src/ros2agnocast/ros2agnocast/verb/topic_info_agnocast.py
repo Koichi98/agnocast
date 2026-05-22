@@ -5,10 +5,10 @@ from ros2topic.api import TopicNameCompleter
 from ros2node.verb import VerbExtension
 
 from ros2agnocast.discovery import (
-    DEFAULT_COLLECT_TIMEOUT_SEC,
+    add_gossip_timeout_arg,
     collect_announcements,
-    filter_fresh,
     topic_endpoints,
+    warn_if_gossip_timeout_overridden,
     warn_if_no_announcements,
 )
 
@@ -44,12 +44,7 @@ class TopicInfoAgnocastVerb(VerbExtension):
             '-d',
             action='store_true',
             help='Include internal bridge nodes (agnocast_bridge_node_*) in the output')
-        parser.add_argument(
-            '--gossip-timeout',
-            type=float,
-            default=DEFAULT_COLLECT_TIMEOUT_SEC,
-            help='Seconds to wait for /_agnocast_discovery gossip from peer '
-                 'namespaces / ECUs (default: %(default)ss).')
+        add_gossip_timeout_arg(parser)
         arg.completer = TopicNameCompleter(
             include_hidden_topics_key='include_hidden_topics')
 
@@ -184,20 +179,17 @@ class TopicInfoAgnocastVerb(VerbExtension):
             if pub_topic_info_ret_count.value != 0 and pub_topic_info_ret_array is not None:
                 lib.free_agnocast_topic_info_ret(pub_topic_info_ret_array)
 
-            # Merge in endpoints visible via /_agnocast_discovery gossip
-            # (other IPC namespaces and other ECUs in the same ROS_DOMAIN_ID).
-            raw_snapshots = collect_announcements(
+            warn_if_gossip_timeout_overridden(args)
+
+            # Merge endpoints visible only via gossip (other IPC NSes / ECUs).
+            snapshots = collect_announcements(
                 node, timeout_sec=args.gossip_timeout)
-            warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
-            snapshots = filter_fresh(raw_snapshots, node=node)
+            warn_if_no_announcements(node, snapshots, args.gossip_timeout)
             gossip_pubs, gossip_subs = topic_endpoints(snapshots, topic_name)
-            seen_pub_keys = {(r['node_name'], r['qos_depth']) for r in pub_topic_info_rets}
-            seen_sub_keys = {(r['node_name'], r['qos_depth']) for r in sub_topic_info_rets}
+            # collect_announcements() drops the local NS from gossip, so
+            # ioctl-side and gossip-side endpoint sets are disjoint by
+            # construction; no per-verb dedup needed.
             for endpoint in gossip_pubs:
-                key = (endpoint.node_name, endpoint.qos_depth)
-                if key in seen_pub_keys:
-                    continue
-                seen_pub_keys.add(key)
                 pub_topic_info_rets.append({
                     "node_name": endpoint.node_name,
                     "qos_depth": endpoint.qos_depth,
@@ -205,10 +197,6 @@ class TopicInfoAgnocastVerb(VerbExtension):
                     "is_bridge": endpoint.is_bridge,
                 })
             for endpoint in gossip_subs:
-                key = (endpoint.node_name, endpoint.qos_depth)
-                if key in seen_sub_keys:
-                    continue
-                seen_sub_keys.add(key)
                 sub_topic_info_rets.append({
                     "node_name": endpoint.node_name,
                     "qos_depth": endpoint.qos_depth,

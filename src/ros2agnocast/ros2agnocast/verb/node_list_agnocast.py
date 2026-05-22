@@ -6,10 +6,10 @@ from ros2node.api import get_node_names
 from ros2topic.verb import VerbExtension
 
 from ros2agnocast.discovery import (
-    DEFAULT_COLLECT_TIMEOUT_SEC,
+    add_gossip_timeout_arg,
     all_nodes,
     collect_announcements,
-    filter_fresh,
+    warn_if_gossip_timeout_overridden,
     warn_if_no_announcements,
 )
 
@@ -41,14 +41,10 @@ class ListAgnocastVerb(VerbExtension):
         parser.add_argument(
             '-d', '--debug', action='store_true',
             help='Include internal bridge nodes (agnocast_bridge_node_*) in the output')
-        parser.add_argument(
-            '--gossip-timeout',
-            type=float,
-            default=DEFAULT_COLLECT_TIMEOUT_SEC,
-            help='Seconds to wait for /_agnocast_discovery gossip from peer '
-                 'namespaces / ECUs (default: %(default)ss).')
+        add_gossip_timeout_arg(parser)
 
     def main(self, *, args):
+        warn_if_gossip_timeout_overridden(args)
         with NodeStrategy(None) as node:
             lib = ctypes.CDLL("libagnocast_ioctl_wrapper.so")
             lib.get_agnocast_topics.argtypes = [ctypes.POINTER(ctypes.c_int)]
@@ -101,12 +97,9 @@ class ListAgnocastVerb(VerbExtension):
             for topic in agnocast_topics:
                 agnocast_node_name = agnocast_node_name | get_node_name_set(topic)
 
-            # Merge in nodes seen via /_agnocast_discovery gossip (other IPC
-            # namespaces and other ECUs in the same ROS_DOMAIN_ID).
-            raw_snapshots = collect_announcements(
-                node, timeout_sec=args.gossip_timeout)
-            warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
-            snapshots = filter_fresh(raw_snapshots, node=node)
+            # Merge nodes visible only via gossip (other IPC NSes / ECUs).
+            snapshots = collect_announcements(node, timeout_sec=args.gossip_timeout)
+            warn_if_no_announcements(node, snapshots, args.gossip_timeout)
             agnocast_node_name |= all_nodes(snapshots)
 
             # TODO(bdm-k): The current impl determines shadow nodes in a heuristic way. We need to
@@ -143,7 +136,7 @@ class ListAgnocastVerb(VerbExtension):
             if not args.all and not args.debug:
                 merged_node_name = {node for node in merged_node_name if not node.startswith("/agnocast_bridge_node_")}
             if args.count_nodes:
-                total_nodes = len(agnocast_node_name | ros2_node_name)
+                total_nodes = len(merged_node_name)
                 print(total_nodes)
             else:
                 for node_name in sorted(merged_node_name):

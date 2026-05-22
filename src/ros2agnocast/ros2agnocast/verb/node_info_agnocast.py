@@ -10,10 +10,11 @@ from ros2topic.api import get_topic_names_and_types
 from ros2node.verb import VerbExtension
 
 from ros2agnocast.discovery import (
-    DEFAULT_COLLECT_TIMEOUT_SEC,
+    add_gossip_timeout_arg,
     collect_announcements,
-    filter_fresh,
+    gossip_has_bridge_endpoint,
     topics_of_node,
+    warn_if_gossip_timeout_overridden,
     warn_if_no_announcements,
 )
 
@@ -53,14 +54,10 @@ class NodeInfoAgnocastVerb(VerbExtension):
         parser.add_argument(
             'node_name',
             help='Fully qualified node name to request information with Agnocast topics')
-        parser.add_argument(
-            '--gossip-timeout',
-            type=float,
-            default=DEFAULT_COLLECT_TIMEOUT_SEC,
-            help='Seconds to wait for /_agnocast_discovery gossip from peer '
-                 'namespaces / ECUs (default: %(default)ss).')
+        add_gossip_timeout_arg(parser)
 
     def main(self, *, args):
+        warn_if_gossip_timeout_overridden(args)
         node_name = args.node_name
 
 
@@ -106,7 +103,7 @@ class NodeInfoAgnocastVerb(VerbExtension):
                     if array:
                         lib.free_agnocast_topics(array, count)
 
-            def get_bridge_status(topic_name): 
+            def get_bridge_status(topic_name, snapshots):
                 name_b = topic_name.encode('utf-8')
 
                 has_sub_bridge = False
@@ -117,6 +114,12 @@ class NodeInfoAgnocastVerb(VerbExtension):
                 with agnocast_info_array(lib.get_agnocast_pub_nodes, name_b) as nodes:
                     has_pub_bridge = any(n.is_bridge for n in nodes)
 
+                # ioctl can't see bridge endpoints in other IPC NSes.
+                gossip_pub_bridge, gossip_sub_bridge = gossip_has_bridge_endpoint(
+                    snapshots, topic_name)
+                has_pub_bridge = has_pub_bridge or gossip_pub_bridge
+                has_sub_bridge = has_sub_bridge or gossip_sub_bridge
+
                 mapping = {
                     (True, True):   BridgeStatus.BIDIRECTION,
                     (True, False):  BridgeStatus.AGNOCAST_TO_ROS2,
@@ -126,14 +129,14 @@ class NodeInfoAgnocastVerb(VerbExtension):
                 
                 return mapping[(has_sub_bridge, has_pub_bridge)]
 
-            def get_agnocast_label(topic_name, ros2_sub_topics, ros2_pub_topics):
+            def get_agnocast_label(topic_name, ros2_sub_topics, ros2_pub_topics, snapshots):
                 """Get the appropriate label for an Agnocast-enabled topic."""
 
                 suffix = "(Agnocast enabled)"
                 if topic_name not in ros2_sub_topics and topic_name not in ros2_pub_topics:
                     return suffix  # No bridge info if only one endpoint exists
 
-                match get_bridge_status(topic_name):
+                match get_bridge_status(topic_name, snapshots):
                     case BridgeStatus.BIDIRECTION:
                         suffix = "(Agnocast enabled, bridged)"
                     case BridgeStatus.ROS2_TO_AGNOCAST:
@@ -203,12 +206,9 @@ class NodeInfoAgnocastVerb(VerbExtension):
             node_name_bytes = node_name.encode('utf-8')
             agnocast_subscribers, agnocast_publishers, agnocast_servers, agnocast_clients = get_agnocast_node_topics(node_name_bytes)
 
-            # Merge in cross-NS / cross-ECU topics for this node from
-            # /_agnocast_discovery gossip.
-            raw_snapshots = collect_announcements(
-                node, timeout_sec=args.gossip_timeout)
-            warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
-            snapshots = filter_fresh(raw_snapshots, node=node)
+            # Merge gossip-only topics for this node (other IPC NSes / ECUs).
+            snapshots = collect_announcements(node, timeout_sec=args.gossip_timeout)
+            warn_if_no_announcements(node, snapshots, args.gossip_timeout)
             gossip_pubs, gossip_subs = topics_of_node(snapshots, node_name)
             # Remember each topic's type_name from gossip so Agnocast-only
             # topics (not visible to DDS, so absent from ros2_topic_dir) can
@@ -270,7 +270,7 @@ class NodeInfoAgnocastVerb(VerbExtension):
             agnocast_sub_set = set(agnocast_subscribers)
             for sub in subscribers:
                 if sub.name in agnocast_sub_set:
-                    label = get_agnocast_label(sub.name, ros2_sub_topics, ros2_pub_topics)
+                    label = get_agnocast_label(sub.name, ros2_sub_topics, ros2_pub_topics, snapshots)
                     print(f"    {sub.name}: {', '.join(sub.types)} {label}")
                 else:
                     print(f"    {sub.name}: {', '.join(sub.types)}")
@@ -282,17 +282,17 @@ class NodeInfoAgnocastVerb(VerbExtension):
                 matching_topics = [topic for topic in ros2_topic_dir if topic['name'] == agnocast_sub]
                 if matching_topics:
                     topic_types = '; '.join([', '.join(topic['types']) for topic in matching_topics])
-                    print(f"    {agnocast_sub}: {topic_types} {get_agnocast_label(agnocast_sub, ros2_sub_topics, ros2_pub_topics)}")
+                    print(f"    {agnocast_sub}: {topic_types} {get_agnocast_label(agnocast_sub, ros2_sub_topics, ros2_pub_topics, snapshots)}")
                 else:
                     type_label = gossip_topic_types.get(agnocast_sub, '<UNKNOWN>')
-                    print(f"    {agnocast_sub}: {type_label} {get_agnocast_label(agnocast_sub, ros2_sub_topics, ros2_pub_topics)}")
+                    print(f"    {agnocast_sub}: {type_label} {get_agnocast_label(agnocast_sub, ros2_sub_topics, ros2_pub_topics, snapshots)}")
 
             # ======== Publishers ========
             print("  Publishers:")
             agnocast_pub_set = set(agnocast_publishers)
             for pub in publishers:
                 if pub.name in agnocast_pub_set:
-                    label = get_agnocast_label(pub.name, ros2_sub_topics, ros2_pub_topics)
+                    label = get_agnocast_label(pub.name, ros2_sub_topics, ros2_pub_topics, snapshots)
                     print(f"    {pub.name}: {', '.join(pub.types)} {label}")
                 else:
                     print(f"    {pub.name}: {', '.join(pub.types)}")
@@ -304,10 +304,10 @@ class NodeInfoAgnocastVerb(VerbExtension):
                 matching_topics = [topic for topic in ros2_topic_dir if topic['name'] == agnocast_pub]
                 if matching_topics:
                     topic_types = '; '.join([', '.join(topic['types']) for topic in matching_topics])
-                    print(f"    {agnocast_pub}: {topic_types} {get_agnocast_label(agnocast_pub, ros2_sub_topics, ros2_pub_topics)}")
+                    print(f"    {agnocast_pub}: {topic_types} {get_agnocast_label(agnocast_pub, ros2_sub_topics, ros2_pub_topics, snapshots)}")
                 else:
                     type_label = gossip_topic_types.get(agnocast_pub, '<UNKNOWN>')
-                    print(f"    {agnocast_pub}: {type_label} {get_agnocast_label(agnocast_pub, ros2_sub_topics, ros2_pub_topics)}")
+                    print(f"    {agnocast_pub}: {type_label} {get_agnocast_label(agnocast_pub, ros2_sub_topics, ros2_pub_topics, snapshots)}")
 
             # ======== Service ========
             print("  Service Servers:")
@@ -315,14 +315,14 @@ class NodeInfoAgnocastVerb(VerbExtension):
                 print(f"    {service.name}: {', '.join(service.types)}")
 
             for service_name in agnocast_servers:
-                print(f"    {service_name}: <UNKNOWN> {get_agnocast_label(service_name, ros2_sub_topics, ros2_pub_topics)}")
+                print(f"    {service_name}: <UNKNOWN> {get_agnocast_label(service_name, ros2_sub_topics, ros2_pub_topics, snapshots)}")
 
             print("  Service Clients:")
             for client in service_clients:
                 print(f"    {client.name}: {', '.join(client.types)}")
 
             for service_name in agnocast_clients:
-                print(f"    {service_name}: <UNKNOWN> {get_agnocast_label(service_name, ros2_sub_topics, ros2_pub_topics)}")
+                print(f"    {service_name}: <UNKNOWN> {get_agnocast_label(service_name, ros2_sub_topics, ros2_pub_topics, snapshots)}")
 
             # ======== Action ========
             print("  Action Servers:")
