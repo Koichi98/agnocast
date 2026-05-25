@@ -15,8 +15,11 @@ setup(
     ],
     install_requires=['setuptools'],
     zip_safe=True,
-    maintainer='Keita Morisaki',
-    maintainer_email='keita.morisaki@tier4.jp',
+    maintainer='Keita Morisaki, Takahiro Ishikawa-Aso, Koichi Imai, Takumi Jin',
+    maintainer_email=(
+        'keita.morisaki@tier4.jp, sykwer@gmail.com, '
+        'koichi.imai.2@tier4.jp, primenumber_2_3_5@yahoo.co.jp'
+    ),
     description='Per-IPC-namespace daemon publishing Agnocast state on '
                 '/_agnocast_discovery for cross-NS/ECU observability and bridge generation.',
     license='Apache License 2.0',
