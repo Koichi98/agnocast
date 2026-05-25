@@ -11,18 +11,21 @@ entrypoint, etc.).
 """
 
 import ctypes
+import importlib.metadata
+import logging
 import os
 import socket
 import sys
 import uuid
 
 import rclpy
+from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, LivelinessPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.duration import Duration
 
-from builtin_interfaces.msg import Time
 from ros2agnocast_discovery_msgs.msg import (
     AgnocastDaemonState,
     AgnocastEndpoint,
@@ -34,7 +37,9 @@ GOSSIP_TOPIC = '/_agnocast_discovery'
 SCHEMA_VERSION = 1
 PUBLISH_INTERVAL_SEC = 1.0
 LIVELINESS_LEASE_SEC = 30.0
-MACHINE_ID_PATH = '/etc/machine-id'
+# Preferred over /etc/machine-id: avoids the systemd dep and the
+# baked-into-image case where every ECU collides on one host_uuid.
+BOOT_ID_PATH = '/proc/sys/kernel/random/boot_id'
 SELF_IPC_NS_PATH = '/proc/self/ns/ipc'
 # Kept separate from TOPIC_NAME_BUFFER_SIZE because the C side (`agnocast_kmod`)
 # defines NODE_NAME_BUFFER_SIZE and TOPIC_NAME_BUFFER_SIZE as independent
@@ -144,16 +149,18 @@ def _collect_endpoints(getter, lib, topic_name_b: bytes) -> list:
     return endpoints
 
 
-def _read_machine_id() -> str:
-    """Return /etc/machine-id formatted as a UUID, fallback to a random UUID."""
+def _read_host_uuid() -> str:
+    """Return the boot UUID; fall back to a random UUID with a WARN log."""
     try:
-        with open(MACHINE_ID_PATH) as fp:
-            raw = fp.read().strip()
-        if len(raw) == 32 and all(c in '0123456789abcdef' for c in raw):
-            return str(uuid.UUID(raw))
-    except OSError:
-        pass
-    return str(uuid.uuid4())
+        with open(BOOT_ID_PATH) as fp:
+            return str(uuid.UUID(fp.read().strip()))
+    except (OSError, ValueError) as exc:
+        fallback = str(uuid.uuid4())
+        logging.warning(
+            'agnocast_discovery_agent: failed to read %s (%s); '
+            'falling back to random host_uuid=%s',
+            BOOT_ID_PATH, exc, fallback)
+        return fallback
 
 
 def _read_ipc_ns_inode() -> int:
@@ -167,9 +174,20 @@ def _gossip_qos() -> QoSProfile:
         durability=DurabilityPolicy.TRANSIENT_LOCAL,
         history=HistoryPolicy.KEEP_LAST,
         depth=1,
+        # AUTOMATIC: rclpy (Humble) does not expose ``assert_liveliness`` on
+        # Publisher, so MANUAL_BY_TOPIC cannot be driven reliably from Python.
+        # AUTOMATIC keeps the publisher alive as long as the participant is up.
         liveliness=LivelinessPolicy.AUTOMATIC,
         liveliness_lease_duration=Duration(seconds=LIVELINESS_LEASE_SEC),
     )
+
+
+def _read_agent_version() -> str:
+    """Return this package's installed version, or '' if running from source."""
+    try:
+        return importlib.metadata.version('ros2agnocast_discovery_agent')
+    except importlib.metadata.PackageNotFoundError:
+        return ''
 
 
 class DiscoveryAgent(Node):
@@ -180,13 +198,24 @@ class DiscoveryAgent(Node):
     ``(host_uuid, ipc_ns_inode)``.
     """
 
-    def __init__(self, ioctl_lib=None):
-        super().__init__('agnocast_discovery_agent')
-        self._lib = ioctl_lib if ioctl_lib is not None else _load_ioctl_wrapper()
-        self._host_uuid = _read_machine_id()
+    def __init__(self):
+        self._host_uuid = _read_host_uuid()
         self._host_hostname = socket.gethostname()
         self._ipc_ns_inode = _read_ipc_ns_inode()
-        self._agnocast_version = os.environ.get('AGNOCAST_VERSION', '')
+        # Multiple agents may run on one ECU (one per IPC NS); disambiguate.
+        host_short = self._host_uuid.replace('-', '')[:8]
+        # Force use_sim_time=False so the 1 Hz timer + clock reads are
+        # wall-clock regardless of /clock; sim-time playback would otherwise
+        # stretch the publish cadence past the liveliness lease window.
+        super().__init__(
+            f'agnocast_discovery_agent_{host_short}_{self._ipc_ns_inode}',
+            parameter_overrides=[Parameter('use_sim_time', value=False)],
+        )
+        self._lib = _load_ioctl_wrapper()
+        self._agnocast_version = _read_agent_version()
+        # Independent wall-clock for prune / receive timestamps so they stay
+        # consistent even if a future change accidentally enables sim time.
+        self._clock = Clock(clock_type=ClockType.SYSTEM_TIME)
 
         qos = _gossip_qos()
         self._pub = self.create_publisher(AgnocastDaemonState, GOSSIP_TOPIC, qos)
@@ -198,7 +227,8 @@ class DiscoveryAgent(Node):
 
         self.get_logger().info(
             f'agnocast_discovery_agent up: host_uuid={self._host_uuid} '
-            f'hostname={self._host_hostname} ipc_ns_inode={self._ipc_ns_inode}')
+            f'hostname={self._host_hostname} ipc_ns_inode={self._ipc_ns_inode} '
+            f'version={self._agnocast_version}')
 
     def _on_tick(self) -> None:
         self._prune_stale_remote_states()
@@ -207,23 +237,17 @@ class DiscoveryAgent(Node):
     def _prune_stale_remote_states(
             self, now_sec: float | None = None,
             stale_after_sec: float = REMOTE_STATE_STALE_SEC) -> None:
-        """Drop remote-snapshot entries whose timestamp is older than the threshold.
+        """Drop ``_remote_states`` entries whose local arrival time is too old.
 
-        Without this, a daemon that disappears (host dies, NS torn down, etc.)
-        would leave its last snapshot in ``_remote_states`` forever, slowly
-        growing memory in long-running deployments. The DDS Liveliness lease
-        already forces the publisher off the topic at the same timescale; we
-        mirror it here so the in-memory cache agrees.
-
-        ``now_sec`` is exposed for tests; production code lets the method read
-        ``self.get_clock()`` directly.
+        Mirrors the DDS Liveliness lease so dead-peer snapshots don't leak
+        memory. Cross-ECU clocks aren't synced, so local arrival time is
+        the freshness reference rather than the publisher's stamp.
         """
         if now_sec is None:
-            now_sec = self.get_clock().now().nanoseconds / 1e9
+            now_sec = self._clock.now().nanoseconds / 1e9
         stale_keys = [
-            key for key, msg in self._remote_states.items()
-            if now_sec - (msg.timestamp.sec + msg.timestamp.nanosec / 1e9)
-            > stale_after_sec
+            key for key, (_msg, received_at) in self._remote_states.items()
+            if now_sec - received_at > stale_after_sec
         ]
         for key in stale_keys:
             del self._remote_states[key]
@@ -239,21 +263,19 @@ class DiscoveryAgent(Node):
         msg.agnocast_version = self._agnocast_version
         msg.host_uuid = self._host_uuid
         msg.host_hostname = self._host_hostname
-        now = self.get_clock().now().to_msg()
-        msg.timestamp = Time(sec=now.sec, nanosec=now.nanosec)
         msg.ipc_ns_inode = self._ipc_ns_inode
         msg.topics = read_local_topics(self._lib)
         return msg
 
     def _on_remote_state(self, msg: AgnocastDaemonState) -> None:
-        # Skip our own messages.
         if msg.host_uuid == self._host_uuid and msg.ipc_ns_inode == self._ipc_ns_inode:
             return
-        self._remote_states[(msg.host_uuid, msg.ipc_ns_inode)] = msg
+        received_at = self._clock.now().nanoseconds / 1e9
+        self._remote_states[(msg.host_uuid, msg.ipc_ns_inode)] = (msg, received_at)
 
     @property
     def remote_states(self) -> dict:
-        """Latest gossip snapshots from other (host, namespace) pairs."""
+        """Map of ``(host_uuid, ipc_ns_inode)`` to ``(msg, received_at_sec)``."""
         return self._remote_states
 
 

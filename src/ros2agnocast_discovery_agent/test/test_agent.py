@@ -13,7 +13,7 @@ from ros2agnocast_discovery_agent.agent import (
     NODE_NAME_BUFFER_SIZE,
     TopicInfoRet,
     _ioctl_to_endpoint,
-    _read_machine_id,
+    _read_host_uuid,
     read_local_topics,
 )
 
@@ -135,11 +135,11 @@ def test_read_local_topics_handles_topic_without_subscribers():
     assert topics[0].subscribers == []
 
 
-def test_read_machine_id_returns_string():
-    machine_id = _read_machine_id()
-    assert isinstance(machine_id, str)
-    assert len(machine_id) > 0
-    # Either a valid UUID from /etc/machine-id or a random fallback; both
-    # should parse as UUIDs.
+def test_read_host_uuid_returns_uuid_string():
+    host_uuid = _read_host_uuid()
+    assert isinstance(host_uuid, str)
+    assert len(host_uuid) > 0
+    # Either a valid UUID from /proc/sys/kernel/random/boot_id or a random
+    # fallback; both should parse as UUIDs.
     import uuid
-    uuid.UUID(machine_id)
+    uuid.UUID(host_uuid)

@@ -6,7 +6,6 @@ if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 endif()
 
 find_package(ament_cmake REQUIRED)
-find_package(builtin_interfaces REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 if(BUILD_TESTING)
@@ -18,7 +17,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/AgnocastEndpoint.msg"
   "msg/AgnocastTopic.msg"
   "msg/AgnocastDaemonState.msg"
-  DEPENDENCIES builtin_interfaces
 )
 
 ament_package()

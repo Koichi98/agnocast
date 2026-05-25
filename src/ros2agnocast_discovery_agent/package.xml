@@ -11,6 +11,9 @@
   </description>
 
   <maintainer email="keita.morisaki@tier4.jp">Keita Morisaki</maintainer>
+  <maintainer email="sykwer@gmail.com">Takahiro Ishikawa-Aso</maintainer>
+  <maintainer email="koichi.imai.2@tier4.jp">Koichi Imai</maintainer>
+  <maintainer email="ryuta.kambe@tier4.jp">Ryuta Kambe</maintainer>
   <license>Apache License 2.0</license>
 
   <exec_depend>rclpy</exec_depend>

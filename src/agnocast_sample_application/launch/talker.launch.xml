@@ -5,7 +5,7 @@
       should run per IPC namespace; set this to false when including this
       launch from another launch that already spawns the daemon.
     -->
-    <arg name="discovery_agent" default="true"/>
+    <arg name="discovery_agent" default="false"/>
     <include file="$(find-pkg-share ros2agnocast_discovery_agent)/launch/discovery_agent.launch.xml"
              if="$(var discovery_agent)"/>
 

@@ -10,8 +10,7 @@ uint32 schema_version
 # `schema_version` for correctness but useful for debugging mixed-version
 # deployments.
 string agnocast_version
-string host_uuid                   # ECU identity; /etc/machine-id recommended
+string host_uuid                   # ECU identity (per-boot, from /proc/sys/kernel/random/boot_id)
 string host_hostname               # Human-readable hostname
-builtin_interfaces/Time timestamp  # For stale detection
 uint64 ipc_ns_inode                # NS this message describes
 AgnocastTopic[] topics

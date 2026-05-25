@@ -79,13 +79,16 @@ fail() {
 msg=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once /_agnocast_discovery 2>&1) \
     || fail "ros2 topic echo on /_agnocast_discovery timed out or failed" "$msg"
 
-grep -q '^schema_version: 1$'                  <<<"$msg" || fail "schema_version != 1" "$msg"
-grep -q '^host_uuid: [0-9a-f-]\+$'             <<<"$msg" || fail "host_uuid missing or malformed" "$msg"
-grep -q '^host_hostname: '                     <<<"$msg" || fail "host_hostname missing" "$msg"
-grep -q '^ipc_ns_inode: [0-9]\+$'              <<<"$msg" || fail "ipc_ns_inode missing or non-numeric" "$msg"
-grep -q '^timestamp:'                          <<<"$msg" || fail "timestamp missing" "$msg"
-grep -q '^topics:'                             <<<"$msg" || fail "topics field missing" "$msg"
-green "✓ AgnocastDaemonState shape OK (schema_version, host_uuid, host_hostname, ipc_ns_inode, timestamp, topics)"
+grep -q '^schema_version: 1$'                       <<<"$msg" || fail "schema_version != 1" "$msg"
+grep -q '^agnocast_version: \(.*\)$'                <<<"$msg" || fail "agnocast_version missing" "$msg"
+# Assert agnocast_version is non-empty so a misconfigured importlib.metadata
+# lookup is caught (would silently fall back to '' otherwise).
+grep -q '^agnocast_version: ..*$'                   <<<"$msg" || fail "agnocast_version is empty" "$msg"
+grep -q '^host_uuid: [0-9a-f-]\+$'                  <<<"$msg" || fail "host_uuid missing or malformed" "$msg"
+grep -q '^host_hostname: '                          <<<"$msg" || fail "host_hostname missing" "$msg"
+grep -q '^ipc_ns_inode: [0-9]\+$'                   <<<"$msg" || fail "ipc_ns_inode missing or non-numeric" "$msg"
+grep -q '^topics:'                                  <<<"$msg" || fail "topics field missing" "$msg"
+green "✓ AgnocastDaemonState shape OK (schema_version, agnocast_version, host_uuid, host_hostname, ipc_ns_inode, topics)"
 
 # ----- QoS sanity (Reliable + TransientLocal + Liveliness Automatic) -----
 qos=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic info /_agnocast_discovery --verbose 2>&1) \
@@ -94,6 +97,20 @@ grep -q "Reliability: RELIABLE"          <<<"$qos" || fail "QoS reliability != R
 grep -q "Durability: TRANSIENT_LOCAL"    <<<"$qos" || fail "QoS durability != TRANSIENT_LOCAL" "$qos"
 grep -q "Liveliness: AUTOMATIC"          <<<"$qos" || fail "QoS liveliness != AUTOMATIC" "$qos"
 green "✓ QoS profile: RELIABLE + TRANSIENT_LOCAL + Liveliness AUTOMATIC"
+
+# ----- pop a talker in the same IPC NS and assert its endpoint shows up -----
+yellow "Starting agnocast_sample_application talker (discovery_agent=false to avoid a 2nd agent)..."
+ros2 launch agnocast_sample_application talker.launch.xml discovery_agent:=false \
+    > "$LOG_DIR/talker.log" 2>&1 &
+# Give the talker time to call its Publisher<T> ctor and the daemon time to
+# observe it on its next 1 Hz tick.
+sleep 3
+msg_with_topic=$(timeout "$ECHO_TIMEOUT_SEC" ros2 topic echo --once /_agnocast_discovery 2>&1) \
+    || fail "ros2 topic echo (with talker running) timed out" "$msg_with_topic"
+
+grep -q 'topic_name: /my_topic'      <<<"$msg_with_topic" || fail "talker's /my_topic not seen in snapshot" "$msg_with_topic"
+grep -q 'node_name: /talker_node'    <<<"$msg_with_topic" || fail "talker_node not seen in snapshot" "$msg_with_topic"
+green "✓ talker's /my_topic + /talker_node appear in the snapshot"
 
 green ""
 green "===== ALL CHECKS PASSED ====="
