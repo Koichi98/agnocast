@@ -232,6 +232,15 @@ class DiscoveryAgent(Node):
         """Build and publish the current local AgnocastDaemonState."""
         msg = self.build_state()
         self._pub.publish(msg)
+        # DEBUG: log every published snapshot so we can see what this NS is announcing
+        topic_summary = ', '.join(
+            f'{t.topic_name}(pub={len(t.publishers)},sub={len(t.subscribers)})'
+            for t in msg.topics
+        ) or '<none>'
+        self.get_logger().info(
+            f'[DEBUG-PUB] published snapshot: host_uuid={msg.host_uuid} '
+            f'hostname={msg.host_hostname} ipc_ns_inode={msg.ipc_ns_inode} '
+            f'topics({len(msg.topics)})=[{topic_summary}]')
 
     def build_state(self) -> AgnocastDaemonState:
         msg = AgnocastDaemonState()
@@ -246,8 +255,20 @@ class DiscoveryAgent(Node):
         return msg
 
     def _on_remote_state(self, msg: AgnocastDaemonState) -> None:
+        # DEBUG: log every received gossip msg (including our own) so we can
+        # tell whether DDS is actually delivering to subscribers at all.
+        topic_summary = ', '.join(
+            f'{t.topic_name}(pub={len(t.publishers)},sub={len(t.subscribers)})'
+            for t in msg.topics
+        ) or '<none>'
+        is_self = (msg.host_uuid == self._host_uuid
+                   and msg.ipc_ns_inode == self._ipc_ns_inode)
+        self.get_logger().info(
+            f'[DEBUG-SUB] received gossip: host_uuid={msg.host_uuid} '
+            f'hostname={msg.host_hostname} ipc_ns_inode={msg.ipc_ns_inode} '
+            f'self={is_self} topics({len(msg.topics)})=[{topic_summary}]')
         # Skip our own messages.
-        if msg.host_uuid == self._host_uuid and msg.ipc_ns_inode == self._ipc_ns_inode:
+        if is_self:
             return
         self._remote_states[(msg.host_uuid, msg.ipc_ns_inode)] = msg
 

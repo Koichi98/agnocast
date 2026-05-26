@@ -1,4 +1,5 @@
 import ctypes
+import sys
 from enum import Enum
 from contextlib import contextmanager
 from ros2cli.node.strategy import NodeStrategy
@@ -12,6 +13,22 @@ from ros2agnocast.discovery import (
     filter_fresh,
     warn_if_no_announcements,
 )
+
+
+def _dbg(msg: str) -> None:
+    """Print a debug line to stderr (keeps stdout clean for topic listing)."""
+    print(f'[DEBUG list_agnocast] {msg}', file=sys.stderr)
+
+
+def _format_snapshot(snap) -> str:
+    topic_summary = ', '.join(
+        f'{t.topic_name}(pub={len(t.publishers)},sub={len(t.subscribers)})'
+        for t in snap.topics
+    ) or '<none>'
+    return (f'host_uuid={snap.host_uuid} hostname={snap.host_hostname} '
+            f'ipc_ns_inode={snap.ipc_ns_inode} '
+            f'ts={snap.timestamp.sec}.{snap.timestamp.nanosec:09d} '
+            f'topics({len(snap.topics)})=[{topic_summary}]')
 
 class BridgeStatus(Enum):
     NONE = 0
@@ -128,16 +145,32 @@ class ListAgnocastVerb(VerbExtension):
                 lib.free_agnocast_topics(agnocast_topic_array, topic_count)
 
             agnocast_topics = remove_service_topic(agnocast_topics)
+            _dbg(f'local ioctl topics (after SRV filter, {len(agnocast_topics)}): '
+                 f'{sorted(agnocast_topics)}')
 
             # Merge in topics seen via /_agnocast_discovery gossip (other IPC
             # namespaces and other ECUs in the same ROS_DOMAIN_ID).
+            _dbg(f'collecting /_agnocast_discovery gossip for '
+                 f'{args.gossip_timeout}s ...')
             raw_snapshots = collect_announcements(
                 node, timeout_sec=args.gossip_timeout)
+            _dbg(f'raw gossip snapshots received: {len(raw_snapshots)}')
+            for i, snap in enumerate(raw_snapshots):
+                _dbg(f'  raw[{i}]: {_format_snapshot(snap)}')
             warn_if_no_announcements(raw_snapshots, args.gossip_timeout)
             snapshots = filter_fresh(raw_snapshots, node=node)
-            for name in all_topic_names(snapshots):
+            _dbg(f'fresh snapshots after staleness filter '
+                 f'({len(snapshots)}/{len(raw_snapshots)}):')
+            for i, snap in enumerate(snapshots):
+                _dbg(f'  fresh[{i}]: {_format_snapshot(snap)}')
+            gossip_topic_names = all_topic_names(snapshots)
+            _dbg(f'gossip topic union ({len(gossip_topic_names)}): '
+                 f'{sorted(gossip_topic_names)}')
+            for name in gossip_topic_names:
                 if not name.startswith('/AGNOCAST_SRV_'):
                     agnocast_topics.append(name)
+            _dbg(f'agnocast_topics after merging gossip ({len(agnocast_topics)}): '
+                 f'{sorted(set(agnocast_topics))}')
 
             # Get ros2 topics
             ros2_topics_data = get_topic_names_and_types(node=node)
