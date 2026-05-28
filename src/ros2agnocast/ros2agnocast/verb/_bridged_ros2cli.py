@@ -7,8 +7,10 @@ import rclpy
 from ros2cli.node.strategy import NodeStrategy
 from ros2agnocast.discovery import (
     DEFAULT_COLLECT_TIMEOUT_SEC,
-    collect_announcements,
-    filter_fresh,
+    add_gossip_timeout_arg,
+    collect_announcements_with_fallback,
+    warn_if_gossip_timeout_overridden,
+    warn_if_using_fallback,
 )
 
 DEFAULT_BRIDGE_TIMEOUT = 10.0   # seconds
@@ -35,12 +37,7 @@ def add_bridge_arguments(parser) -> None:
              '(default: %.1f). '
              'If no publisher appears within this time, the topic is assumed to not '
              'exist in Agnocast.' % DEFAULT_BRIDGE_TIMEOUT)
-    parser.add_argument(
-        '--gossip-timeout',
-        type=float,
-        default=DEFAULT_COLLECT_TIMEOUT_SEC,
-        help='Seconds to wait for /_agnocast_discovery gossip from peer '
-             'namespaces / ECUs (default: %(default)ss).')
+    add_gossip_timeout_arg(parser)
 
 
 def wait_for_ros2_publisher(node, topic_name: str, bridge_timeout: float, *, context=None) -> bool:
@@ -76,8 +73,8 @@ def lookup_topic_msg_type(topic_name: str, gossip_timeout: float):
 
         if not type_name:
             # If not found, fall back to /_agnocast_discovery to look up the Agnocast topic.
-            raw_snapshots = collect_announcements(proxy_node, timeout_sec=gossip_timeout)
-            snapshots = filter_fresh(raw_snapshots, node=proxy_node)
+            snapshots, used_fallback = collect_announcements_with_fallback(proxy_node, timeout_sec=gossip_timeout)
+            warn_if_using_fallback(proxy_node, used_fallback, gossip_timeout)
             type_name = next(
                 (topic.type_name
                  for snap in snapshots
@@ -134,6 +131,7 @@ def spawn_bridge_and_run(args, topic_name: str, action_fn: Callable) -> int:
 
     Returns the exit code from action_fn, or 1 on failure.
     """
+    warn_if_gossip_timeout_overridden(args)
     print(
         "[*] Triggering A2R bridge for '%s'. "
         'This may take a few seconds...' % topic_name)
