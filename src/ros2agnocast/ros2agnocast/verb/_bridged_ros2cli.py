@@ -53,15 +53,15 @@ def wait_for_ros2_publisher(node, topic_name: str, bridge_timeout: float, *, con
     return False
 
 
-def lookup_topic_msg_type(topic_name: str, gossip_timeout: float):
-    """Resolve the ROS message class for topic_name.
+def resolve_type_name(topic_name: str, gossip_timeout: float):
+    """Resolve the ROS type string for topic_name.
 
     First checks the live ROS 2 graph for the topic type.  If the topic is not
     found there, falls back to /_agnocast_discovery gossip to resolve the type
     for Agnocast-only topics.
 
-    Returns the message class on success, or None if the type name cannot be
-    resolved or the message class cannot be loaded (error is printed to stdout).
+    Returns the type string on success, or None if the type name cannot be
+    resolved (error is printed to stdout).
     """
     with NodeStrategy(None) as proxy_node:
         # First, check if the topic already exists in the ROS 2 graph.
@@ -90,6 +90,15 @@ def lookup_topic_msg_type(topic_name: str, gossip_timeout: float):
             % topic_name)
         return None
 
+    return type_name
+
+
+def load_msg_class(type_name: str):
+    """Load and return the ROS message class for type_name.
+
+    Returns the message class on success, or None if the class cannot be
+    loaded (error is printed to stdout).
+    """
     try:
         from rosidl_runtime_py.utilities import get_message
         return get_message(type_name)
@@ -126,9 +135,11 @@ def _create_dummy_subscription(topic_name: str, msg_type):
         rclpy.try_shutdown(context=ctx)
 
 
-def spawn_bridge_and_run(args, topic_name: str, action_fn: Callable) -> int:
+def spawn_bridge_and_run(
+        args, topic_name: str, action_fn: Callable, *, message_type: str | None = None) -> int:
     """Resolve the message type for topic_name, trigger the A2R bridge, and run action_fn(args).
 
+    message_type: if provided, skip discovery and use this type string directly.
     Returns the exit code from action_fn, or 1 on failure.
     """
     warn_if_gossip_timeout_overridden(args)
@@ -136,12 +147,22 @@ def spawn_bridge_and_run(args, topic_name: str, action_fn: Callable) -> int:
         "[*] Triggering A2R bridge for '%s'. "
         'This may take a few seconds...' % topic_name)
 
-    # Phase 1: resolve message type via the ROS 2 graph or /_agnocast_discovery gossip.
-    msg_type = lookup_topic_msg_type(topic_name, args.gossip_timeout)
+    # Phase 1: resolve type name.
+    # If the caller already supplied a type string (e.g. ros2 topic echo_agnocast <topic> <type>),
+    # use it directly; otherwise look it up via the ROS 2 graph or /_agnocast_discovery gossip.
+    if message_type is not None:
+        type_name = message_type
+    else:
+        type_name = resolve_type_name(topic_name, args.gossip_timeout)
+        if type_name is None:
+            return 1
+
+    # Phase 2: load message class from type name.
+    msg_type = load_msg_class(type_name)
     if msg_type is None:
         return 1
 
-    # Phase 2: start dummy subscription and wait for a ROS 2 publisher to appear.
+    # Phase 3: start dummy subscription and wait for a ROS 2 publisher to appear.
     # TODO: Ideally, we should wait until bridges have come up for all Agnocast publishers
     #       across every namespace.  For simplicity, we currently only wait for a single
     #       publisher to appear.

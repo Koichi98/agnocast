@@ -11,4 +11,5 @@ class TopicEchoAgnocastVerb(EchoVerb):
 
     def main(self, *, args):
         return spawn_bridge_and_run(
-            args, topic_name=args.topic_name, action_fn=lambda a: EchoVerb.main(self, args=a))
+            args, topic_name=args.topic_name, action_fn=lambda a: EchoVerb.main(self, args=a),
+            message_type=args.message_type)
