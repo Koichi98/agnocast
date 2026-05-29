@@ -4,6 +4,7 @@ import time
 from typing import Callable
 
 import rclpy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from ros2cli.node.strategy import NodeStrategy
 from ros2agnocast.discovery import (
     DEFAULT_COLLECT_TIMEOUT_SEC,
@@ -124,7 +125,12 @@ def _create_dummy_subscription(topic_name: str, msg_type):
         node = rclpy.create_node(
             '_ros2agnocast_cli_%d' % os.getpid(),
             context=ctx)
-        node.create_subscription(msg_type, topic_name, lambda _msg: None, 10)
+        qos = QoSProfile(
+            depth=1,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE,
+        )
+        node.create_subscription(msg_type, topic_name, lambda _msg: None, qos)
         yield node, ctx
     finally:
         if node is not None:
