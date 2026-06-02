@@ -239,11 +239,11 @@ void PerformanceBridgeManager::check_and_remove_service_bridges()
     RCLCPP_WARN(
       logger_, "Removing R2A service bridge for '%s': %s", service_name.c_str(), reason.c_str());
 
-    if (r2a_srv_it->second.result.ros_srv_cb_group) {
-      executor_->stop_callback_group(r2a_srv_it->second.result.ros_srv_cb_group);
+    if (r2a_srv_it->second.result.srv_cb_group) {
+      executor_->stop_callback_group(r2a_srv_it->second.result.srv_cb_group);
     }
-    if (r2a_srv_it->second.result.agno_client_cb_group) {
-      executor_->stop_callback_group(r2a_srv_it->second.result.agno_client_cb_group);
+    if (r2a_srv_it->second.result.client_cb_group) {
+      executor_->stop_callback_group(r2a_srv_it->second.result.client_cb_group);
     }
     r2a_srv_it = active_r2a_service_bridges_.erase(r2a_srv_it);
   }
@@ -404,7 +404,7 @@ void PerformanceBridgeManager::create_service_bridge_if_needed(
         active_r2a_service_bridges_, shadow_node_namespace, shadow_node_name);
     }
 
-    PerformanceServiceBridgeResult result =
+    ServiceBridgeEntity result =
       loader_.create_r2a_service_bridge(container_node_, service_name, service_type, service_qos);
     if (result.entity_handle) {
       active_r2a_service_bridges_.emplace(

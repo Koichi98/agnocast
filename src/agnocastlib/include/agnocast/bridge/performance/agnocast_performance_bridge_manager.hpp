@@ -29,11 +29,10 @@ private:
 
   struct R2AServiceBridgeItem
   {
-    PerformanceServiceBridgeResult result;
+    ServiceBridgeEntity result;
     std::shared_ptr<rcl_node_t> shadow_node;
 
-    R2AServiceBridgeItem(
-      PerformanceServiceBridgeResult && result, std::shared_ptr<rcl_node_t> && shadow_node)
+    R2AServiceBridgeItem(ServiceBridgeEntity && result, std::shared_ptr<rcl_node_t> && shadow_node)
     : result(std::move(result)), shadow_node(std::move(shadow_node))
     {
     }

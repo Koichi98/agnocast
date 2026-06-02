@@ -10,7 +10,7 @@
 
 #include "@(header_path)"
 
-extern "C" PerformanceServiceBridgeResult create_r2a_service_bridge_@(snake_type_name)(
+extern "C" ServiceBridgeEntity create_r2a_service_bridge_@(snake_type_name)(
   rclcpp::Node::SharedPtr node,
   const std::string & service_name,
   const rclcpp::QoS & qos /*QoS for the target Agnocast service*/)
