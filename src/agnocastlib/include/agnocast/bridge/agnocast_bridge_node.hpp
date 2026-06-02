@@ -110,6 +110,18 @@ struct RosToAgnocastServiceRequestPolicy
   }
 };
 
+// Policy for agnocast::Client.
+// Requests a bridge that forwards requests from Agnocast to ROS 2 (A2R).
+struct AgnocastToRosServiceRequestPolicy
+{
+  template <typename ServiceT>
+  static void request_bridge(const std::string & service_name)
+  {
+    request_service_bridge_core<ServiceT>(
+      service_name, BridgeDirection::AGNOCAST_TO_ROS2, std::nullopt);
+  }
+};
+
 // Dummy policy to avoid circular header dependencies.
 // Used internally by BridgeNode, Service, and Client where bridge requests
 // are not needed and would cause include cycles.
@@ -122,6 +134,7 @@ struct NoBridgeRequestPolicy
   }
 
 private:
+  static void request_bridge_impl(const std::string &) {}
   static void request_bridge_impl(const std::string &, topic_local_id_t) {}
   template <typename NodeT>
   static void request_bridge_impl(NodeT *, const std::string &)
@@ -242,8 +255,10 @@ std::shared_ptr<PubsubBridgeBase> start_a2r_pubsub_node(
 template <typename ServiceT>
 class RosToAgnocastServiceBridge : public ServiceBridgeBase
 {
+  using AgnoClient = agnocast::BasicClient<ServiceT, NoBridgeRequestPolicy>;
+
   typename rclcpp::Service<ServiceT>::SharedPtr ros_srv_;
-  typename agnocast::Client<ServiceT>::SharedPtr agno_client_;
+  typename AgnoClient::SharedPtr agno_client_;
   rclcpp::CallbackGroup::SharedPtr ros_srv_cb_group_;
   rclcpp::CallbackGroup::SharedPtr agno_client_cb_group_;
 
@@ -256,8 +271,8 @@ public:
     agno_client_cb_group_ =
       parent_node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
-    agno_client_ = std::make_shared<agnocast::Client<ServiceT>>(
-      parent_node.get(), service_name, qos, agno_client_cb_group_);
+    agno_client_ =
+      std::make_shared<AgnoClient>(parent_node.get(), service_name, qos, agno_client_cb_group_);
 
     ros_srv_ = parent_node->create_service<ServiceT>(
       service_name,

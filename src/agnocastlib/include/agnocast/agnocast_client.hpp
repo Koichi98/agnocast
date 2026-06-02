@@ -24,6 +24,8 @@
 namespace agnocast
 {
 
+// Forward declaration.
+struct AgnocastToRosServiceRequestPolicy;
 struct NoBridgeRequestPolicy;
 
 bool service_is_ready_core(const std::string & service_name);
@@ -33,17 +35,12 @@ bool wait_for_service_nanoseconds(
 
 extern int agnocast_fd;
 
-/**
- * @brief Service client for zero-copy Agnocast service communication. The service/client API is
- * experimental and may change in future versions.
- * @tparam ServiceT The ROS service type (e.g., std_srvs::srv::SetBool).
- */
-// AGNOCAST_PUBLIC
-template <typename ServiceT>
-class Client
+// Internal implementation - users should use agnocast::Client<ServiceT> instead.
+template <typename ServiceT, typename BridgeRequestPolicy>
+class BasicClient
 {
 public:
-  using SharedPtr = std::shared_ptr<Client<ServiceT>>;
+  using SharedPtr = std::shared_ptr<BasicClient<ServiceT, BridgeRequestPolicy>>;
 
   /// Future that resolves to the service response. Returned by async_send_request() (no-callback
   /// overload).
@@ -115,7 +112,7 @@ private:
 
 public:
   template <typename NodeT>
-  Client(
+  BasicClient(
     NodeT * node, const std::string & service_name, const rclcpp::QoS & qos_arg,
     rclcpp::CallbackGroup::SharedPtr group)
   : node_(node),
@@ -164,6 +161,8 @@ public:
           node, topic_name, qos, std::move(cb), options);
       },
       node_);
+
+    BridgeRequestPolicy::template request_bridge<ServiceT>(service_name_);
   }
 
   /** @brief Allocate a request message in shared memory.
@@ -246,5 +245,14 @@ public:
     return FutureAndRequestId(std::move(future), seqno);
   }
 };
+
+/**
+ * @brief Service client for zero-copy Agnocast service communication. The service/client API is
+ * experimental and may change in future versions.
+ * @tparam ServiceT The ROS service type (e.g., std_srvs::srv::SetBool).
+ */
+// AGNOCAST_PUBLIC
+template <typename ServiceT>
+using Client = BasicClient<ServiceT, AgnocastToRosServiceRequestPolicy>;
 
 }  // namespace agnocast

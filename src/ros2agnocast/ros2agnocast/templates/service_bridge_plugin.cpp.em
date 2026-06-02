@@ -16,14 +16,14 @@ extern "C" PerformanceServiceBridgeResult create_r2a_service_bridge_@(snake_type
   const rclcpp::QoS & qos /*QoS for the target Agnocast service*/)
 {
   using ServiceT = @(cpp_type);
+  using AgnoClient = agnocast::BasicClient<ServiceT, agnocast::NoBridgeRequestPolicy>;
 
   auto srv_cb_group =
     node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
   auto client_cb_group =
     node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
-  auto agno_client = agnocast::create_client<ServiceT>(
-    node.get(), service_name, qos, client_cb_group);
+  auto agno_client = std::make_shared<AgnoClient>(node.get(), service_name, qos, client_cb_group);
 
   auto ros_srv = node->create_service<ServiceT>(
     service_name,
