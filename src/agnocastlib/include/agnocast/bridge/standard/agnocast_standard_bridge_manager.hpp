@@ -6,6 +6,7 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -47,15 +48,31 @@ private:
     bool is_requested_r2a;
     bool is_requested_a2r;
 
+    // Refreshed on every daemon (cross-NS) bridge request. While unexpired,
+    // the bridge is created without a same-graph DDS counterpart (which can't
+    // exist until the peer NS's bridge is also up) and is shielded from
+    // demand-based teardown. Once the daemon stops asserting the cross-NS
+    // need, expiry returns the bridge to normal on-demand lifecycle.
+    std::chrono::steady_clock::time_point daemon_forced_until_r2a;
+    std::chrono::steady_clock::time_point daemon_forced_until_a2r;
+
     void reset_r2a()
     {
       target_id_r2a = -1;
       is_requested_r2a = false;
+      daemon_forced_until_r2a = {};
     }
     void reset_a2r()
     {
       target_id_a2r = -1;
       is_requested_a2r = false;
+      daemon_forced_until_a2r = {};
+    }
+
+    bool is_daemon_forced(bool is_r2a) const
+    {
+      return std::chrono::steady_clock::now() <
+             (is_r2a ? daemon_forced_until_r2a : daemon_forced_until_a2r);
     }
   };
 
@@ -100,10 +117,12 @@ private:
   void start_ros_execution();
 
   void on_mq_request(mqd_t fd);
+  void on_daemon_mq_request(mqd_t fd);
   void on_signal();
   std::string on_socket_request() const;
 
   void register_pubsub_request(const MqMsgBridge & req);
+  void register_daemon_pubsub_request(const MqMsgDaemonBridge & req);
 
   static BridgeKernelResult try_add_pubsub_bridge_to_kernel(
     const std::string & topic_name, bool is_r2a);

@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <chrono>
 #include <csignal>
 #include <cstring>
 #include <stdexcept>
@@ -16,6 +17,11 @@
 
 namespace agnocast
 {
+
+// Longer than the daemon's publish interval (1 s) so a few missed daemon
+// ticks don't tear down a healthy cross-NS bridge, short enough that a
+// genuinely vanished remote endpoint stops being forced promptly.
+constexpr std::chrono::seconds DAEMON_FORCE_TTL{5};
 
 StandardBridgeManager::StandardBridgeManager(pid_t target_pid)
 : target_pid_(target_pid),
@@ -71,6 +77,9 @@ void StandardBridgeManager::run()
   event_loop_.set_mq_handler([this](int fd) { this->on_mq_request(fd); });
   event_loop_.set_signal_handler([this]() { this->on_signal(); });
   event_loop_.set_socket_handler([this]() { return this->on_socket_request(); });
+  event_loop_.register_aux_mq(
+    create_mq_name_for_daemon_bridge(target_pid_), DAEMON_BRIDGE_MQ_MAX_MESSAGES,
+    DAEMON_BRIDGE_MQ_MESSAGE_SIZE, [this](int fd) { this->on_daemon_mq_request(fd); });
 
   while (!shutdown_requested_) {
     if (!event_loop_.spin_once(EVENT_LOOP_TIMEOUT_MS)) {
@@ -122,6 +131,39 @@ void StandardBridgeManager::on_mq_request(mqd_t fd)
     } else {
       register_pubsub_request(req);
     }
+  }
+}
+
+void StandardBridgeManager::on_daemon_mq_request(mqd_t fd)
+{
+  MqMsgDaemonBridge req{};
+  while (mq_receive(fd, reinterpret_cast<char *>(&req), sizeof(req), nullptr) > 0) {
+    if (shutdown_requested_) {
+      break;
+    }
+    register_daemon_pubsub_request(req);
+  }
+}
+
+void StandardBridgeManager::register_daemon_pubsub_request(const MqMsgDaemonBridge & req)
+{
+  const std::string topic_name = static_cast<const char *>(req.topic_name);
+
+  auto it = managed_pubsub_bridges_.find(topic_name);
+  if (it == managed_pubsub_bridges_.end()) {
+    // The daemon targets the process that owns the endpoint, so its factory is
+    // normally already registered. A miss means the endpoint was torn down
+    // between the daemon's snapshot and this request; let it lapse.
+    RCLCPP_DEBUG(
+      logger_, "Daemon bridge request for unregistered topic '%s'; ignoring.", topic_name.c_str());
+    return;
+  }
+
+  const auto forced_until = std::chrono::steady_clock::now() + DAEMON_FORCE_TTL;
+  if (req.direction == BridgeDirection::ROS2_TO_AGNOCAST) {
+    it->second.daemon_forced_until_r2a = forced_until;
+  } else {
+    it->second.daemon_forced_until_a2r = forced_until;
   }
 }
 
@@ -357,9 +399,13 @@ void StandardBridgeManager::process_managed_pubsub_bridge(const DirectedPubsubBr
             : get_agnocast_publisher_count(topic_name).count) <= 0) {
     return;
   }
+  // A daemon-forced cross-NS bridge skips the same-graph DDS counterpart check:
+  // that counterpart is created by the peer namespace's bridge, which can't
+  // come up until this one does.
   if (
-    is_r2a ? !has_external_ros2_publisher(container_node_.get(), topic_name)
-           : !has_external_ros2_subscriber(container_node_.get(), topic_name)) {
+    !entry.is_daemon_forced(is_r2a) &&
+    (is_r2a ? !has_external_ros2_publisher(container_node_.get(), topic_name)
+            : !has_external_ros2_subscriber(container_node_.get(), topic_name))) {
     return;
   }
 
@@ -414,6 +460,13 @@ bool StandardBridgeManager::should_remove_pubsub_bridge(const std::string & topi
         is_r2a ? "R2A" : "A2R");
     }
     return true;
+  }
+
+  // Keep a daemon-forced cross-NS bridge alive even without a same-graph DDS
+  // counterpart; see process_managed_pubsub_bridge for why none exists yet.
+  auto it = managed_pubsub_bridges_.find(topic_name);
+  if (it != managed_pubsub_bridges_.end() && it->second.is_daemon_forced(is_r2a)) {
+    return false;
   }
 
   return !is_demanded_by_ros2;

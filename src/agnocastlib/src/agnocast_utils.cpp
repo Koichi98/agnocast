@@ -91,6 +91,20 @@ std::string create_mq_name_for_bridge(const pid_t pid)
   return name;
 }
 
+std::string create_mq_name_for_daemon_bridge(const pid_t pid)
+{
+  if (pid == PERFORMANCE_BRIDGE_VIRTUAL_PID) {
+    std::string name = PERFORMANCE_DAEMON_BRIDGE_MQ_NAME;
+    const char * domain_id_env = getenv("ROS_DOMAIN_ID");
+    const std::string domain_id = domain_id_env != nullptr ? domain_id_env : "";
+    if (!domain_id.empty()) {
+      name += "_d" + domain_id;
+    }
+    return name;
+  }
+  return std::string(DAEMON_BRIDGE_MQ_PREFIX) + "@" + std::to_string(pid);
+}
+
 uint64_t get_self_ipc_ns_inode()
 {
   struct stat st
