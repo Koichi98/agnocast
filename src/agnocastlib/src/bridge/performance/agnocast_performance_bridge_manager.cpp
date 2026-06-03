@@ -19,7 +19,7 @@ namespace agnocast
 PerformanceBridgeManager::PerformanceBridgeManager()
 : logger_(rclcpp::get_logger("agnocast_performance_bridge_manager")),
   event_loop_(logger_),
-  loader_(logger_)
+  loader_(std::make_shared<PerformanceBridgeLoader>(logger_))
 {
   if (rclcpp::ok()) {
     rclcpp::shutdown();
@@ -65,7 +65,7 @@ void PerformanceBridgeManager::run()
 
     check_and_create_pubsub_bridges();
     check_and_remove_pubsub_bridges();
-    check_and_remove_service_bridges();
+    check_and_update_service_bridges();
     check_and_remove_request_cache();
     check_and_request_shutdown();
   }
@@ -110,7 +110,14 @@ void PerformanceBridgeManager::on_mq_request(int fd)
   }
 
   if (msg.is_service) {
-    create_service_bridge_if_needed(msg.srv_target, msg.direction);
+    BridgeManagerContext ctx{container_node_, executor_, logger_, loader_, nullptr};
+
+    ServiceBridgeItem sb_item;
+    sb_item.handle_request(msg, active_service_bridges_, ctx);
+    if (sb_item.state() != ServiceBridgeState::NONE) {
+      const std::string & key = sb_item.service_name();
+      active_service_bridges_.emplace(key, std::move(sb_item));
+    }
   } else {
     std::string topic_name = static_cast<const char *>(msg.pubsub_target.topic_name);
     topic_local_id_t target_id = msg.pubsub_target.target_id;
@@ -224,28 +231,19 @@ void PerformanceBridgeManager::check_and_remove_pubsub_bridges()
   }
 }
 
-void PerformanceBridgeManager::check_and_remove_service_bridges()
+void PerformanceBridgeManager::check_and_update_service_bridges()
 {
-  auto r2a_srv_it = active_r2a_service_bridges_.begin();
-  while (r2a_srv_it != active_r2a_service_bridges_.end()) {
-    const std::string & service_name = r2a_srv_it->first;
+  auto it = active_service_bridges_.begin();
+  while (it != active_service_bridges_.end()) {
+    BridgeManagerContext ctx{container_node_, executor_, logger_, loader_, nullptr};
+    it->second.check_and_update(active_service_bridges_, ctx);
 
-    std::string reason;
-    if (is_agnocast_service_alive(service_name, reason)) {
-      ++r2a_srv_it;
+    if (it->second.state() != ServiceBridgeState::NONE) {
+      ++it;
       continue;
     }
 
-    RCLCPP_WARN(
-      logger_, "Removing R2A service bridge for '%s': %s", service_name.c_str(), reason.c_str());
-
-    if (r2a_srv_it->second.result.srv_cb_group) {
-      executor_->stop_callback_group(r2a_srv_it->second.result.srv_cb_group);
-    }
-    if (r2a_srv_it->second.result.client_cb_group) {
-      executor_->stop_callback_group(r2a_srv_it->second.result.client_cb_group);
-    }
-    r2a_srv_it = active_r2a_service_bridges_.erase(r2a_srv_it);
+    it = active_service_bridges_.erase(it);
   }
 }
 
@@ -330,10 +328,10 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
     PerformancePubsubBridgeResult result;
     if (is_r2a) {
       auto qos = get_subscriber_qos(topic_name, qos_source_id);
-      result = loader_.create_r2a_pubsub_bridge(container_node_, topic_name, message_type, qos);
+      result = loader_->create_r2a_pubsub_bridge(container_node_, topic_name, message_type, qos);
     } else {
       auto qos = get_publisher_qos(topic_name, qos_source_id);
-      result = loader_.create_a2r_pubsub_bridge(container_node_, topic_name, message_type, qos);
+      result = loader_->create_a2r_pubsub_bridge(container_node_, topic_name, message_type, qos);
     }
 
     if (result.entity_handle) {
@@ -362,59 +360,6 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
       logger_, "Unknown error creating bridge for '%s'. Removing invalid request ID %d.",
       topic_name.c_str(), qos_source_id);
     requests.erase(qos_source_id);
-  }
-}
-
-void PerformanceBridgeManager::create_service_bridge_if_needed(
-  const ServiceBridgeTargetInfoWithType & target, BridgeDirection direction)
-{
-  std::string service_name = static_cast<const char *>(target.service_name);
-  std::string service_type = static_cast<const char *>(target.service_type);
-  std::string shadow_node_namespace = static_cast<const char *>(target.shadow_node_namespace);
-  std::string shadow_node_name = static_cast<const char *>(target.shadow_node_name);
-
-  if (direction == BridgeDirection::AGNOCAST_TO_ROS2) {
-    // A2R service bridge is not implemented yet.
-    return;
-  }
-
-  try {
-    // Check that the target bridge does not already exist.
-    if (active_r2a_service_bridges_.count(service_name) > 0) {
-      return;
-    }
-
-    // Check that the target service does not already exist in ROS 2.
-    const auto services = container_node_->get_service_names_and_types();
-    bool exists = std::any_of(services.begin(), services.end(), [&service_name](const auto & s) {
-      return s.first == service_name;
-    });
-    if (exists) {
-      RCLCPP_WARN(
-        logger_,
-        "Found a ROS 2 service with the same name while creating the R2A service bridge: '%s'",
-        service_name.c_str());
-    }
-
-    auto service_qos = get_service_qos(service_name);
-
-    std::shared_ptr<rcl_node_t> shadow_node;
-    if (target.create_shadow_node && !shadow_node_name.empty()) {
-      shadow_node = find_or_create_shadow_node(
-        active_r2a_service_bridges_, shadow_node_namespace, shadow_node_name);
-    }
-
-    ServiceBridgeEntity result =
-      loader_.create_r2a_service_bridge(container_node_, service_name, service_type, service_qos);
-    if (result.entity_handle) {
-      active_r2a_service_bridges_.emplace(
-        service_name, R2AServiceBridgeItem(std::move(result), std::move(shadow_node)));
-    }
-  } catch (const std::exception & e) {
-    RCLCPP_WARN(
-      logger_, "Failed to create service bridge for '%s': %s", service_name.c_str(), e.what());
-  } catch (...) {
-    RCLCPP_WARN(logger_, "Unknown error creating service bridge for '%s'", service_name.c_str());
   }
 }
 
