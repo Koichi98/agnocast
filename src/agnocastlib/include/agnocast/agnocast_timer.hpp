@@ -58,16 +58,31 @@ public:
   AGNOCAST_PUBLIC
   virtual bool is_steady() const = 0;
 
+  /** @brief Set a callback to be called when the timer is reset.
+   *
+   * You should aim to make this callback fast and not blocking.
+   * If you need to do a lot of work or wait for some other event, you should
+   * spin it off to another thread.
+   *
+   * Calling it again will override any previously set callback.
+   * An exception will be thrown if the callback is not callable.
+   *
+   * This function is thread-safe.
+   *
+   * @param callback functor to be called whenever timer is reset.
+   */
   AGNOCAST_PUBLIC
   void set_on_reset_callback(const std::function<void(size_t)> & callback)
   {
     if (!callback) {
-      throw std::invalid_argument("callback is nullptr");
+      throw std::invalid_argument("The callback passed to set_on_reset_callback is not callable.");
     }
     std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
     on_reset_callback_ = callback;
   };
 
+  /** @brief Unset the callback registered for reset timer.
+   */
   AGNOCAST_PUBLIC
   void clear_on_reset_callback()
   {
