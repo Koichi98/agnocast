@@ -19,7 +19,7 @@ void TimerBase::reset()
   timer_info->reset();
   canceled_.store(false);
 
-  trigger_on_reset_callback();
+  trigger_on_reset_callback(1);
 }
 
 std::chrono::nanoseconds TimerBase::time_until_trigger()
