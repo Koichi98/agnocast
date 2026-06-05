@@ -2,6 +2,7 @@
 
 #include "agnocast/agnocast_public_api.hpp"
 #include "rclcpp/clock.hpp"
+#include "rclcpp/logging.hpp"
 #include "rclcpp/macros.hpp"
 
 #include <atomic>
@@ -77,8 +78,29 @@ public:
     if (!callback) {
       throw std::invalid_argument("The callback passed to set_on_reset_callback is not callable.");
     }
+
+    auto new_callback =
+      [callback, this](size_t reset_calls) {
+        try {
+          callback(reset_calls);
+        } catch (const std::exception & exception) {
+          RCLCPP_ERROR_STREAM(
+            rclcpp::get_logger("timer" + std::to_string(timer_id_)),
+            "agnocast::TimerBase@"
+              << this << " caught " << typeid(exception).name()
+              << " exception in user-provided callback for the 'on reset' callback: "
+              << exception.what());
+        } catch (...) {
+          RCLCPP_ERROR_STREAM(
+            rclcpp::get_logger("timer" + std::to_string(timer_id_)),
+            "agnocast::TimerBase@" << this
+                                   << " caught unhandled exception in user-provided callback "
+                                   << "for the 'on reset' callback");
+        }
+      };
+
     std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
-    on_reset_callback_ = callback;
+    on_reset_callback_ = new_callback;
   };
 
   /** @brief Unset the callback registered for reset timer.
