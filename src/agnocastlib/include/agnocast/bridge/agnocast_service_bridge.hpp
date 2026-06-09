@@ -48,11 +48,11 @@ class ServiceBridgeItem
   static std::shared_ptr<rcl_node_t> find_or_create_shadow_node(
     const std::pair<std::string, std::string> & identity);
 
-  int get_agno_service_qos(rclcpp::QoS & qos);
+  int get_agno_service_qos(rclcpp::QoS & qos) const;
 
-  bool ros2_service_exists(const BridgeManagerContext & ctx);
-  bool agno_service_exists();
-  bool agno_client_exists();
+  bool ros2_service_exists(const BridgeManagerContext & ctx) const;
+  bool agno_service_exists() const;
+  bool agno_client_exists() const;
 
   int start_r2a_bridge(const BridgeManagerContext & ctx);
   int start_a2r_bridge(const BridgeManagerContext & ctx);

@@ -83,7 +83,7 @@ std::shared_ptr<rcl_node_t> ServiceBridgeItem::find_or_create_shadow_node(
 }
 
 // Returns 0 on success, -1 on error (the error string will be set).
-int ServiceBridgeItem::get_agno_service_qos(rclcpp::QoS & qos)
+int ServiceBridgeItem::get_agno_service_qos(rclcpp::QoS & qos) const
 {
   const std::string request_topic_name = create_service_request_topic_name(service_name_);
 
@@ -121,7 +121,7 @@ int ServiceBridgeItem::get_agno_service_qos(rclcpp::QoS & qos)
 
 // Returns false if the target ROS 2 service does not exist or if an exception occurs while checking
 // it (the reason will be set in the error string).
-bool ServiceBridgeItem::ros2_service_exists(const BridgeManagerContext & ctx)
+bool ServiceBridgeItem::ros2_service_exists(const BridgeManagerContext & ctx) const
 {
   try {
     const auto services = ctx.container_node->get_service_names_and_types();
@@ -143,7 +143,7 @@ bool ServiceBridgeItem::ros2_service_exists(const BridgeManagerContext & ctx)
 
 // Returns false if the target Agnocast service does not exist or if an error occurs while checking
 // it (the reason will be set in the error string).
-bool ServiceBridgeItem::agno_service_exists()
+bool ServiceBridgeItem::agno_service_exists() const
 {
   // TODO(bdm-k): Add a dedicated service-liveness ioctl so we can validate target service state
   // directly without using get_service_qos() as a probe.
@@ -156,7 +156,7 @@ bool ServiceBridgeItem::agno_service_exists()
 
 // Returns false if there is no target Agnocast client or if an error occurs while checking it (the
 // reason will be set in the error string).
-bool ServiceBridgeItem::agno_client_exists()
+bool ServiceBridgeItem::agno_client_exists() const
 {
   const std::string request_topic_name = create_service_request_topic_name(service_name_);
 
