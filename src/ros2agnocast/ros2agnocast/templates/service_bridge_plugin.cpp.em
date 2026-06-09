@@ -11,17 +11,14 @@
 #include "@(header_path)"
 
 extern "C" ServiceBridgeEntity create_r2a_service_bridge_@(snake_type_name)(
-  rclcpp::Node::SharedPtr node,
-  const std::string & service_name,
+  rclcpp::Node::SharedPtr node, const std::string & service_name,
   const rclcpp::QoS & qos /*QoS for the target Agnocast service*/)
 {
   using ServiceT = @(cpp_type);
   using AgnoClient = agnocast::BasicClient<ServiceT, agnocast::NoBridgeRequestPolicy>;
 
-  auto srv_cb_group =
-    node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
-  auto client_cb_group =
-    node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  auto srv_cb_group = node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  auto client_cb_group = node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
   auto agno_client = std::make_shared<AgnoClient>(node.get(), service_name, qos, client_cb_group);
 
@@ -50,4 +47,40 @@ extern "C" ServiceBridgeEntity create_r2a_service_bridge_@(snake_type_name)(
 #endif
 
   return {ros_srv, srv_cb_group, client_cb_group};
+}
+
+extern "C" ServiceBridgeEntity create_a2r_service_bridge_@(snake_type_name)(
+  rclcpp::Node::SharedPtr node, const std::string & service_name, const rclcpp::QoS & qos)
+{
+  using ServiceT = @(cpp_type);
+  using AgnoService = agnocast::BasicService<ServiceT, agnocast::NoBridgeRequestPolicy>;
+
+  auto srv_cb_group = node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  auto client_cb_group = node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+
+  auto ros_client =
+    node->create_client<ServiceT>(service_name, qos.get_rmw_qos_profile(), client_cb_group);
+
+  auto agno_srv = std::make_shared<AgnoService>(
+    node.get(), service_name,
+    [ros_client](
+      typename AgnoService::SharedPtr service_handle,
+      agnocast::ipc_shared_ptr<typename ServiceT::Request> && agno_req) {
+      auto ros_req = std::make_shared<typename ServiceT::Request>();
+      *ros_req = *agno_req;
+
+      ros_client->async_send_request(
+        ros_req, [service_handle = std::move(service_handle), agno_req = std::move(agno_req)](
+                   typename rclcpp::Client<ServiceT>::SharedFuture future) {
+          auto ros_res = future.get();
+          auto agno_res = service_handle->borrow_loaned_response(agno_req);
+          *agno_res = *ros_res;
+          // Resort to copying because a mutable lambda can't be used here.
+          auto agno_req_movable = agno_req;
+          service_handle->send_response(std::move(agno_req_movable), std::move(agno_res));
+        });
+    },
+    qos, srv_cb_group);
+
+  return {agno_srv, srv_cb_group, client_cb_group};
 }

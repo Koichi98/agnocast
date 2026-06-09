@@ -97,7 +97,7 @@ struct AgnocastToRosPubsubRequestPolicy
 // Requests a bridge that forwards requests from ROS 2 to Agnocast (R2A).
 struct RosToAgnocastServiceRequestPolicy
 {
-  template <typename NodeT, typename ServiceT>
+  template <typename ServiceT, typename NodeT>
   static void request_bridge(NodeT * node, const std::string & service_name)
   {
     std::optional<std::pair<std::string, std::string>> shadow_node_identity{std::nullopt};

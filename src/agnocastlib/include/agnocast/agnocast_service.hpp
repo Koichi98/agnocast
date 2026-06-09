@@ -139,8 +139,6 @@ private:
         node, topic_name, qos_,
         wrap_deferred_service_callback_for_subscriber(std::forward<Func>(callback)), options);
     }
-
-    BridgeRequestPolicy::template request_bridge<NodeT, ServiceT>(node, service_name_);
   }
 
 public:
@@ -153,6 +151,7 @@ public:
   : node_(node), qos_(rclcpp::QoS(qos).durability_volatile())
   {
     constructor_impl(node, service_name, std::forward<Func>(callback), group);
+    BridgeRequestPolicy::template request_bridge<ServiceT>(node, service_name_);
   }
 
   template <typename Func>
@@ -162,6 +161,7 @@ public:
   : node_(node), qos_(rclcpp::QoS(qos).durability_volatile())
   {
     constructor_impl(node, service_name, std::forward<Func>(callback), group);
+    BridgeRequestPolicy::template request_bridge<ServiceT>(node, service_name_);
   }
 
   /**
