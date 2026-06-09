@@ -391,11 +391,10 @@ void ServiceBridgeItem::check_and_update(const BridgeManagerContext & ctx)
   }
 }
 
-void ServiceBridgeItem::handle_request(const MqMsgBridge & msg, const BridgeManagerContext & ctx)
+void ServiceBridgeItem::handle_request_with_direction(
+  BridgeDirection direction, const BridgeManagerContext & ctx)
 {
-  update_configuration(msg);
-
-  switch (msg.direction) {
+  switch (direction) {
     case BridgeDirection::ROS2_TO_AGNOCAST:
       if (state_ == ServiceBridgeState::NONE || state_ == ServiceBridgeState::PENDING) {
         if (start_r2a_bridge(ctx) != 0) {
@@ -413,27 +412,17 @@ void ServiceBridgeItem::handle_request(const MqMsgBridge & msg, const BridgeMana
   }
 }
 
+void ServiceBridgeItem::handle_request(const MqMsgBridge & msg, const BridgeManagerContext & ctx)
+{
+  update_configuration(msg);
+  handle_request_with_direction(msg.direction, ctx);
+}
+
 void ServiceBridgeItem::handle_request(
   const MqMsgPerformanceBridge & msg, const BridgeManagerContext & ctx)
 {
   update_configuration(msg);
-
-  switch (msg.direction) {
-    case BridgeDirection::ROS2_TO_AGNOCAST:
-      if (state_ == ServiceBridgeState::NONE || state_ == ServiceBridgeState::PENDING) {
-        if (start_r2a_bridge(ctx) != 0) {
-          RCLCPP_WARN(
-            ctx.logger, "Failed to start R2A service bridge for '%s': %s", service_name_.c_str(),
-            get_error_string());
-        }
-      }
-      break;
-    case BridgeDirection::AGNOCAST_TO_ROS2:
-      if (state_ == ServiceBridgeState::NONE) {
-        state_ = ServiceBridgeState::PENDING;
-      }
-      break;
-  }
+  handle_request_with_direction(msg.direction, ctx);
 }
 
 }  // namespace agnocast

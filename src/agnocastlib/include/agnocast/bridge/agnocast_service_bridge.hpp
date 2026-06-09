@@ -64,6 +64,8 @@ class ServiceBridgeItem
   void check_and_update_a2r(const BridgeManagerContext & ctx);
   void check_and_update_pending(const BridgeManagerContext & ctx);
 
+  void handle_request_with_direction(BridgeDirection direction, const BridgeManagerContext & ctx);
+
 public:
   ServiceBridgeState state() const { return state_; }
   const std::string & service_name() const { return service_name_; }
