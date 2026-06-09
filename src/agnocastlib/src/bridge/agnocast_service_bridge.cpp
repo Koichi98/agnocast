@@ -9,7 +9,7 @@
 #include <array>
 #include <cassert>
 #include <cerrno>
-#include <cstring>
+#include <map>
 #include <utility>
 
 namespace
@@ -17,6 +17,9 @@ namespace
 
 // The global error string used by ServiceBridgeItem.
 std::string error_string;
+
+// Global map from (namespace, name) pair to its shadow node's weak pointer.
+std::map<std::pair<std::string, std::string>, std::weak_ptr<rcl_node_t>> g_shadow_nodes;
 
 }  // namespace
 
@@ -34,14 +37,12 @@ const char * ServiceBridgeItem::get_error_string()
 
 // Returns nullptr if an error occurs while creating the shadow node (the error string will be set).
 std::shared_ptr<rcl_node_t> ServiceBridgeItem::find_or_create_shadow_node(
-  const std::unordered_map<std::string, ServiceBridgeItem> & parent_map, const char * ns,
-  const char * name)
+  const std::pair<std::string, std::string> & identity)
 {
-  for (const auto & [_, item] : parent_map) {
-    const std::shared_ptr<rcl_node_t> & shadow_node = item.shadow_node_;
-    if (
-      shadow_node != nullptr && strcmp(rcl_node_get_name(shadow_node.get()), name) == 0 &&
-      strcmp(rcl_node_get_namespace(shadow_node.get()), ns) == 0) {
+  auto it = g_shadow_nodes.find(identity);
+  if (it != g_shadow_nodes.end()) {
+    auto shadow_node = it->second.lock();
+    if (shadow_node != nullptr) {
       return shadow_node;
     }
   }
@@ -69,12 +70,15 @@ std::shared_ptr<rcl_node_t> ServiceBridgeItem::find_or_create_shadow_node(
   };
   auto node = std::shared_ptr<rcl_node_t>(new rcl_node_t{}, del);
 
-  if (rcl_node_init(node.get(), name, ns, rcl_ctx, &options) != RCL_RET_OK) {
+  if (
+    rcl_node_init(node.get(), identity.second.c_str(), identity.first.c_str(), rcl_ctx, &options) !=
+    RCL_RET_OK) {
     rcl_reset_error();
     set_error_string("Failed to initialize shadow node");
     return nullptr;
   }
 
+  g_shadow_nodes[identity] = node;
   return node;
 }
 
@@ -172,9 +176,7 @@ bool ServiceBridgeItem::agno_client_exists()
 // Creates and starts the R2A bridge. Relevant configuration members must be set beforehand.
 // Returns 0 on success, -1 on error (the error string will be set). On error, it is guaranteed
 // that the stateful members are not modified.
-int ServiceBridgeItem::start_r2a_bridge(
-  const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-  const BridgeManagerContext & ctx)
+int ServiceBridgeItem::start_r2a_bridge(const BridgeManagerContext & ctx)
 {
   // Warn if the target service already exists in ROS 2.
   if (ros2_service_exists(ctx)) {
@@ -191,9 +193,8 @@ int ServiceBridgeItem::start_r2a_bridge(
 
   std::shared_ptr<rcl_node_t> shadow_node;
   if (shadow_node_identity_.has_value()) {
-    const char * ns = shadow_node_identity_->first.c_str();
-    const char * name = shadow_node_identity_->second.c_str();
-    if ((shadow_node = find_or_create_shadow_node(parent_map, ns, name)) == nullptr) {
+    const auto & identity = *shadow_node_identity_;
+    if ((shadow_node = find_or_create_shadow_node(identity)) == nullptr) {
       return -1;
     }
   }
@@ -344,12 +345,10 @@ void ServiceBridgeItem::check_and_update_a2r(const BridgeManagerContext & ctx)
   shadow_node_ = nullptr;
 }
 
-void ServiceBridgeItem::check_and_update_pending(
-  const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-  const BridgeManagerContext & ctx)
+void ServiceBridgeItem::check_and_update_pending(const BridgeManagerContext & ctx)
 {
   if (may_start_r2a_bridge_ && agno_service_exists()) {
-    if (start_r2a_bridge(parent_map, ctx) != 0) {
+    if (start_r2a_bridge(ctx) != 0) {
       RCLCPP_WARN(
         ctx.logger, "Failed to start R2A service bridge for '%s': %s", service_name_.c_str(),
         get_error_string());
@@ -375,13 +374,11 @@ void ServiceBridgeItem::check_and_update_pending(
   }
 }
 
-void ServiceBridgeItem::check_and_update(
-  const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-  const BridgeManagerContext & ctx)
+void ServiceBridgeItem::check_and_update(const BridgeManagerContext & ctx)
 {
   switch (state_) {
     case ServiceBridgeState::PENDING:
-      check_and_update_pending(parent_map, ctx);
+      check_and_update_pending(ctx);
       break;
     case ServiceBridgeState::R2A:
       check_and_update_r2a(ctx);
@@ -394,16 +391,14 @@ void ServiceBridgeItem::check_and_update(
   }
 }
 
-void ServiceBridgeItem::handle_request(
-  const MqMsgBridge & msg, const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-  const BridgeManagerContext & ctx)
+void ServiceBridgeItem::handle_request(const MqMsgBridge & msg, const BridgeManagerContext & ctx)
 {
   update_configuration(msg);
 
   switch (msg.direction) {
     case BridgeDirection::ROS2_TO_AGNOCAST:
       if (state_ == ServiceBridgeState::NONE || state_ == ServiceBridgeState::PENDING) {
-        if (start_r2a_bridge(parent_map, ctx) != 0) {
+        if (start_r2a_bridge(ctx) != 0) {
           RCLCPP_WARN(
             ctx.logger, "Failed to start R2A service bridge for '%s': %s", service_name_.c_str(),
             get_error_string());
@@ -419,16 +414,14 @@ void ServiceBridgeItem::handle_request(
 }
 
 void ServiceBridgeItem::handle_request(
-  const MqMsgPerformanceBridge & msg,
-  const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-  const BridgeManagerContext & ctx)
+  const MqMsgPerformanceBridge & msg, const BridgeManagerContext & ctx)
 {
   update_configuration(msg);
 
   switch (msg.direction) {
     case BridgeDirection::ROS2_TO_AGNOCAST:
       if (state_ == ServiceBridgeState::NONE || state_ == ServiceBridgeState::PENDING) {
-        if (start_r2a_bridge(parent_map, ctx) != 0) {
+        if (start_r2a_bridge(ctx) != 0) {
           RCLCPP_WARN(
             ctx.logger, "Failed to start R2A service bridge for '%s': %s", service_name_.c_str(),
             get_error_string());

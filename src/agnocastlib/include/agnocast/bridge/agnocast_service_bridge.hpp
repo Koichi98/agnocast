@@ -10,7 +10,6 @@
 #include <memory>
 #include <optional>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -47,8 +46,7 @@ class ServiceBridgeItem
   static const char * get_error_string();
 
   static std::shared_ptr<rcl_node_t> find_or_create_shadow_node(
-    const std::unordered_map<std::string, ServiceBridgeItem> & parent_map, const char * ns,
-    const char * name);
+    const std::pair<std::string, std::string> & identity);
 
   int get_agno_service_qos(rclcpp::QoS & qos);
 
@@ -56,9 +54,7 @@ class ServiceBridgeItem
   bool agno_service_exists();
   bool agno_client_exists();
 
-  int start_r2a_bridge(
-    const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-    const BridgeManagerContext & ctx);
+  int start_r2a_bridge(const BridgeManagerContext & ctx);
   int start_a2r_bridge(const BridgeManagerContext & ctx);
 
   void update_configuration(const MqMsgBridge & msg);
@@ -66,25 +62,16 @@ class ServiceBridgeItem
 
   void check_and_update_r2a(const BridgeManagerContext & ctx);
   void check_and_update_a2r(const BridgeManagerContext & ctx);
-  void check_and_update_pending(
-    const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-    const BridgeManagerContext & ctx);
+  void check_and_update_pending(const BridgeManagerContext & ctx);
 
 public:
   ServiceBridgeState state() const { return state_; }
   const std::string & service_name() const { return service_name_; }
 
-  void check_and_update(
-    const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-    const BridgeManagerContext & ctx);
+  void check_and_update(const BridgeManagerContext & ctx);
 
-  void handle_request(
-    const MqMsgBridge & msg, const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-    const BridgeManagerContext & ctx);
-  void handle_request(
-    const MqMsgPerformanceBridge & msg,
-    const std::unordered_map<std::string, ServiceBridgeItem> & parent_map,
-    const BridgeManagerContext & ctx);
+  void handle_request(const MqMsgBridge & msg, const BridgeManagerContext & ctx);
+  void handle_request(const MqMsgPerformanceBridge & msg, const BridgeManagerContext & ctx);
 };
 
 }  // namespace agnocast
