@@ -29,6 +29,7 @@ private:
   using RequestMap = std::unordered_map<topic_local_id_t, MqMsgPerformanceBridge>;
 
   rclcpp::Logger logger_;
+  uint64_t self_ipc_ns_inode_;
   PerformanceBridgeIpcEventLoop event_loop_;
   std::shared_ptr<PerformanceBridgeLoader> loader_;
 
@@ -48,6 +49,7 @@ private:
 
   void on_mq_request(int fd);
   void on_signal();
+  std::string on_socket_request() const;
 
   void check_and_create_pubsub_bridges();
   void check_and_remove_pubsub_bridges();
