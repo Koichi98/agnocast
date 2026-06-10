@@ -1,5 +1,6 @@
 #include "agnocast/agnocast_mq.hpp"
 #include "agnocast/agnocast_utils.hpp"
+#include "agnocast/bridge/agnocast_bridge_utils.hpp"
 
 #include <gtest/gtest.h>
 
@@ -41,4 +42,32 @@ TEST(DaemonBridgeMqTest, PerformanceMqNameAppendsDomainId)
     agnocast::create_mq_name_for_daemon_bridge(agnocast::PERFORMANCE_BRIDGE_VIRTUAL_PID),
     "/agnocast_daemon_bridge_perf_d7");
   unsetenv("ROS_DOMAIN_ID");
+}
+
+// Performance-mode daemon bridges have no local endpoint to query, so the QoS
+// must be rebuilt faithfully from the request's explicit fields.
+TEST(DaemonBridgeMqTest, DaemonRequestQosReliableTransientLocal)
+{
+  agnocast::MqMsgDaemonBridge req{};
+  req.qos_depth = 10;
+  req.qos_is_reliable = true;
+  req.qos_is_transient_local = true;
+
+  const rclcpp::QoS qos = agnocast::daemon_request_qos(req);
+  EXPECT_EQ(qos.depth(), 10u);
+  EXPECT_EQ(qos.reliability(), rclcpp::ReliabilityPolicy::Reliable);
+  EXPECT_EQ(qos.durability(), rclcpp::DurabilityPolicy::TransientLocal);
+}
+
+TEST(DaemonBridgeMqTest, DaemonRequestQosBestEffortVolatile)
+{
+  agnocast::MqMsgDaemonBridge req{};
+  req.qos_depth = 1;
+  req.qos_is_reliable = false;
+  req.qos_is_transient_local = false;
+
+  const rclcpp::QoS qos = agnocast::daemon_request_qos(req);
+  EXPECT_EQ(qos.depth(), 1u);
+  EXPECT_EQ(qos.reliability(), rclcpp::ReliabilityPolicy::BestEffort);
+  EXPECT_EQ(qos.durability(), rclcpp::DurabilityPolicy::Volatile);
 }

@@ -18,11 +18,6 @@
 namespace agnocast
 {
 
-// Longer than the daemon's publish interval (1 s) so a few missed daemon
-// ticks don't tear down a healthy cross-NS bridge, short enough that a
-// genuinely vanished remote endpoint stops being forced promptly.
-constexpr std::chrono::seconds DAEMON_FORCE_TTL{5};
-
 StandardBridgeManager::StandardBridgeManager(pid_t target_pid)
 : target_pid_(target_pid),
   logger_(rclcpp::get_logger("agnocast_standard_bridge_manager")),
