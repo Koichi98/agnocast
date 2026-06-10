@@ -113,12 +113,18 @@ void PerformanceBridgeManager::on_mq_request(int fd)
 
   if (msg.is_service) {
     BridgeManagerContext ctx{container_node_, executor_, logger_, loader_, nullptr};
-
+    std::string service_name = static_cast<const char *>(msg.srv_target.service_name);
     ServiceBridgeItem sb_item;
+
+    auto it = active_service_bridges_.find(service_name);
+    if (it != active_service_bridges_.end()) {
+      sb_item = std::move(it->second);
+      active_service_bridges_.erase(it);
+    }
+
     sb_item.handle_request(msg, ctx);
     if (sb_item.state() != ServiceBridgeState::NONE) {
-      const std::string & key = sb_item.service_name();
-      active_service_bridges_.emplace(key, std::move(sb_item));
+      active_service_bridges_.emplace(service_name, std::move(sb_item));
     }
   } else {
     std::string topic_name = static_cast<const char *>(msg.pubsub_target.topic_name);
