@@ -6,11 +6,11 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include <atomic>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace agnocast
@@ -80,6 +80,7 @@ private:
 
   const pid_t target_pid_;
   rclcpp::Logger logger_;
+  uint64_t self_ipc_ns_inode_;
 
   StandardBridgeIpcEventLoop event_loop_;
   std::unique_ptr<StandardBridgeLoader> loader_;
@@ -91,15 +92,16 @@ private:
   std::shared_ptr<agnocast::CallbackIsolatedAgnocastExecutor> executor_;
   std::thread executor_thread_;
 
-  std::map<std::string, std::shared_ptr<PubsubBridgeBase>> active_pubsub_bridges_;
-  std::map<std::string, ManagedPubsubBridgeEntry> managed_pubsub_bridges_;
+  std::unordered_map<std::string, std::shared_ptr<PubsubBridgeBase>> active_pubsub_bridges_;
+  std::unordered_map<std::string, ManagedPubsubBridgeEntry> managed_pubsub_bridges_;
 
-  std::map<std::string, R2AServiceBridgeItem> active_r2a_service_bridges_;
+  std::unordered_map<std::string, R2AServiceBridgeItem> active_r2a_service_bridges_;
 
   void start_ros_execution();
 
   void on_mq_request(mqd_t fd);
   void on_signal();
+  std::string on_socket_request() const;
 
   void register_pubsub_request(const MqMsgBridge & req);
 
