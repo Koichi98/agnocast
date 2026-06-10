@@ -30,6 +30,7 @@ setup(
             'generate-bridge-plugins = ros2agnocast.verb.agnocast_generate_bridge_plugins:GenerateBridgePluginsVerb',
             'version = ros2agnocast.verb.agnocast_version:VersionVerb',
             'discovery-daemon-status = ros2agnocast.verb.agnocast_discovery_daemon_status:DiscoveryDaemonStatusVerb',
+            'a2r-activate = ros2agnocast.verb.agnocast_a2r_activate:A2rActivateVerb',
         ],
         'ros2topic.verb': [
             'list_agnocast = ros2agnocast.verb.topic_list_agnocast:ListAgnocastVerb',
