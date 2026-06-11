@@ -64,11 +64,24 @@ TOPIC_NAME_BUFFER_SIZE = 256
 REMOTE_STATE_STALE_SEC = 30.0
 
 
-class TopicInfoRet(ctypes.Structure):
-    """Mirror of ``struct topic_info_ret`` in agnocast_ioctl.hpp."""
+class SnapshotTopicRet(ctypes.Structure):
+    """Mirror of ``struct snapshot_topic_ret`` in agnocast.h / agnocast_ioctl.hpp."""
+
+    _fields_ = [
+        ('topic_name', ctypes.c_char * TOPIC_NAME_BUFFER_SIZE),
+        ('publisher_num', ctypes.c_uint32),
+        ('subscriber_num', ctypes.c_uint32),
+        ('ros2_publisher_num', ctypes.c_uint32),
+        ('ros2_subscriber_num', ctypes.c_uint32),
+    ]
+
+
+class SnapshotEndpointRet(ctypes.Structure):
+    """Mirror of ``struct snapshot_endpoint_ret``. ``pid`` is pid_t (== int32)."""
 
     _fields_ = [
         ('node_name', ctypes.c_char * NODE_NAME_BUFFER_SIZE),
+        ('pid', ctypes.c_int32),
         ('qos_depth', ctypes.c_uint32),
         ('qos_is_transient_local', ctypes.c_bool),
         ('qos_is_reliable', ctypes.c_bool),
@@ -80,76 +93,74 @@ def _load_ioctl_wrapper():
     """Load libagnocast_ioctl_wrapper.so and set argtypes for the symbols we use."""
     lib = ctypes.CDLL('libagnocast_ioctl_wrapper.so')
 
-    lib.get_agnocast_topics.argtypes = [ctypes.POINTER(ctypes.c_int)]
-    lib.get_agnocast_topics.restype = ctypes.POINTER(ctypes.POINTER(ctypes.c_char))
-    lib.free_agnocast_topics.argtypes = [
-        ctypes.POINTER(ctypes.POINTER(ctypes.c_char)),
-        ctypes.c_int,
+    lib.get_agnocast_discovery_snapshot.argtypes = [
+        ctypes.POINTER(ctypes.POINTER(SnapshotTopicRet)), ctypes.POINTER(ctypes.c_int),
+        ctypes.POINTER(ctypes.POINTER(SnapshotEndpointRet)), ctypes.POINTER(ctypes.c_int),
     ]
-    lib.free_agnocast_topics.restype = None
-
-    lib.get_agnocast_sub_nodes.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
-    lib.get_agnocast_sub_nodes.restype = ctypes.POINTER(TopicInfoRet)
-    lib.get_agnocast_pub_nodes.argtypes = [ctypes.c_char_p, ctypes.POINTER(ctypes.c_int)]
-    lib.get_agnocast_pub_nodes.restype = ctypes.POINTER(TopicInfoRet)
-    lib.free_agnocast_topic_info_ret.argtypes = [ctypes.POINTER(TopicInfoRet)]
-    lib.free_agnocast_topic_info_ret.restype = None
+    lib.get_agnocast_discovery_snapshot.restype = ctypes.c_int
+    lib.free_agnocast_discovery_snapshot.argtypes = [
+        ctypes.POINTER(SnapshotTopicRet), ctypes.POINTER(SnapshotEndpointRet)]
+    lib.free_agnocast_discovery_snapshot.restype = None
 
     return lib
 
 
-def _ioctl_to_endpoint(
-        info: TopicInfoRet, topic_name: str, role: str,
-        registry: TypeRegistryReader | None = None) -> AgnocastEndpoint:
-    """Convert one ``topic_info_ret`` row to an AgnocastEndpoint msg.
+def _snapshot_to_endpoint(ep_ret: SnapshotEndpointRet) -> AgnocastEndpoint:
+    """Convert one ``snapshot_endpoint_ret`` row to an AgnocastEndpoint msg.
 
-    ``pid`` is looked up from the tmpfs type registry (written by agnocastlib
-    at Publisher/Subscription construction time) using
-    ``(topic_name, role, node_name)`` as the join key. When no match is found
-    the field stays 0, which lets the rest of the pipeline degrade gracefully
-    (the gossip publication still flows; just no pid for that endpoint).
+    Unlike the old per-topic ioctl, the snapshot carries ``pid`` straight from
+    the kmod (the registered process), so no tmpfs registry join is needed for
+    it. The registry is still consulted for ``type_name`` (see
+    ``_resolve_topic_type``), which the kmod does not track.
     """
     ep = AgnocastEndpoint()
-    ep.node_name = info.node_name.decode('utf-8', errors='replace')
-    ep.pid = 0
-    if registry is not None:
-        entry = registry.lookup(topic_name, role, ep.node_name)
-        if entry is not None:
-            ep.pid = entry.pid
-    ep.qos_depth = info.qos_depth
-    ep.qos_is_transient_local = info.qos_is_transient_local
-    ep.qos_is_reliable = info.qos_is_reliable
-    ep.is_bridge = info.is_bridge
+    ep.node_name = ep_ret.node_name.decode('utf-8', errors='replace')
+    ep.pid = ep_ret.pid
+    ep.qos_depth = ep_ret.qos_depth
+    ep.qos_is_transient_local = ep_ret.qos_is_transient_local
+    ep.qos_is_reliable = ep_ret.qos_is_reliable
+    ep.is_bridge = ep_ret.is_bridge
     return ep
 
 
 def read_local_topics(lib, registry: TypeRegistryReader | None = None) -> list:
     """Snapshot the current namespace's Agnocast topics via the ioctl wrapper.
 
-    Returns a list of AgnocastTopic msgs. The ioctl returns only the caller's
-    IPC namespace, so the daemon process just being inside that namespace is
-    sufficient to scope the result. The optional ``registry`` argument
-    supplies the type names and pids that the ioctl does not expose.
+    Returns a list of AgnocastTopic msgs. A single ``get_agnocast_discovery_snapshot``
+    call returns every topic plus its pub/sub endpoints for the caller's IPC
+    namespace; the endpoint array is laid out in topic order as "publishers then
+    subscribers", sliced via publisher_num / subscriber_num. The optional
+    ``registry`` argument supplies the type names that the ioctl does not expose.
     """
+    topics_ptr = ctypes.POINTER(SnapshotTopicRet)()
     topic_count = ctypes.c_int()
-    topic_names_ptr = lib.get_agnocast_topics(ctypes.byref(topic_count))
+    endpoints_ptr = ctypes.POINTER(SnapshotEndpointRet)()
+    endpoint_count = ctypes.c_int()
+    rc = lib.get_agnocast_discovery_snapshot(
+        ctypes.byref(topics_ptr), ctypes.byref(topic_count),
+        ctypes.byref(endpoints_ptr), ctypes.byref(endpoint_count))
+
     topics = []
-    if not topic_names_ptr:
+    if rc != 0 or topic_count.value == 0:
         return topics
 
     try:
+        cursor = 0
         for i in range(topic_count.value):
-            topic_name_b = ctypes.cast(topic_names_ptr[i], ctypes.c_char_p).value
-            topic_name = topic_name_b.decode('utf-8', errors='replace')
+            topic_ret = topics_ptr[i]
 
             agnocast_topic = AgnocastTopic()
-            agnocast_topic.topic_name = topic_name
+            agnocast_topic.topic_name = topic_ret.topic_name.decode('utf-8', errors='replace')
             agnocast_topic.type_name = ''
             agnocast_topic.domain_id = 0
-            agnocast_topic.publishers = _collect_endpoints(
-                lib.get_agnocast_pub_nodes, lib, topic_name_b, topic_name, 'pub', registry)
-            agnocast_topic.subscribers = _collect_endpoints(
-                lib.get_agnocast_sub_nodes, lib, topic_name_b, topic_name, 'sub', registry)
+            agnocast_topic.publishers = [
+                _snapshot_to_endpoint(endpoints_ptr[cursor + j])
+                for j in range(topic_ret.publisher_num)]
+            cursor += topic_ret.publisher_num
+            agnocast_topic.subscribers = [
+                _snapshot_to_endpoint(endpoints_ptr[cursor + j])
+                for j in range(topic_ret.subscriber_num)]
+            cursor += topic_ret.subscriber_num
             # Type name comes from the tmpfs registry; any registered
             # endpoint on this topic carries the same type (ROS 2
             # invariant), so the first non-empty one wins.
@@ -159,7 +170,7 @@ def read_local_topics(lib, registry: TypeRegistryReader | None = None) -> list:
                     agnocast_topic.type_name = resolved
             topics.append(agnocast_topic)
     finally:
-        lib.free_agnocast_topics(topic_names_ptr, topic_count.value)
+        lib.free_agnocast_discovery_snapshot(topics_ptr, endpoints_ptr)
 
     return topics
 
@@ -175,22 +186,6 @@ def _resolve_topic_type(
         if entry is not None and entry.type_name:
             return entry.type_name
     return ''
-
-
-def _collect_endpoints(
-        getter, lib, topic_name_b: bytes, topic_name: str, role: str,
-        registry: TypeRegistryReader | None = None) -> list:
-    count = ctypes.c_int()
-    array = getter(topic_name_b, ctypes.byref(count))
-    endpoints = []
-    if not array:
-        return endpoints
-    try:
-        for i in range(count.value):
-            endpoints.append(_ioctl_to_endpoint(array[i], topic_name, role, registry))
-    finally:
-        lib.free_agnocast_topic_info_ret(array)
-    return endpoints
 
 
 def _read_host_uuid() -> str:
