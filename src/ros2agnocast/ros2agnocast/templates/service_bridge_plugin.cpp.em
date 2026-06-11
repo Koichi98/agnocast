@@ -59,7 +59,11 @@ extern "C" ServiceBridgeEntity create_a2r_service_bridge_@(snake_type_name)(
   auto client_cb_group = node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
 
   auto ros_client =
+#if RCLCPP_VERSION_MAJOR >= 28
+    node->create_client<ServiceT>(service_name, qos, client_cb_group);
+#else
     node->create_client<ServiceT>(service_name, qos.get_rmw_qos_profile(), client_cb_group);
+#endif
 
   auto agno_srv = std::make_shared<AgnoService>(
     node.get(), service_name,
