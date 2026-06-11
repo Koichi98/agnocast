@@ -149,6 +149,8 @@ private:
     std::string topic_name = create_service_response_topic_name(service_name_, node_name_);
     subscriber_ = std::make_shared<ServiceResponseSubscriber>(
       node, topic_name, qos, std::move(subscriber_callback), options);
+
+    BridgeRequestPolicy::template request_bridge<ServiceT>(service_name_);
   }
 
 public:
