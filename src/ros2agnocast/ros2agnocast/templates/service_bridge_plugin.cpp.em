@@ -75,7 +75,7 @@ extern "C" ServiceBridgeEntity create_a2r_service_bridge_@(snake_type_name)(
           auto ros_res = future.get();
           auto agno_res = service_handle->borrow_loaned_response(agno_req);
           *agno_res = *ros_res;
-          // Resort to copying because a mutable lambda can't be used here.
+          // Resort to pointer copying because a mutable lambda can't be used here.
           auto agno_req_movable = agno_req;
           service_handle->send_response(std::move(agno_req_movable), std::move(agno_res));
         });
