@@ -72,6 +72,21 @@ void StandardBridgeManager::run()
   event_loop_.set_signal_handler([this]() { this->on_signal(); });
   event_loop_.set_socket_handler([this]() { return this->on_socket_request(); });
 
+  // The standard bridge_manager exists only to serve its parent Agnocast
+  // process, so it must terminate when that parent exits. Ask the kernel to
+  // deliver SIGTERM when the parent dies; the event loop's signalfd turns that
+  // into a graceful shutdown via on_signal(). Without this the manager is
+  // reparented to init and lingers, leaking its process and POSIX message
+  // queues (which keep consuming the per-user RLIMIT_MSGQUEUE budget).
+  if (prctl(PR_SET_PDEATHSIG, SIGTERM, 0, 0, 0) != 0) {
+    RCLCPP_WARN(logger_, "PR_SET_PDEATHSIG failed: %s", strerror(errno));
+  }
+  // Close the fork()/prctl() race: if the parent already exited before the
+  // death signal was armed, PR_SET_PDEATHSIG never fires, so check explicitly.
+  if (kill(target_pid_, 0) != 0) {
+    shutdown_requested_ = true;
+  }
+
   while (!shutdown_requested_) {
     if (!event_loop_.spin_once(EVENT_LOOP_TIMEOUT_MS)) {
       break;
