@@ -47,6 +47,7 @@ class ServiceBridgeItem
 
   static std::shared_ptr<rcl_node_t> find_or_create_shadow_node(
     const std::pair<std::string, std::string> & identity);
+  static void erase_expired_shadow_node(const std::pair<std::string, std::string> & identity);
 
   int get_agno_service_qos(rclcpp::QoS & qos) const;
 

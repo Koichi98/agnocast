@@ -82,6 +82,15 @@ std::shared_ptr<rcl_node_t> ServiceBridgeItem::find_or_create_shadow_node(
   return node;
 }
 
+void ServiceBridgeItem::erase_expired_shadow_node(
+  const std::pair<std::string, std::string> & identity)
+{
+  auto it = g_shadow_nodes.find(identity);
+  if (it != g_shadow_nodes.end() && it->second.expired()) {
+    g_shadow_nodes.erase(it);
+  }
+}
+
 // Returns 0 on success, -1 on error (the error string will be set).
 int ServiceBridgeItem::get_agno_service_qos(rclcpp::QoS & qos) const
 {
@@ -321,6 +330,10 @@ void ServiceBridgeItem::check_and_update_r2a(const BridgeManagerContext & ctx)
   state_ = ServiceBridgeState::PENDING;
   entity_ = {nullptr, nullptr, nullptr};
   shadow_node_ = nullptr;
+
+  if (shadow_node_identity_.has_value()) {
+    erase_expired_shadow_node(shadow_node_identity_.value());
+  }
 }
 
 void ServiceBridgeItem::check_and_update_a2r(const BridgeManagerContext & ctx)
