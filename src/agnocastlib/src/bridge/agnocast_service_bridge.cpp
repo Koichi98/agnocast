@@ -133,10 +133,25 @@ int ServiceBridgeItem::get_agno_service_qos(rclcpp::QoS & qos) const
 bool ServiceBridgeItem::ros2_service_exists(const BridgeManagerContext & ctx) const
 {
   try {
-    const auto services = ctx.container_node->get_service_names_and_types();
-    bool exists = std::any_of(services.begin(), services.end(), [this](const auto & s) {
-      return s.first == this->service_name_;
-    });
+    bool exists = false;
+
+#if RCLCPP_VERSION_MAJOR >= 28
+    exists = ctx.container_node->count_services(this->service_name_) > 0;
+#else
+    // NOTE(bdm-k): A potential performance enhancement would be to use the ROS 2 client in the
+    // bridge entity whenever it is available.
+    const auto node_names = ctx.container_node->get_node_names();
+    for (const auto & full_name : node_names) {
+      const auto [ns, name] = split_full_node_name(full_name);
+      const auto srvs = ctx.container_node->get_service_names_and_types_by_node(name, ns);
+
+      if (srvs.find(service_name_) != srvs.end()) {
+        exists = true;
+        break;
+      }
+    }
+#endif
+
     if (!exists) {
       set_error_string("No target ROS 2 service found");
     }

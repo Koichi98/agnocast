@@ -236,6 +236,14 @@ bool is_agnocast_service_alive(const std::string & service_name, std::string & r
   }
 }
 
+std::pair<std::string, std::string> split_full_node_name(const std::string & fqn)
+{
+  const auto pos = fqn.find_last_of('/');
+  std::string ns = (pos == 0) ? "/" : fqn.substr(0, pos);
+  std::string name = fqn.substr(pos + 1);
+  return {std::move(ns), std::move(name)};
+}
+
 BridgeRequestMsgBuilder::BridgeRequestMsgBuilder(Mode mode, const rclcpp::Logger & logger)
 : logger_(logger), failed_(false)
 {

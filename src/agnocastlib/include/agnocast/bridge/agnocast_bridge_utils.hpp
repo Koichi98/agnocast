@@ -68,6 +68,7 @@ bool has_external_ros2_publisher(const rclcpp::Node * node, const std::string & 
 bool has_external_ros2_subscriber(const rclcpp::Node * node, const std::string & topic_name);
 rclcpp::QoS get_service_qos(const std::string & service_name);
 bool is_agnocast_service_alive(const std::string & service_name, std::string & reason);
+std::pair<std::string, std::string> split_full_node_name(const std::string & fqn);
 
 /// @brief A builder class for creating bridge request messages.
 ///
