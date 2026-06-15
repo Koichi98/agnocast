@@ -18,9 +18,9 @@ namespace agnocast
 {
 
 // Internal implementation - users should use agnocast::Service<ServiceT> instead.
-template <typename ServiceT, typename BridgeRequestPolicy>
+template <typename ServiceT, typename BridgeRegistrationPolicy>
 class BasicService
-: public std::enable_shared_from_this<BasicService<ServiceT, BridgeRequestPolicy>>
+: public std::enable_shared_from_this<BasicService<ServiceT, BridgeRegistrationPolicy>>
 {
 private:
   // TODO(bdm-k): Consider supporting callbacks that take lvalue references.
@@ -33,7 +33,7 @@ private:
   template <typename Func>
   struct is_deferred_cb
   : std::bool_constant<std::is_invocable_v<
-      std::decay_t<Func>, std::shared_ptr<BasicService<ServiceT, BridgeRequestPolicy>>,
+      std::decay_t<Func>, std::shared_ptr<BasicService<ServiceT, BridgeRegistrationPolicy>>,
       ipc_shared_ptr<typename ServiceT::Request> &&>>
   {
   };
@@ -49,8 +49,8 @@ private:
     int64_t _sequence_number;
   };
 
-  using ServiceResponsePublisher = BasicPublisher<ResponseT, NoBridgeRequestPolicy>;
-  using ServiceRequestSubscriber = BasicSubscription<RequestT, NoBridgeRequestPolicy>;
+  using ServiceResponsePublisher = BasicPublisher<ResponseT, NoBridgeRegistrationPolicy>;
+  using ServiceRequestSubscriber = BasicSubscription<RequestT, NoBridgeRegistrationPolicy>;
 
   const std::variant<rclcpp::Node *, agnocast::Node *> node_;
   std::string service_name_;
@@ -142,7 +142,7 @@ private:
   }
 
 public:
-  using SharedPtr = std::shared_ptr<BasicService<ServiceT, BridgeRequestPolicy>>;
+  using SharedPtr = std::shared_ptr<BasicService<ServiceT, BridgeRegistrationPolicy>>;
 
   template <typename Func>
   BasicService(
@@ -151,7 +151,7 @@ public:
   : node_(node), qos_(rclcpp::QoS(qos).durability_volatile())
   {
     constructor_impl(node, service_name, std::forward<Func>(callback), group);
-    BridgeRequestPolicy::template request_bridge<ServiceT>(node, service_name_);
+    BridgeRegistrationPolicy::template register_bridge<ServiceT>(node, service_name_);
   }
 
   template <typename Func>
@@ -161,7 +161,7 @@ public:
   : node_(node), qos_(rclcpp::QoS(qos).durability_volatile())
   {
     constructor_impl(node, service_name, std::forward<Func>(callback), group);
-    BridgeRequestPolicy::template request_bridge<ServiceT>(node, service_name_);
+    BridgeRegistrationPolicy::template register_bridge<ServiceT>(node, service_name_);
   }
 
   /**
@@ -208,7 +208,7 @@ public:
   }
 };
 
-struct RosToAgnocastServiceRequestPolicy;
+struct RosToAgnocastServiceRegistrationPolicy;
 
 /**
  * @brief The user-facing Agnocast service server.
@@ -218,6 +218,6 @@ struct RosToAgnocastServiceRequestPolicy;
  */
 AGNOCAST_PUBLIC
 template <typename ServiceT>
-using Service = BasicService<ServiceT, RosToAgnocastServiceRequestPolicy>;
+using Service = BasicService<ServiceT, RosToAgnocastServiceRegistrationPolicy>;
 
 }  // namespace agnocast

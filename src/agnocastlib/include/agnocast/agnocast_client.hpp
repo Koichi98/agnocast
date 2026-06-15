@@ -25,8 +25,8 @@ namespace agnocast
 {
 
 // Forward declaration.
-struct AgnocastToRosServiceRequestPolicy;
-struct NoBridgeRequestPolicy;
+struct AgnocastToRosServiceRegistrationPolicy;
+struct NoBridgeRegistrationPolicy;
 
 bool service_is_ready_core(const std::string & service_name);
 bool wait_for_service_nanoseconds(
@@ -36,11 +36,11 @@ bool wait_for_service_nanoseconds(
 extern int agnocast_fd;
 
 // Internal implementation - users should use agnocast::Client<ServiceT> instead.
-template <typename ServiceT, typename BridgeRequestPolicy>
+template <typename ServiceT, typename BridgeRegistrationPolicy>
 class BasicClient
 {
 public:
-  using SharedPtr = std::shared_ptr<BasicClient<ServiceT, BridgeRequestPolicy>>;
+  using SharedPtr = std::shared_ptr<BasicClient<ServiceT, BridgeRegistrationPolicy>>;
 
   /// Future that resolves to the service response. Returned by async_send_request() (no-callback
   /// overload).
@@ -96,8 +96,8 @@ private:
     }
   };
 
-  using ServiceRequestPublisher = BasicPublisher<RequestT, NoBridgeRequestPolicy>;
-  using ServiceResponseSubscriber = BasicSubscription<ResponseT, NoBridgeRequestPolicy>;
+  using ServiceRequestPublisher = BasicPublisher<RequestT, NoBridgeRegistrationPolicy>;
+  using ServiceResponseSubscriber = BasicSubscription<ResponseT, NoBridgeRegistrationPolicy>;
 
   std::atomic<int64_t> next_sequence_number_;
   std::mutex seqno2_response_call_info_mtx_;
@@ -150,7 +150,7 @@ private:
     subscriber_ = std::make_shared<ServiceResponseSubscriber>(
       node, topic_name, qos, std::move(subscriber_callback), options);
 
-    BridgeRequestPolicy::template request_bridge<ServiceT>(service_name_);
+    BridgeRegistrationPolicy::template register_bridge<ServiceT>(service_name_);
   }
 
 public:
@@ -256,6 +256,6 @@ public:
  */
 AGNOCAST_PUBLIC
 template <typename ServiceT>
-using Client = BasicClient<ServiceT, AgnocastToRosServiceRequestPolicy>;
+using Client = BasicClient<ServiceT, AgnocastToRosServiceRegistrationPolicy>;
 
 }  // namespace agnocast
