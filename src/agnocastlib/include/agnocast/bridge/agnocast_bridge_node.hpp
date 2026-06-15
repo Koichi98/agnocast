@@ -149,16 +149,7 @@ struct AgnocastToRosServiceRegistrationPolicy
 struct NoBridgeRegistrationPolicy
 {
   template <typename T, typename... Args>
-  static void register_bridge(Args &&... args)
-  {
-    register_bridge_impl(std::forward<Args>(args)...);
-  }
-
-private:
-  static void register_bridge_impl(const std::string &) {}
-  static void register_bridge_impl(const std::string &, topic_local_id_t) {}
-  template <typename NodeT>
-  static void register_bridge_impl(NodeT *, const std::string &)
+  static void register_bridge(Args &&...)
   {
   }
 };
