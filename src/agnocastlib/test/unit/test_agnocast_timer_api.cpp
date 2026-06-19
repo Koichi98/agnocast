@@ -233,25 +233,6 @@ TEST_F(CreateTimerFreeFunctionTest, reset_re_anchors_next_call_when_time_has_adv
   EXPECT_EQ(tut_after_reset, std::chrono::nanoseconds(kPeriodNs));
 }
 
-TEST_F(CreateTimerFreeFunctionTest, time_reset_callback)
-{
-  // Arrange
-  auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
-  const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
-  bool called = false;
-  auto timer = agnocast::create_timer(node.get(), clock, period, []() {});
-
-  // Act
-  timer->set_on_reset_callback([&](size_t s) {
-    (void)s;
-    called = true;
-  });
-  timer->reset();
-
-  // Assert
-  EXPECT_TRUE(called);
-}
-
 TEST_F(
   CreateTimerFreeFunctionTest, set_on_reset_callback_with_prior_resets_delivers_accumulated_count)
 {
@@ -274,6 +255,11 @@ TEST_F(
   // Assert
   EXPECT_EQ(received_count_sum, 2U);
   EXPECT_EQ(call_count, 1);
+
+  // Subsequent reset must fire with count==1, confirming the internal counter was cleared
+  timer->reset();
+  EXPECT_EQ(received_count_sum, 3U);
+  EXPECT_EQ(call_count, 2);
 }
 
 TEST_F(CreateTimerFreeFunctionTest, on_reset_callback_called_once_per_reset_with_count_one)
@@ -305,10 +291,18 @@ TEST_F(CreateTimerFreeFunctionTest, clear_on_reset_callback_inside_callback_does
   auto clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
   const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
   auto timer = agnocast::create_timer(node.get(), clock, period, []() {});
-  timer->set_on_reset_callback([&](size_t) { timer->clear_on_reset_callback(); });
+  int call_count = 0;
+  timer->set_on_reset_callback([&](size_t) {
+    call_count++;
+    timer->clear_on_reset_callback();
+  });
 
-  // Act & Assert — must not crash or deadlock
+  // Act & Assert — must not crash or deadlock; the callback clears itself,
+  // so a second reset must not invoke it again.
   EXPECT_NO_THROW(timer->reset());
+  EXPECT_EQ(call_count, 1);
+  EXPECT_NO_THROW(timer->reset());
+  EXPECT_EQ(call_count, 1);
 }
 
 TEST_F(CreateTimerFreeFunctionTest, set_on_reset_callback_inside_callback_does_not_deadlock)
@@ -318,17 +312,21 @@ TEST_F(CreateTimerFreeFunctionTest, set_on_reset_callback_inside_callback_does_n
   const auto period = rclcpp::Duration(std::chrono::milliseconds(100));
   auto timer = agnocast::create_timer(node.get(), clock, period, []() {});
 
-  bool second_called = false;
-  timer->set_on_reset_callback(
-    [&](size_t) { timer->set_on_reset_callback([&](size_t) { second_called = true; }); });
+  int first_call_count = 0;
+  int second_call_count = 0;
+  timer->set_on_reset_callback([&](size_t) {
+    first_call_count++;
+    timer->set_on_reset_callback([&](size_t) { second_call_count++; });
+  });
 
   // Act — first reset fires the first callback, which replaces it with the second;
-  // the second reset then fires the new callback
+  // the second reset then fires the new callback.
   ASSERT_NO_THROW(timer->reset());
-  timer->reset();
+  ASSERT_NO_THROW(timer->reset());
 
   // Assert
-  EXPECT_TRUE(second_called);
+  EXPECT_EQ(first_call_count, 1);
+  EXPECT_EQ(second_call_count, 1);
 }
 
 TEST_F(CreateTimerFreeFunctionTest, set_on_reset_callback_with_null_throws_invalid_argument)

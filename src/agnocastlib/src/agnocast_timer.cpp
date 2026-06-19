@@ -4,8 +4,6 @@
 #include "agnocast/agnocast_utils.hpp"
 #include "rclcpp/logging.hpp"
 
-#include <typeinfo>
-
 namespace agnocast
 {
 
@@ -66,8 +64,8 @@ void TimerBase::set_on_reset_callback(std::function<void(size_t)> callback)
       callback(reset_calls);
     } catch (const std::exception & exception) {
       RCLCPP_ERROR(
-        logger, "agnocast::TimerBase (id=%u) caught %s exception in on_reset_callback: %s",
-        timer_id_, typeid(exception).name(), exception.what());
+        logger, "agnocast::TimerBase (id=%u) caught exception in on_reset_callback: %s", timer_id_,
+        exception.what());
     } catch (...) {
       RCLCPP_ERROR(
         logger, "agnocast::TimerBase (id=%u) caught unhandled exception in on_reset_callback",
