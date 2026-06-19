@@ -1,6 +1,7 @@
 #include "agnocast/agnocast_timer.hpp"
 
 #include "agnocast/agnocast_timer_info.hpp"
+#include "agnocast/agnocast_utils.hpp"
 #include "rclcpp/logging.hpp"
 
 #include <typeinfo>
@@ -64,17 +65,13 @@ void TimerBase::set_on_reset_callback(std::function<void(size_t)> callback)
     try {
       callback(reset_calls);
     } catch (const std::exception & exception) {
-      RCLCPP_ERROR_STREAM(
-        rclcpp::get_logger("timer" + std::to_string(timer_id_)),
-        "agnocast::TimerBase@"
-          << this << " caught " << typeid(exception).name()
-          << " exception in user-provided callback for the 'on reset' callback: "
-          << exception.what());
+      RCLCPP_ERROR(
+        logger, "agnocast::TimerBase (id=%u) caught %s exception in on_reset_callback: %s",
+        timer_id_, typeid(exception).name(), exception.what());
     } catch (...) {
-      RCLCPP_ERROR_STREAM(
-        rclcpp::get_logger("timer" + std::to_string(timer_id_)),
-        "agnocast::TimerBase@" << this << " caught unhandled exception in user-provided callback "
-                               << "for the 'on reset' callback");
+      RCLCPP_ERROR(
+        logger, "agnocast::TimerBase (id=%u) caught unhandled exception in on_reset_callback",
+        timer_id_);
     }
   };
 
