@@ -22,7 +22,12 @@ void TimerBase::reset()
   timer_info->reset();
   canceled_.store(false);
 
-  trigger_on_reset_callback(1);
+  std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
+  if (on_reset_callback_) {
+    trigger_on_reset_callback(1);
+  } else {
+    reset_counter_++;
+  }
 }
 
 std::chrono::nanoseconds TimerBase::time_until_trigger()
@@ -89,18 +94,11 @@ void TimerBase::clear_on_reset_callback()
 
 void TimerBase::trigger_on_reset_callback(size_t reset_count)
 {
-  std::function<void(size_t)> callback_to_run = nullptr;
-
-  {
-    std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
-    callback_to_run = on_reset_callback_;
-  }
-
-  if (callback_to_run) {
-    callback_to_run(reset_count);
-  } else {
-    reset_counter_++;
-  }
+  // Copy before calling: if the callback itself calls set_on_reset_callback or
+  // clear_on_reset_callback, on_reset_callback_ will be overwritten (destroying
+  // the original std::function), but this local copy keeps the callable alive.
+  const auto on_reset_callback = on_reset_callback_;
+  on_reset_callback(reset_count);
 }
 
 }  // namespace agnocast

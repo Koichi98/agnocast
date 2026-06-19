@@ -99,6 +99,10 @@ protected:
   std::function<void(size_t)> on_reset_callback_{nullptr};
   size_t reset_counter_{0};
   mutable std::recursive_mutex callback_mutex_;
+
+  // Preconditions:
+  // - callback_mutex_ must be held by the caller
+  // - on_reset_callback_ must be non-null
   void trigger_on_reset_callback(size_t reset_count);
 
   friend void set_timer_info(TimerBase & timer, std::weak_ptr<TimerInfo> timer_info);
