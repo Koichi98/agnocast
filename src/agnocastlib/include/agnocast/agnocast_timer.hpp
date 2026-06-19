@@ -2,7 +2,6 @@
 
 #include "agnocast/agnocast_public_api.hpp"
 #include "rclcpp/clock.hpp"
-#include "rclcpp/logging.hpp"
 #include "rclcpp/macros.hpp"
 
 #include <atomic>
@@ -73,48 +72,12 @@ public:
    * @param callback functor to be called whenever timer is reset.
    */
   AGNOCAST_PUBLIC
-  void set_on_reset_callback(const std::function<void(size_t)> & callback)
-  {
-    if (!callback) {
-      throw std::invalid_argument("The callback passed to set_on_reset_callback is not callable.");
-    }
-
-    auto new_callback =
-      [callback, this](size_t reset_calls) {
-        try {
-          callback(reset_calls);
-        } catch (const std::exception & exception) {
-          RCLCPP_ERROR_STREAM(
-            rclcpp::get_logger("timer" + std::to_string(timer_id_)),
-            "agnocast::TimerBase@"
-              << this << " caught " << typeid(exception).name()
-              << " exception in user-provided callback for the 'on reset' callback: "
-              << exception.what());
-        } catch (...) {
-          RCLCPP_ERROR_STREAM(
-            rclcpp::get_logger("timer" + std::to_string(timer_id_)),
-            "agnocast::TimerBase@" << this
-                                   << " caught unhandled exception in user-provided callback "
-                                   << "for the 'on reset' callback");
-        }
-      };
-
-    std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
-    on_reset_callback_ = new_callback;
-    if (reset_counter) {
-      trigger_on_reset_callback(reset_counter);
-      reset_counter = 0;
-    }
-  };
+  void set_on_reset_callback(const std::function<void(size_t)> & callback);
 
   /** @brief Unset the callback registered for reset timer.
    */
   AGNOCAST_PUBLIC
-  void clear_on_reset_callback()
-  {
-    std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
-    on_reset_callback_ = nullptr;
-  };
+  void clear_on_reset_callback();
 
   /** @brief Get the clock associated with this timer.
    *  @return Shared pointer to the clock. */
@@ -135,21 +98,7 @@ protected:
   std::function<void(size_t)> on_reset_callback_{nullptr};
   size_t reset_counter{0};
   mutable std::recursive_mutex callback_mutex_;
-  void trigger_on_reset_callback(size_t reset_count)
-  {
-    std::function<void(size_t)> callback_to_run = nullptr;
-
-    {
-      std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
-      callback_to_run = on_reset_callback_;
-    }
-
-    if (callback_to_run) {
-      callback_to_run(reset_count);
-    } else {
-      reset_counter++;
-    }
-  }
+  void trigger_on_reset_callback(size_t reset_count);
 
   friend void set_timer_info(TimerBase & timer, std::weak_ptr<TimerInfo> timer_info);
 };

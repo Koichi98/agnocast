@@ -1,6 +1,9 @@
 #include "agnocast/agnocast_timer.hpp"
 
 #include "agnocast/agnocast_timer_info.hpp"
+#include "rclcpp/logging.hpp"
+
+#include <typeinfo>
 
 namespace agnocast
 {
@@ -44,6 +47,60 @@ void TimerBase::set_period(std::chrono::nanoseconds period)
     throw std::runtime_error("set_period called on an invalidated timer (timer_info expired)");
   }
   timer_info->set_period(period);
+}
+
+void TimerBase::set_on_reset_callback(const std::function<void(size_t)> & callback)
+{
+  if (!callback) {
+    throw std::invalid_argument("The callback passed to set_on_reset_callback is not callable.");
+  }
+
+  auto new_callback = [callback, this](size_t reset_calls) {
+    try {
+      callback(reset_calls);
+    } catch (const std::exception & exception) {
+      RCLCPP_ERROR_STREAM(
+        rclcpp::get_logger("timer" + std::to_string(timer_id_)),
+        "agnocast::TimerBase@"
+          << this << " caught " << typeid(exception).name()
+          << " exception in user-provided callback for the 'on reset' callback: "
+          << exception.what());
+    } catch (...) {
+      RCLCPP_ERROR_STREAM(
+        rclcpp::get_logger("timer" + std::to_string(timer_id_)),
+        "agnocast::TimerBase@" << this << " caught unhandled exception in user-provided callback "
+                               << "for the 'on reset' callback");
+    }
+  };
+
+  std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
+  on_reset_callback_ = new_callback;
+  if (reset_counter) {
+    trigger_on_reset_callback(reset_counter);
+    reset_counter = 0;
+  }
+}
+
+void TimerBase::clear_on_reset_callback()
+{
+  std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
+  on_reset_callback_ = nullptr;
+}
+
+void TimerBase::trigger_on_reset_callback(size_t reset_count)
+{
+  std::function<void(size_t)> callback_to_run = nullptr;
+
+  {
+    std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
+    callback_to_run = on_reset_callback_;
+  }
+
+  if (callback_to_run) {
+    callback_to_run(reset_count);
+  } else {
+    reset_counter++;
+  }
 }
 
 }  // namespace agnocast
