@@ -2,6 +2,7 @@
 
 #include "agnocast/agnocast_public_api.hpp"
 #include "agnocast/agnocast_publisher.hpp"
+#include "agnocast/agnocast_service_wire.hpp"
 #include "agnocast/agnocast_smart_pointer.hpp"
 #include "agnocast/agnocast_subscription.hpp"
 #include "agnocast/agnocast_utils.hpp"
@@ -38,16 +39,10 @@ private:
   {
   };
 
-  // To avoid name conflicts, members of RequestT and ResponseT are given an underscore prefix.
-  struct RequestT : public ServiceT::Request
-  {
-    std::string _node_name;
-    int64_t _sequence_number;
-  };
-  struct ResponseT : public ServiceT::Response
-  {
-    int64_t _sequence_number;
-  };
+  // The on-the-wire request/response types: the user payload followed by out-of-band correlation
+  // metadata (see agnocast_service_wire.hpp). The user payload sits at offset 0.
+  using RequestT = ServiceRequestWrapper<typename ServiceT::Request>;
+  using ResponseT = ServiceResponseWrapper<typename ServiceT::Response>;
 
   using ServiceResponsePublisher = BasicPublisher<ResponseT, NoBridgeRegistrationPolicy>;
   using ServiceRequestSubscriber = BasicSubscription<RequestT, NoBridgeRegistrationPolicy>;
@@ -91,10 +86,9 @@ private:
       ipc_shared_ptr<ResponseT> response = publisher->borrow_loaned_message();
       response->_sequence_number = request->_sequence_number;
 
-      ipc_shared_ptr<typename ServiceT::Response> response_double(response);
+      ipc_shared_ptr<typename ServiceT::Response> response_double = wire_to_payload(response);
 
-      callback(
-        ipc_shared_ptr<typename ServiceT::Request>(std::move(request)), std::move(response_double));
+      callback(wire_to_payload(std::move(request)), std::move(response_double));
 
       publisher->publish(std::move(response));
 
@@ -110,7 +104,7 @@ private:
   auto wrap_deferred_service_callback_for_subscriber(Func && callback)
   {
     return [this, callback = std::forward<Func>(callback)](ipc_shared_ptr<RequestT> && request) {
-      callback(this->shared_from_this(), std::move(request));
+      callback(this->shared_from_this(), wire_to_payload(std::move(request)));
     };
   }
 
@@ -180,8 +174,8 @@ public:
     ipc_shared_ptr<typename ServiceT::Request> && request,
     ipc_shared_ptr<typename ServiceT::Response> && response)
   {
-    auto internal_request = static_ipc_shared_ptr_cast<RequestT>(std::move(request));
-    auto internal_response = static_ipc_shared_ptr_cast<ResponseT>(std::move(response));
+    auto internal_request = wire_to_wrapper<RequestT>(std::move(request));
+    auto internal_response = wire_to_wrapper<ResponseT>(std::move(response));
     auto publisher = get_or_create_publisher_for(internal_request->_node_name);
     publisher->publish(std::move(internal_response));
   }
@@ -200,11 +194,11 @@ public:
   ipc_shared_ptr<typename ServiceT::Response> borrow_loaned_response(
     const ipc_shared_ptr<typename ServiceT::Request> & request)
   {
-    auto internal_request = static_ipc_shared_ptr_cast<RequestT>(request);
+    auto internal_request = wire_to_wrapper<RequestT>(request);
     auto publisher = get_or_create_publisher_for(internal_request->_node_name);
     ipc_shared_ptr<ResponseT> response = publisher->borrow_loaned_message();
     response->_sequence_number = internal_request->_sequence_number;
-    return ipc_shared_ptr<typename ServiceT::Response>(std::move(response));
+    return wire_to_payload(std::move(response));
   }
 };
 

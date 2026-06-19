@@ -3,6 +3,7 @@
 #include "agnocast/agnocast_ioctl.hpp"
 #include "agnocast/agnocast_public_api.hpp"
 #include "agnocast/agnocast_publisher.hpp"
+#include "agnocast/agnocast_service_wire.hpp"
 #include "agnocast/agnocast_smart_pointer.hpp"
 #include "agnocast/agnocast_subscription.hpp"
 #include "agnocast/agnocast_utils.hpp"
@@ -73,16 +74,10 @@ public:
   };
 
 private:
-  // To avoid name conflicts, members of RequestT and ResponseT are given an underscore prefix.
-  struct RequestT : public ServiceT::Request
-  {
-    std::string _node_name;
-    int64_t _sequence_number;
-  };
-  struct ResponseT : public ServiceT::Response
-  {
-    int64_t _sequence_number;
-  };
+  // The on-the-wire request/response types: the user payload followed by out-of-band correlation
+  // metadata (see agnocast_service_wire.hpp). The user payload sits at offset 0.
+  using RequestT = ServiceRequestWrapper<typename ServiceT::Request>;
+  using ResponseT = ServiceResponseWrapper<typename ServiceT::Response>;
 
   struct ResponseCallInfo
   {
@@ -141,7 +136,7 @@ private:
       /* --- critical section end --- */
       lock.unlock();
 
-      info.promise.set_value(ipc_shared_ptr<typename ServiceT::Response>(std::move(response)));
+      info.promise.set_value(wire_to_payload(std::move(response)));
       if (info.callback.has_value()) {
         (info.callback.value())(info.shared_future.value());
       }
@@ -174,9 +169,9 @@ public:
   ipc_shared_ptr<typename ServiceT::Request> borrow_loaned_request()
   {
     auto request = publisher_->borrow_loaned_message();
-    request->_node_name = node_name_;
+    set_wire_node_name(request->_node_name, node_name_);
     request->_sequence_number = next_sequence_number_.fetch_add(1);
-    return ipc_shared_ptr<typename ServiceT::Request>(std::move(request));
+    return wire_to_payload(std::move(request));
   }
 
   /** @brief Return the resolved service name.
@@ -214,7 +209,7 @@ public:
     std::function<void(SharedFuture)> callback)
   {
     SharedFuture shared_future;
-    auto internal_request = static_ipc_shared_ptr_cast<RequestT>(std::move(request));
+    auto internal_request = wire_to_wrapper<RequestT>(std::move(request));
     int64_t seqno = internal_request->_sequence_number;
 
     {
@@ -235,7 +230,7 @@ public:
   FutureAndRequestId async_send_request(ipc_shared_ptr<typename ServiceT::Request> && request)
   {
     Future future;
-    auto internal_request = static_ipc_shared_ptr_cast<RequestT>(std::move(request));
+    auto internal_request = wire_to_wrapper<RequestT>(std::move(request));
     int64_t seqno = internal_request->_sequence_number;
 
     {

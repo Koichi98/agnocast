@@ -1,5 +1,6 @@
 #include "agnocast/agnocast_publisher.hpp"
 
+#include "agnocast/agnocast_service_wire.hpp"
 #include "agnocast/bridge/agnocast_bridge_node.hpp"
 #include "agnocast/internal/type_registry_writer.hpp"
 #include "agnocast/node/agnocast_node.hpp"
@@ -373,6 +374,60 @@ void GenericPublisher::publish(const rclcpp::SerializedMessage & serialized_msg)
   // Only the addresses previously passed to the kernel by this publisher are returned here.
   // Therefore, the message type is guaranteed to match members_ and it's safe to call
   // fini_function on the pointer.
+  for (uint32_t i = 0; i < publish_msg_args.ret_released_num; i++) {
+    void * rptr = reinterpret_cast<void *>(publish_msg_args.ret_released_addrs[i]);
+    members_->fini_function(rptr);
+    ::operator delete(rptr);
+  }
+}
+
+void GenericPublisher::publish_service_request(
+  const rclcpp::SerializedMessage & payload, int64_t sequence_number,
+  const std::string & client_node_name)
+{
+  if (payload.capacity() == 0 || payload.size() == 0) {
+    RCLCPP_ERROR(logger, "publish_service_request: empty serialized payload; dropping");
+    return;
+  }
+
+  const std::size_t payload_size = members_->size_of_;
+  const std::size_t total_size = wire_request_size(payload_size);
+
+  increment_borrowed_publisher_num();
+  void * base = ::operator new(total_size);
+
+  // Construct + fill the request payload at offset 0 (the wire layout puts the user message first).
+  members_->init_function(base, rosidl_runtime_cpp::MessageInitialization::SKIP);
+  const rmw_ret_t ret =
+    rmw_deserialize(&payload.get_rcl_serialized_message(), type_support_handle_, base);
+  if (ret != RMW_RET_OK) {
+    members_->fini_function(base);
+    ::operator delete(base);
+    decrement_borrowed_publisher_num();
+    RCLCPP_ERROR(
+      logger, "rmw_deserialize failed in publish_service_request (rmw_ret=%d); dropping",
+      static_cast<int>(ret));
+    return;
+  }
+
+  // Append the out-of-band correlation metadata at the offsets a typed peer reads.
+  *reinterpret_cast<int64_t *>(
+    static_cast<char *>(base) + wire_sequence_number_offset(payload_size)) = sequence_number;
+  char * node_name_dst = static_cast<char *>(base) + wire_request_node_name_offset(payload_size);
+  const std::size_t n = std::min<std::size_t>(client_node_name.size(), NODE_NAME_BUFFER_SIZE - 1);
+  std::memcpy(node_name_dst, client_node_name.data(), n);
+  node_name_dst[n] = '\0';
+
+  decrement_borrowed_publisher_num();
+
+  const auto va = reinterpret_cast<uint64_t>(base);
+  union ioctl_publish_msg_args publish_msg_args {
+  };
+  {
+    std::lock_guard<std::mutex> lock(opened_mqs_mtx_);
+    publish_msg_args = publish_core(this, topic_name_, id_, va, opened_mqs_);
+  }
+
   for (uint32_t i = 0; i < publish_msg_args.ret_released_num; i++) {
     void * rptr = reinterpret_cast<void *>(publish_msg_args.ret_released_addrs[i]);
     members_->fini_function(rptr);

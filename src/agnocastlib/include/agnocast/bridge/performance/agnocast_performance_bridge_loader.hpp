@@ -45,6 +45,13 @@ private:
     const rclcpp::Node::SharedPtr & node, const std::string & topic_name,
     const std::string & message_type, const rclcpp::QoS & qos);
 
+  // Plugin-free R2A service bridge: a type-erased ROS service server (vendored GenericService)
+  // forwards requests to the Agnocast service via generic publisher/subscription using the
+  // out-of-band service wire layout. Requests are processed one-in-flight for correlation.
+  static PerformanceServiceBridgeResult create_r2a_service_bridge_generic(
+    const rclcpp::Node::SharedPtr & node, const std::string & service_name,
+    const std::string & service_type, const rclcpp::QoS & qos);
+
   static std::string convert_type_to_snake_case(const std::string & message_type);
   static std::vector<std::string> generate_library_paths();
   void * load_library_from_paths(const std::vector<std::string> & paths, std::string & last_error);

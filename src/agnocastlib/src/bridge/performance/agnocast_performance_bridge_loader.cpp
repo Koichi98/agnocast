@@ -1,15 +1,25 @@
 #include "agnocast/bridge/performance/agnocast_performance_bridge_loader.hpp"
 
+#include "agnocast/agnocast_publisher.hpp"
+#include "agnocast/agnocast_subscription.hpp"
+#include "agnocast/agnocast_utils.hpp"
 #include "agnocast/bridge/agnocast_bridge_node.hpp"
+#include "agnocast/bridge/performance/agnocast_generic_service.hpp"
 #include "rclcpp/version.h"
 
 #include <ament_index_cpp/get_package_prefix.hpp>
 
 #include <dlfcn.h>
+#include <rcl/service.h>
+#include <rmw/rmw.h>
 
 #include <algorithm>
 #include <cstdlib>
+#include <memory>
+#include <mutex>
+#include <queue>
 #include <sstream>
+#include <utility>
 
 namespace agnocast
 {
@@ -68,11 +78,154 @@ PerformanceServiceBridgeResult PerformanceBridgeLoader::create_r2a_service_bridg
 {
   void * symbol = get_bridge_factory_symbol(service_type, "create_r2a_service_bridge", true);
   if (symbol == nullptr) {
-    return {nullptr, nullptr, nullptr};
+    // Fall back to the generic (plugin-free) service bridge.
+    RCLCPP_DEBUG(
+      logger_, "No plugin found for service '%s' (type: %s). Using generic bridge.",
+      service_name.c_str(), service_type.c_str());
+    return create_r2a_service_bridge_generic(node, service_name, service_type, qos);
   }
 
   auto factory = reinterpret_cast<R2AServiceBridgeFactory>(symbol);
   return factory(std::move(node), service_name, qos);
+}
+
+namespace
+{
+// Shared state for one generic R2A service bridge. Requests are forwarded to the Agnocast service
+// one-in-flight, so the single response on the bridge's response topic maps unambiguously to the
+// pending request without reading back a per-message correlation id.
+class GenericR2AServiceState
+{
+public:
+  std::shared_ptr<agnocast::GenericPublisher> req_pub;
+  std::shared_ptr<agnocast::GenericSubscription> res_sub;
+  std::shared_ptr<agnocast::bridge::GenericService> ros_srv;
+  std::string node_fqn;
+
+  void enqueue(std::shared_ptr<rmw_request_id_t> req_id, rclcpp::SerializedMessage && req)
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    pending_.emplace(std::move(req_id), std::move(req));
+    if (!in_flight_) {
+      dispatch_locked();
+    }
+  }
+
+  void on_response(const rclcpp::SerializedMessage & res)
+  {
+    std::shared_ptr<rmw_request_id_t> req_id;
+    {
+      std::lock_guard<std::mutex> lock(mtx_);
+      if (!in_flight_ || pending_.empty()) {
+        return;  // unexpected response; ignore
+      }
+      req_id = pending_.front().first;
+      pending_.pop();
+      in_flight_ = false;
+    }
+
+    // Deserialize the response payload and send it back over ROS.
+    auto ros_response = ros_srv->create_response();
+    const rmw_ret_t ret = rmw_deserialize(
+      &res.get_rcl_serialized_message(), ros_srv->response_message_typesupport(),
+      ros_response.get());
+    if (ret == RMW_RET_OK) {
+      ros_srv->send_response(*req_id, ros_response);
+    }
+
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!in_flight_ && !pending_.empty()) {
+      dispatch_locked();
+    }
+  }
+
+private:
+  void dispatch_locked()
+  {
+    in_flight_ = true;
+    req_pub->publish_service_request(pending_.front().second, ++seq_, node_fqn);
+  }
+
+  std::mutex mtx_;
+  std::queue<std::pair<std::shared_ptr<rmw_request_id_t>, rclcpp::SerializedMessage>> pending_;
+  bool in_flight_ = false;
+  int64_t seq_ = 0;
+};
+}  // namespace
+
+PerformanceServiceBridgeResult PerformanceBridgeLoader::create_r2a_service_bridge_generic(
+  const rclcpp::Node::SharedPtr & node, const std::string & service_name,
+  const std::string & service_type, const rclcpp::QoS & qos)
+{
+  const std::string request_type = service_type + "_Request";
+  const std::string response_type = service_type + "_Response";
+  const std::string request_topic = create_service_request_topic_name(service_name);
+  const std::string node_fqn = node->get_fully_qualified_name();
+  const std::string response_topic = create_service_response_topic_name(service_name, node_fqn);
+
+  auto srv_cb_group = node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  auto sub_cb_group = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+
+  auto state = std::make_shared<GenericR2AServiceState>();
+  state->node_fqn = node_fqn;
+
+  state->req_pub = std::make_shared<agnocast::GenericPublisher>(
+    node.get(), request_topic, request_type, qos, agnocast::PublisherOptions{},
+    agnocast::PublisherRole::BridgeInternal);
+
+  // ROS-side type-erased service server: deferred response (forward request, respond later).
+  std::weak_ptr<GenericR2AServiceState> weak_state = state;
+  agnocast::bridge::GenericService::DeferredCallback deferred_cb =
+    [weak_state](
+      const std::shared_ptr<agnocast::bridge::GenericService> & service,
+      std::shared_ptr<rmw_request_id_t> req_id, std::shared_ptr<void> request) {
+      auto st = weak_state.lock();
+      if (!st) {
+        return;
+      }
+      // Guard the executor thread: an exception escaping here would terminate the bridge daemon.
+      try {
+        rclcpp::SerializedMessage serialized;
+        const rmw_ret_t ret = rmw_serialize(
+          request.get(), service->request_message_typesupport(),
+          &serialized.get_rcl_serialized_message());
+        if (ret != RMW_RET_OK) {
+          return;
+        }
+        st->enqueue(std::move(req_id), std::move(serialized));
+      } catch (const std::exception & e) {
+        RCLCPP_ERROR(
+          rclcpp::get_logger("agnocast_generic_service_bridge"),
+          "R2A generic service request forwarding failed: %s", e.what());
+      }
+    };
+
+  rcl_service_options_t service_options = rcl_service_get_default_options();
+  service_options.qos = qos.get_rmw_qos_profile();
+  state->ros_srv = agnocast::bridge::GenericService::make_shared(
+    node->get_node_base_interface()->get_shared_rcl_node_handle(), service_name, service_type,
+    std::move(deferred_cb), service_options);
+  node->get_node_services_interface()->add_service(
+    std::dynamic_pointer_cast<rclcpp::ServiceBase>(state->ros_srv), srv_cb_group);
+
+  // Agnocast-side response subscription (response payload at wire offset 0).
+  agnocast::SubscriptionOptions sub_opts;
+  sub_opts.ignore_local_publications = true;
+  sub_opts.callback_group = sub_cb_group;
+  state->res_sub = std::make_shared<agnocast::GenericSubscription>(
+    node.get(), response_topic, response_type, qos,
+    [weak_state](const rclcpp::SerializedMessage & res) {
+      if (auto st = weak_state.lock()) {
+        st->on_response(res);
+      }
+    },
+    sub_opts, agnocast::SubscriptionRole::BridgeInternal);
+
+  PerformanceServiceBridgeResult result;
+  result.entity_handle = state;
+  result.ros_srv_cb_group = srv_cb_group;
+  result.agno_client_cb_group = sub_cb_group;
+  return result;
 }
 
 std::string PerformanceBridgeLoader::convert_type_to_snake_case(const std::string & message_type)

@@ -320,6 +320,23 @@ public:
    */
   AGNOCAST_PUBLIC
   void publish(const rclcpp::SerializedMessage & serialized_msg);
+
+  /**
+   * @brief Publish an Agnocast service *request* generically: deserialize the request payload into
+   * shared memory and append the out-of-band correlation metadata (sequence number + client node
+   * name) at the wire offsets a typed agnocast::Service expects. This publisher's topic type must
+   * be the request message type (e.g. "pkg/srv/Foo_Request"). Used by the generic R2A service
+   * bridge.
+   *
+   * @param payload Serialized request message.
+   * @param sequence_number Correlation id echoed back by the server in the response.
+   * @param client_node_name Fully-qualified name of the requesting (bridge) node; selects the
+   *        response topic on the server side.
+   */
+  AGNOCAST_PUBLIC
+  void publish_service_request(
+    const rclcpp::SerializedMessage & payload, int64_t sequence_number,
+    const std::string & client_node_name);
 };
 
 struct AgnocastToRosPubsubRegistrationPolicy;
