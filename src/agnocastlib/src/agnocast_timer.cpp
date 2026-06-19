@@ -49,13 +49,13 @@ void TimerBase::set_period(std::chrono::nanoseconds period)
   timer_info->set_period(period);
 }
 
-void TimerBase::set_on_reset_callback(const std::function<void(size_t)> & callback)
+void TimerBase::set_on_reset_callback(std::function<void(size_t)> callback)
 {
   if (!callback) {
     throw std::invalid_argument("The callback passed to set_on_reset_callback is not callable.");
   }
 
-  auto new_callback = [callback, this](size_t reset_calls) {
+  auto new_callback = [callback = std::move(callback), this](size_t reset_calls) {
     try {
       callback(reset_calls);
     } catch (const std::exception & exception) {
@@ -74,7 +74,7 @@ void TimerBase::set_on_reset_callback(const std::function<void(size_t)> & callba
   };
 
   std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
-  on_reset_callback_ = new_callback;
+  on_reset_callback_ = std::move(new_callback);
   if (reset_counter) {
     trigger_on_reset_callback(reset_counter);
     reset_counter = 0;

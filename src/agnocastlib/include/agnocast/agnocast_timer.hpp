@@ -72,7 +72,7 @@ public:
    * @param callback functor to be called whenever timer is reset.
    */
   AGNOCAST_PUBLIC
-  void set_on_reset_callback(const std::function<void(size_t)> & callback);
+  void set_on_reset_callback(std::function<void(size_t)> callback);
 
   /** @brief Unset the callback registered for reset timer.
    */
