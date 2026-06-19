@@ -58,24 +58,24 @@ public:
   AGNOCAST_PUBLIC
   virtual bool is_steady() const = 0;
 
-  /** @brief Set a callback to be called when the timer is reset.
+  /**
+   * @brief Sets a callback to be invoked each time the timer is reset.
    *
-   * You should aim to make this callback fast and not blocking.
-   * If you need to do a lot of work or wait for some other event, you should
-   * spin it off to another thread.
+   * This function aligns with `rclcpp::set_on_reset_callback`. For extended
+   * details regarding best practices (e.g., keeping the callback non-blocking),
+   * please refer to the rclcpp documentation.
    *
-   * Calling it again will override any previously set callback.
-   * An exception will be thrown if the callback is not callable.
+   * This function is thread-safe. Calling it again will override any previously
+   * set callback.
    *
-   * This function is thread-safe.
-   *
-   * @param callback functor to be called whenever timer is reset.
-   * @throw std::invalid_argument If the callback is not callable.
+   * @param callback The functor to be called at reset. It receives the number of
+   * times the timer has been reset as an argument.
+   * @throw std::invalid_argument If the provided callback is not callable.
    */
   AGNOCAST_PUBLIC
   void set_on_reset_callback(std::function<void(size_t)> callback);
 
-  /** @brief Unset the callback registered for reset timer.
+  /** @brief Clear the callback registered for reset timer.
    */
   AGNOCAST_PUBLIC
   void clear_on_reset_callback();
