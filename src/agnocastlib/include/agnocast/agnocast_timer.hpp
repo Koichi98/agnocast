@@ -70,6 +70,7 @@ public:
    * This function is thread-safe.
    *
    * @param callback functor to be called whenever timer is reset.
+   * @throw std::invalid_argument If the callback is not callable.
    */
   AGNOCAST_PUBLIC
   void set_on_reset_callback(std::function<void(size_t)> callback);
