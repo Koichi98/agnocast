@@ -75,9 +75,9 @@ void TimerBase::set_on_reset_callback(std::function<void(size_t)> callback)
 
   std::lock_guard<std::recursive_mutex> lock(callback_mutex_);
   on_reset_callback_ = std::move(new_callback);
-  if (reset_counter) {
-    trigger_on_reset_callback(reset_counter);
-    reset_counter = 0;
+  if (reset_counter_ > 0) {
+    trigger_on_reset_callback(reset_counter_);
+    reset_counter_ = 0;
   }
 }
 
@@ -99,7 +99,7 @@ void TimerBase::trigger_on_reset_callback(size_t reset_count)
   if (callback_to_run) {
     callback_to_run(reset_count);
   } else {
-    reset_counter++;
+    reset_counter_++;
   }
 }
 

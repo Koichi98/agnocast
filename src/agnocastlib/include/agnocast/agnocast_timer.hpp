@@ -97,7 +97,7 @@ protected:
   std::weak_ptr<TimerInfo> timer_info_;
   std::atomic<bool> canceled_;
   std::function<void(size_t)> on_reset_callback_{nullptr};
-  size_t reset_counter{0};
+  size_t reset_counter_{0};
   mutable std::recursive_mutex callback_mutex_;
   void trigger_on_reset_callback(size_t reset_count);
 
