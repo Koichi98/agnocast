@@ -236,9 +236,9 @@ uint32_t allocate_timer_id()
   return timer_id;
 }
 
-void set_timer_info(const std::shared_ptr<TimerBase> & timer, std::weak_ptr<TimerInfo> timer_info)
+void set_timer_info(TimerBase & timer, std::weak_ptr<TimerInfo> timer_info)
 {
-  timer->timer_info_ = timer_info;
+  timer.timer_info_ = std::move(timer_info);
 }
 
 void register_timer_info(
@@ -277,7 +277,7 @@ void register_timer_info(
     timer_info->timer_fd = create_timer_fd(timer_id, period, clock->get_clock_type());
   }
 
-  set_timer_info(timer, timer_info);
+  set_timer_info(*timer, timer_info);
 
   setup_time_jump_callback(timer_info, clock);
 

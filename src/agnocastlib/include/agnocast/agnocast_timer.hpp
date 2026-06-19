@@ -150,9 +150,8 @@ protected:
       reset_counter++;
     }
   }
-  friend void set_timer_info(
-    const std::shared_ptr<TimerBase> & timer,
-    std::weak_ptr<TimerInfo> timer_info);  // { timer_info_ = timer_info; }
+
+  friend void set_timer_info(TimerBase & timer, std::weak_ptr<TimerInfo> timer_info);
 };
 
 /**
