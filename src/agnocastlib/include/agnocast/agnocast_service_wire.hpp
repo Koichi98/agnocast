@@ -4,6 +4,7 @@
 #include "agnocast/agnocast_smart_pointer.hpp"
 
 #include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <string>
@@ -68,7 +69,8 @@ inline void set_wire_node_name(char (&dst)[NODE_NAME_BUFFER_SIZE], const std::st
 //
 // This relies on the wrapper layout: payload at offset 0, then an int64 aligned to alignof(int64_t)
 // (8). ROS message alignment never exceeds 8, so the wrapper alignment is 8 and these offsets match
-// the compiler-generated layout. (Verified against the real struct layout in the unit tests.)
+// the compiler-generated layout. (The static_assert block at the bottom of this header checks the
+// formulas against the real struct layout at compile time.)
 
 inline constexpr std::size_t wire_align_up(std::size_t n, std::size_t a)
 {
@@ -129,5 +131,58 @@ ipc_shared_ptr<Wrapper> wire_to_wrapper(const ipc_shared_ptr<Payload> & p)
   Wrapper * w = reinterpret_cast<Wrapper *>(p.get());
   return ipc_shared_ptr<Wrapper>(p, w);
 }
+
+// --- Compile-time verification of the generic offset helpers
+// --------------------------------------
+//
+// The whole generic (type-erased) bridge is correct only if the byte offsets the helpers above
+// compute from `sizeof(Payload)` equal the offsets the compiler lays out for the typed wrapper
+// structs. Check that here, exhaustively over the payload alignments ROS messages actually use
+// (1/4/8 — ROS message alignment never exceeds 8), so any change to the wrapper layout or the
+// helpers fails the build instead of silently corrupting the wire.
+namespace wire_layout_check
+{
+struct alignas(1) Payload1
+{
+  char a;
+};
+struct alignas(4) Payload4
+{
+  char a;
+  int b;
+};
+struct alignas(8) Payload8
+{
+  char a;
+  double b;
+};
+
+template <typename P>
+constexpr bool request_layout_matches()
+{
+  return offsetof(ServiceRequestWrapper<P>, _sequence_number) ==
+           wire_sequence_number_offset(sizeof(P)) &&
+         offsetof(ServiceRequestWrapper<P>, _node_name) ==
+           wire_request_node_name_offset(sizeof(P)) &&
+         sizeof(ServiceRequestWrapper<P>) == wire_request_size(sizeof(P));
+}
+
+template <typename P>
+constexpr bool response_layout_matches()
+{
+  return offsetof(ServiceResponseWrapper<P>, _sequence_number) ==
+           wire_sequence_number_offset(sizeof(P)) &&
+         sizeof(ServiceResponseWrapper<P>) == wire_response_size(sizeof(P));
+}
+
+static_assert(
+  request_layout_matches<Payload1>() && request_layout_matches<Payload4>() &&
+    request_layout_matches<Payload8>(),
+  "ServiceRequestWrapper layout disagrees with the generic wire offset helpers");
+static_assert(
+  response_layout_matches<Payload1>() && response_layout_matches<Payload4>() &&
+    response_layout_matches<Payload8>(),
+  "ServiceResponseWrapper layout disagrees with the generic wire offset helpers");
+}  // namespace wire_layout_check
 
 }  // namespace agnocast

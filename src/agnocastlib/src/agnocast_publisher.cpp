@@ -415,8 +415,11 @@ void GenericPublisher::publish_service_request(
     static_cast<char *>(base) + wire_sequence_number_offset(payload_size)) = sequence_number;
   char * node_name_dst = static_cast<char *>(base) + wire_request_node_name_offset(payload_size);
   const std::size_t n = std::min<std::size_t>(client_node_name.size(), NODE_NAME_BUFFER_SIZE - 1);
+  // Zero the whole fixed-length buffer (not just a trailing NUL) so the published wire object is
+  // byte-for-byte identical to one a typed client produces (its wrapper is value-initialized),
+  // leaving no uninitialized bytes from operator new in shared memory.
+  std::memset(node_name_dst, 0, NODE_NAME_BUFFER_SIZE);
   std::memcpy(node_name_dst, client_node_name.data(), n);
-  node_name_dst[n] = '\0';
 
   decrement_borrowed_publisher_num();
 
