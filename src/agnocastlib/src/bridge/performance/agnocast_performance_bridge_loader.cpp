@@ -14,6 +14,7 @@
 #include <rmw/rmw.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -91,20 +92,41 @@ PerformanceServiceBridgeResult PerformanceBridgeLoader::create_r2a_service_bridg
 
 namespace
 {
+rclcpp::Logger generic_service_bridge_logger()
+{
+  return rclcpp::get_logger("agnocast_generic_service_bridge");
+}
+
 // Shared state for one generic R2A service bridge. Requests are forwarded to the Agnocast service
 // one-in-flight, so the single response on the bridge's response topic maps unambiguously to the
 // pending request without reading back a per-message correlation id.
 class GenericR2AServiceState
 {
 public:
+  // If the Agnocast server does not answer the in-flight request within this window, give up on it
+  // and move on so a single dropped/lost response cannot wedge the bridge permanently. The ROS
+  // client has its own (typically shorter) timeout, so no response is owed once this elapses.
+  static constexpr std::chrono::seconds kInFlightTimeout{5};
+  // Upper bound on queued (not-yet-dispatched) requests. Bounds memory if requests arrive faster
+  // than the one-in-flight pipeline drains them; excess requests are dropped (client times out).
+  static constexpr std::size_t kMaxPending = 1024;
+
   std::shared_ptr<agnocast::GenericPublisher> req_pub;
   std::shared_ptr<agnocast::GenericSubscription> res_sub;
   std::shared_ptr<agnocast::bridge::GenericService> ros_srv;
+  std::shared_ptr<rclcpp::TimerBase> watchdog;  // periodically calls check_in_flight_timeout()
   std::string node_fqn;
 
   void enqueue(std::shared_ptr<rmw_request_id_t> req_id, rclcpp::SerializedMessage && req)
   {
     std::lock_guard<std::mutex> lock(mtx_);
+    if (pending_.size() >= kMaxPending) {
+      static rclcpp::Clock clock(RCL_STEADY_TIME);
+      RCLCPP_WARN_THROTTLE(
+        generic_service_bridge_logger(), clock, 1000,
+        "Generic R2A service bridge pending queue full (%zu); dropping request", kMaxPending);
+      return;
+    }
     pending_.emplace(std::move(req_id), std::move(req));
     if (!in_flight_) {
       dispatch_locked();
@@ -131,6 +153,11 @@ public:
       ros_response.get());
     if (ret == RMW_RET_OK) {
       ros_srv->send_response(*req_id, ros_response);
+    } else {
+      RCLCPP_ERROR(
+        generic_service_bridge_logger(),
+        "rmw_deserialize failed for service response (rmw_ret=%d); client will time out",
+        static_cast<int>(ret));
     }
 
     std::lock_guard<std::mutex> lock(mtx_);
@@ -139,10 +166,33 @@ public:
     }
   }
 
+  // Watchdog: drop an in-flight request whose response never arrived, then resume dispatching so
+  // later queued requests are not starved. Driven by a periodic timer.
+  void check_in_flight_timeout()
+  {
+    std::lock_guard<std::mutex> lock(mtx_);
+    if (!in_flight_ || pending_.empty()) {
+      return;
+    }
+    if (std::chrono::steady_clock::now() - dispatch_time_ < kInFlightTimeout) {
+      return;
+    }
+    RCLCPP_WARN(
+      generic_service_bridge_logger(),
+      "No response within %llds for in-flight service request; dropping and continuing",
+      static_cast<long long>(kInFlightTimeout.count()));
+    pending_.pop();  // discard the timed-out request (it is at the front)
+    in_flight_ = false;
+    if (!pending_.empty()) {
+      dispatch_locked();
+    }
+  }
+
 private:
   void dispatch_locked()
   {
     in_flight_ = true;
+    dispatch_time_ = std::chrono::steady_clock::now();
     req_pub->publish_service_request(pending_.front().second, ++seq_, node_fqn);
   }
 
@@ -150,6 +200,7 @@ private:
   std::queue<std::pair<std::shared_ptr<rmw_request_id_t>, rclcpp::SerializedMessage>> pending_;
   bool in_flight_ = false;
   int64_t seq_ = 0;
+  std::chrono::steady_clock::time_point dispatch_time_;
 };
 }  // namespace
 
@@ -220,6 +271,17 @@ PerformanceServiceBridgeResult PerformanceBridgeLoader::create_r2a_service_bridg
       }
     },
     sub_opts, agnocast::SubscriptionRole::BridgeInternal);
+
+  // Watchdog so a single lost/dropped response cannot wedge the one-in-flight pipeline forever.
+  // Runs on the response callback group, so it stops together with it on bridge teardown.
+  state->watchdog = node->create_wall_timer(
+    std::chrono::seconds(1),
+    [weak_state]() {
+      if (auto st = weak_state.lock()) {
+        st->check_in_flight_timeout();
+      }
+    },
+    sub_cb_group);
 
   PerformanceServiceBridgeResult result;
   result.entity_handle = state;
