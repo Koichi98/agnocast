@@ -36,23 +36,49 @@ static unsigned long get_topic_hash(const char * str)
 }
 
 static struct topic_wrapper * find_topic(
-  const char * topic_name, const struct ipc_namespace * ipc_ns)
+  const char * topic_name, const struct ipc_namespace * ipc_ns, uint32_t domain_id)
 {
   struct topic_wrapper * entry;
   unsigned long hash_val = get_topic_hash(topic_name);
 
   hash_for_each_possible(topic_hashtable, entry, node, hash_val)
   {
-    if (ipc_eq(entry->ipc_ns, ipc_ns) && strcmp(entry->key, topic_name) == 0) return entry;
+    if (
+      ipc_eq(entry->ipc_ns, ipc_ns) && entry->domain_id == domain_id &&
+      strcmp(entry->key, topic_name) == 0)
+      return entry;
   }
 
   return NULL;
 }
 
-static int add_topic(
-  const char * topic_name, const struct ipc_namespace * ipc_ns, struct topic_wrapper ** wrapper)
+// A process operates in exactly one ROS_DOMAIN_ID, recorded in its process_info.
+// Returns the default domain 0 if the process is not registered.
+// Caller must hold global_htables_rwsem (same as agnocast_find_process_info).
+static uint32_t get_process_domain_id(pid_t pid)
 {
-  *wrapper = find_topic(topic_name, ipc_ns);
+  struct process_info * proc_info = agnocast_find_process_info(pid);
+  return proc_info ? proc_info->domain_id : 0;
+}
+
+static uint32_t get_current_domain_id(void)
+{
+  return get_process_domain_id(current->tgid);
+}
+
+// find_topic variant for operations on behalf of the calling process: matches in
+// the caller's own domain. Caller holds global_htables_rwsem.
+static struct topic_wrapper * find_topic_for_current(
+  const char * topic_name, const struct ipc_namespace * ipc_ns)
+{
+  return find_topic(topic_name, ipc_ns, get_current_domain_id());
+}
+
+static int add_topic(
+  const char * topic_name, const struct ipc_namespace * ipc_ns, uint32_t domain_id,
+  struct topic_wrapper ** wrapper)
+{
+  *wrapper = find_topic(topic_name, ipc_ns, domain_id);
   if (*wrapper) {
     return 0;
   }
@@ -66,6 +92,7 @@ static int add_topic(
   }
 
   (*wrapper)->ipc_ns = ipc_ns;
+  (*wrapper)->domain_id = domain_id;
   (*wrapper)->key = kstrdup(topic_name, GFP_KERNEL);
   if (!(*wrapper)->key) {
     dev_warn(
@@ -352,7 +379,7 @@ int agnocast_ioctl_release_message_entry_reference(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     dev_warn(agnocast_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     ret = -EINVAL;
@@ -526,15 +553,19 @@ int agnocast_ioctl_get_version(struct ioctl_get_version_args * ioctl_ret)
   return 0;
 }
 
-static bool has_alive_performance_bridge_manager(const struct ipc_namespace * ipc_ns)
+// A performance bridge manager is per-(ipc_ns, domain): its MQ name carries the
+// domain suffix, so each domain needs its own manager. Gate on the domain too,
+// otherwise a manager in one domain would suppress spawning in another.
+static bool has_alive_performance_bridge_manager(
+  const struct ipc_namespace * ipc_ns, const uint32_t domain_id)
 {
   struct process_info * proc_info;
   int bkt;
   hash_for_each(proc_info_htable, bkt, proc_info, node)
   {
     if (
-      ipc_eq(ipc_ns, proc_info->ipc_ns) && proc_info->is_performance_bridge_manager &&
-      !proc_info->exited) {
+      ipc_eq(ipc_ns, proc_info->ipc_ns) && proc_info->domain_id == domain_id &&
+      proc_info->is_performance_bridge_manager && !proc_info->exited) {
       return true;
     }
   }
@@ -543,7 +574,7 @@ static bool has_alive_performance_bridge_manager(const struct ipc_namespace * ip
 
 int agnocast_ioctl_add_process(
   const pid_t pid, const struct ipc_namespace * ipc_ns, const bool is_performance_bridge_manager,
-  union ioctl_add_process_args * ioctl_ret)
+  const uint32_t domain_id, union ioctl_add_process_args * ioctl_ret)
 {
   int ret = 0;
 
@@ -555,7 +586,8 @@ int agnocast_ioctl_add_process(
     goto unlock;
   }
   ioctl_ret->ret_unlink_daemon_exist = (get_process_num(ipc_ns) > 0);
-  ioctl_ret->ret_performance_bridge_daemon_exist = has_alive_performance_bridge_manager(ipc_ns);
+  ioctl_ret->ret_performance_bridge_daemon_exist =
+    has_alive_performance_bridge_manager(ipc_ns, domain_id);
 
   if (is_performance_bridge_manager && ioctl_ret->ret_performance_bridge_daemon_exist) {
     goto unlock;
@@ -586,6 +618,7 @@ int agnocast_ioctl_add_process(
   }
 
   new_proc_info->ipc_ns = ipc_ns;
+  new_proc_info->domain_id = domain_id;
 
   INIT_HLIST_NODE(&new_proc_info->node);
   uint32_t hash_val = hash_min(new_proc_info->global_pid, PROC_INFO_HASH_BITS);
@@ -610,7 +643,7 @@ int agnocast_ioctl_add_subscriber(
   down_write(&global_htables_rwsem);
 
   struct topic_wrapper * wrapper;
-  ret = add_topic(topic_name, ipc_ns, &wrapper);
+  ret = add_topic(topic_name, ipc_ns, get_process_domain_id(subscriber_pid), &wrapper);
   if (ret < 0) {
     goto unlock;
   }
@@ -640,7 +673,7 @@ int agnocast_ioctl_add_publisher(
   down_write(&global_htables_rwsem);
 
   struct topic_wrapper * wrapper;
-  ret = add_topic(topic_name, ipc_ns, &wrapper);
+  ret = add_topic(topic_name, ipc_ns, get_process_domain_id(publisher_pid), &wrapper);
   if (ret < 0) {
     goto unlock;
   }
@@ -768,7 +801,7 @@ int agnocast_ioctl_publish_msg(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     dev_warn(agnocast_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     ret = -EINVAL;
@@ -927,7 +960,7 @@ int agnocast_ioctl_receive_msg(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     dev_warn(agnocast_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     ret = -EINVAL;
@@ -984,7 +1017,7 @@ int agnocast_ioctl_take_msg(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     dev_warn(agnocast_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     ret = -EINVAL;
@@ -1104,7 +1137,7 @@ int agnocast_ioctl_get_subscriber_num(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
 
   if (!wrapper) {
     up_read(&global_htables_rwsem);
@@ -1157,7 +1190,7 @@ int agnocast_ioctl_set_ros2_subscriber_num(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (wrapper) {
     down_write(&wrapper->topic_rwsem);
     wrapper->topic.ros2_subscriber_num = count;
@@ -1177,7 +1210,7 @@ int agnocast_ioctl_set_ros2_publisher_num(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (wrapper) {
     down_write(&wrapper->topic_rwsem);
     wrapper->topic.ros2_publisher_num = count;
@@ -1201,7 +1234,7 @@ int agnocast_ioctl_get_publisher_num(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
 
   if (!wrapper) {
     up_read(&global_htables_rwsem);
@@ -1389,6 +1422,16 @@ int agnocast_ioctl_get_topic_list(
       goto unlock;
     }
 
+    if (topic_list_args->domain_id_buffer_addr) {
+      uint32_t domain_id = wrapper->domain_id;
+      uint32_t __user * domain_id_buffer =
+        (uint32_t __user *)u64_to_user_ptr(topic_list_args->domain_id_buffer_addr);
+      if (copy_to_user(domain_id_buffer + topic_num, &domain_id, sizeof(domain_id))) {
+        ret = -EFAULT;
+        goto unlock;
+      }
+    }
+
     topic_num++;
   }
 
@@ -1532,7 +1575,7 @@ int agnocast_ioctl_get_topic_subscriber_info(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns, topic_info_args->domain_id);
   if (!wrapper) {
     up_read(&global_htables_rwsem);
     return 0;
@@ -1618,7 +1661,7 @@ int agnocast_ioctl_get_topic_publisher_info(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns, topic_info_args->domain_id);
   if (!wrapper) {
     up_read(&global_htables_rwsem);
     return 0;
@@ -1703,7 +1746,7 @@ int agnocast_ioctl_get_subscriber_qos(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     dev_dbg(agnocast_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     ret = -EINVAL;
@@ -1742,7 +1785,7 @@ int agnocast_ioctl_get_publisher_qos(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     dev_dbg(agnocast_device, "Topic (topic_name=%s) not found. (%s)\n", topic_name, __func__);
     ret = -EINVAL;
@@ -1779,7 +1822,7 @@ int agnocast_ioctl_remove_subscriber(
 
   down_write(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     ret = -EINVAL;
     goto unlock;
@@ -1874,7 +1917,7 @@ int agnocast_ioctl_remove_publisher(
 
   down_write(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     ret = -EINVAL;
     goto unlock;
@@ -2104,6 +2147,20 @@ static int get_process_num(const struct ipc_namespace * ipc_ns)
   return count;
 }
 
+static int get_process_num_in_domain(const struct ipc_namespace * ipc_ns, const uint32_t domain_id)
+{
+  int count = 0;
+  struct process_info * proc_info;
+  int bkt_proc_info;
+  hash_for_each(proc_info_htable, bkt_proc_info, proc_info, node)
+  {
+    if (ipc_eq(ipc_ns, proc_info->ipc_ns) && proc_info->domain_id == domain_id) {
+      count++;
+    }
+  }
+  return count;
+}
+
 int agnocast_ioctl_notify_bridge_shutdown(const pid_t pid)
 {
   down_write(&global_htables_rwsem);
@@ -2120,8 +2177,11 @@ int agnocast_ioctl_check_and_request_bridge_shutdown(
   struct ioctl_check_and_request_bridge_shutdown_args * ioctl_ret)
 {
   down_write(&global_htables_rwsem);
-  // Request shutdown if there is no other process excluding poll_for_unlink.
-  if (get_process_num(ipc_ns) <= 1) {
+  // A performance bridge manager is per (ipc_ns, domain), so it must shut down once its
+  // own domain is empty -- counting the whole namespace would keep it alive while an
+  // unrelated domain is busy. The manager itself is the remaining process (count == 1),
+  // and poll_for_unlink is not registered here, so it is excluded.
+  if (get_process_num_in_domain(ipc_ns, get_process_domain_id(pid)) <= 1) {
     struct process_info * proc_info = agnocast_find_process_info(pid);
     if (proc_info) {
       proc_info->is_performance_bridge_manager = false;
@@ -2154,7 +2214,9 @@ static long add_process_cmd(union ioctl_add_process_args __user * arg)
   union ioctl_add_process_args add_process_args;
   if (copy_from_user(&add_process_args, arg, sizeof(add_process_args))) return -EFAULT;
   bool is_performance_bridge_manager = add_process_args.is_performance_bridge_manager;
-  ret = agnocast_ioctl_add_process(pid, ipc_ns, is_performance_bridge_manager, &add_process_args);
+  uint32_t domain_id = add_process_args.domain_id;
+  ret = agnocast_ioctl_add_process(
+    pid, ipc_ns, is_performance_bridge_manager, domain_id, &add_process_args);
   if (ret == 0) {
     if (copy_to_user(arg, &add_process_args, sizeof(add_process_args))) return -EFAULT;
   }
@@ -2808,7 +2870,7 @@ int agnocast_increment_message_entry_rc(
 
   down_read(&global_htables_rwsem);
 
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     dev_warn(
       agnocast_device, "Topic (topic_name=%s) not found. (increment_message_entry_rc)\n",
@@ -2887,7 +2949,7 @@ bool agnocast_is_proc_exited(const pid_t pid)
 
 int agnocast_get_topic_entries_num(const char * topic_name, const struct ipc_namespace * ipc_ns)
 {
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     return 0;
   }
@@ -2904,7 +2966,7 @@ int agnocast_get_topic_entries_num(const char * topic_name, const struct ipc_nam
 bool agnocast_is_in_topic_entries(
   const char * topic_name, const struct ipc_namespace * ipc_ns, int64_t entry_id)
 {
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     return false;
   }
@@ -2922,7 +2984,7 @@ int agnocast_get_entry_rc(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const int64_t entry_id,
   const topic_local_id_t pubsub_id)
 {
-  struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     return -1;
   }
@@ -2943,7 +3005,7 @@ int64_t agnocast_get_latest_received_entry_id(
   const char * topic_name, const struct ipc_namespace * ipc_ns,
   const topic_local_id_t subscriber_id)
 {
-  const struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  const struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     return -1;
   }
@@ -2959,7 +3021,7 @@ bool agnocast_is_in_subscriber_htable(
   const char * topic_name, const struct ipc_namespace * ipc_ns,
   const topic_local_id_t subscriber_id)
 {
-  const struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  const struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     return false;
   }
@@ -2973,7 +3035,7 @@ bool agnocast_is_in_subscriber_htable(
 bool agnocast_is_in_publisher_htable(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const topic_local_id_t publisher_id)
 {
-  const struct topic_wrapper * wrapper = find_topic(topic_name, ipc_ns);
+  const struct topic_wrapper * wrapper = find_topic_for_current(topic_name, ipc_ns);
   if (!wrapper) {
     return false;
   }
@@ -3000,7 +3062,7 @@ int agnocast_get_topic_num(const struct ipc_namespace * ipc_ns)
 
 bool agnocast_is_in_topic_htable(const char * topic_name, const struct ipc_namespace * ipc_ns)
 {
-  return find_topic(topic_name, ipc_ns) != NULL;
+  return find_topic_for_current(topic_name, ipc_ns) != NULL;
 }
 
 bool agnocast_is_in_bridge_htable(const char * topic_name, const struct ipc_namespace * ipc_ns)
