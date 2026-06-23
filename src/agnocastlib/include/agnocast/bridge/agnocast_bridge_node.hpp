@@ -4,12 +4,12 @@
 #include "agnocast/agnocast_mq.hpp"
 #include "agnocast/agnocast_publisher.hpp"
 #include "agnocast/agnocast_subscription.hpp"
+#include "agnocast/bridge/agnocast_bridge_uds.hpp"
 #include "agnocast/bridge/agnocast_bridge_utils.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp/version.h"
 
 #include <fcntl.h>
-#include <mqueue.h>
 #include <sys/ioctl.h>
 #include <unistd.h>
 
@@ -98,6 +98,8 @@ struct AgnocastToRosPubsubRegistrationPolicy
 
 // Policy for agnocast::Service.
 // Registers a bridge that forwards requests from ROS 2 to Agnocast (R2A).
+// NodeT is needed so the shadow_node_identity payload can differ between
+// rclcpp::Node and agnocast::Node.
 struct RosToAgnocastServiceRegistrationPolicy
 {
   template <typename NodeT, typename ServiceT>
@@ -118,61 +120,18 @@ struct RosToAgnocastServiceRegistrationPolicy
 // are not needed and would cause include cycles.
 struct NoBridgeRegistrationPolicy
 {
-  template <typename T, typename... Args>
-  static void register_bridge(Args &&... args)
+  // Pubsub variant: register_bridge<MessageT>(topic_name, id).
+  template <typename MessageT>
+  static void register_bridge(const std::string &, topic_local_id_t)
   {
-    register_bridge_impl(std::forward<Args>(args)...);
   }
 
-private:
-  static void register_bridge_impl(const std::string &, topic_local_id_t) {}
-  template <typename NodeT>
-  static void register_bridge_impl(NodeT *, const std::string &)
+  // Service variant: register_bridge<NodeT, ServiceT>(node, service_name).
+  template <typename NodeT, typename ServiceT>
+  static void register_bridge(NodeT *, const std::string &)
   {
   }
 };
-
-template <typename MsgStruct>
-void send_mq_message(
-  const std::string & mq_name, const MsgStruct & msg, long msg_size_limit,
-  const rclcpp::Logger & logger)
-{
-  struct mq_attr attr = {};
-  attr.mq_maxmsg = PERFORMANCE_BRIDGE_MQ_MAX_MESSAGES;
-  attr.mq_msgsize = msg_size_limit;
-
-  mqd_t mq =
-    mq_open(mq_name.c_str(), O_CREAT | O_WRONLY | O_NONBLOCK | O_CLOEXEC, BRIDGE_MQ_PERMS, &attr);
-
-  if (mq == (mqd_t)-1) {
-    RCLCPP_ERROR(
-      logger, "mq_open failed for name '%s': %s (errno: %d)", mq_name.c_str(), strerror(errno),
-      errno);
-    return;
-  }
-
-  constexpr int BRIDGE_MQ_SEND_MAX_RETRIES = 100;
-  constexpr useconds_t BRIDGE_MQ_SEND_RETRY_INTERVAL_US = 100000;  // 100ms
-
-  int send_result = -1;
-  int last_errno = 0;
-  for (int retry = 0; retry <= BRIDGE_MQ_SEND_MAX_RETRIES; ++retry) {
-    send_result = mq_send(mq, reinterpret_cast<const char *>(&msg), sizeof(msg), 0);
-    if (send_result == 0) break;
-    last_errno = errno;
-    if (last_errno != EAGAIN) break;
-    if (retry < BRIDGE_MQ_SEND_MAX_RETRIES) {
-      usleep(BRIDGE_MQ_SEND_RETRY_INTERVAL_US);
-    }
-  }
-  if (send_result < 0) {
-    RCLCPP_ERROR(
-      logger, "mq_send failed for name '%s': %s (errno: %d)", mq_name.c_str(), strerror(last_errno),
-      last_errno);
-  }
-
-  mq_close(mq);
-}
 
 template <typename MessageT>
 void send_performance_pubsub_bridge_registration(
@@ -203,8 +162,11 @@ inline void send_performance_pubsub_bridge_registration_by_type_name(
     exit(EXIT_FAILURE);
   }
 
-  std::string mq_name = create_mq_name_for_bridge(PERFORMANCE_BRIDGE_VIRTUAL_PID);
-  send_mq_message(mq_name, msg, PERFORMANCE_BRIDGE_MQ_MESSAGE_SIZE, logger);
+  const std::string uds_addr = create_uds_addr_for_bridge();
+  // send_bridge_uds_message() handles its own shutdown-driven abort by
+  // sampling rclcpp::ok() / agnocast::ok() at entry and bailing on a watched
+  // true->false transition; no predicate needs to be plumbed through.
+  (void)send_bridge_uds_message(uds_addr, msg, logger);
 }
 
 template <typename ServiceT>
@@ -230,8 +192,8 @@ void send_performance_service_bridge_registration(
     exit(EXIT_FAILURE);
   }
 
-  std::string mq_name = create_mq_name_for_bridge(PERFORMANCE_BRIDGE_VIRTUAL_PID);
-  send_mq_message(mq_name, msg, PERFORMANCE_BRIDGE_MQ_MESSAGE_SIZE, logger);
+  const std::string uds_addr = create_uds_addr_for_bridge();
+  (void)send_bridge_uds_message(uds_addr, msg, logger);
 }
 
 }  // namespace agnocast
