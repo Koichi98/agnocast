@@ -3,7 +3,6 @@
 #include "agnocast/agnocast_callback_isolated_executor.hpp"
 #include "agnocast/agnocast_mq.hpp"
 #include "agnocast/bridge/performance/agnocast_performance_bridge_loader.hpp"
-#include "agnocast/bridge/standard/agnocast_standard_bridge_loader.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -11,7 +10,6 @@
 #include <optional>
 #include <string>
 #include <utility>
-#include <variant>
 
 namespace agnocast
 {
@@ -22,7 +20,6 @@ struct BridgeManagerContext
   std::shared_ptr<CallbackIsolatedAgnocastExecutor> executor;
   rclcpp::Logger logger;
   std::shared_ptr<PerformanceBridgeLoader> performance_loader;
-  std::shared_ptr<StandardBridgeLoader> standard_loader;
 };
 
 enum class ServiceBridgeState { NONE, PENDING, A2R, R2A };
@@ -36,8 +33,7 @@ class ServiceBridgeItem
 
   // Configuration members; set once and never modified.
   std::string service_name_;
-  std::optional<BridgeFactorySpec> factory_spec_ = std::nullopt;  // only for standard bridges
-  std::optional<std::string> service_type_ = std::nullopt;        // only for performance bridges
+  std::optional<std::string> service_type_ = std::nullopt;
   std::optional<std::pair<std::string, std::string>> shadow_node_identity_ = std::nullopt;
   bool may_start_r2a_bridge_ = false;
   bool may_start_a2r_bridge_ = false;
@@ -58,7 +54,6 @@ class ServiceBridgeItem
   int start_r2a_bridge(const BridgeManagerContext & ctx);
   int start_a2r_bridge(const BridgeManagerContext & ctx);
 
-  void update_configuration(const MqMsgBridge & msg);
   void update_configuration(const MqMsgPerformanceBridge & msg);
 
   void check_and_update_r2a(const BridgeManagerContext & ctx);
@@ -73,7 +68,6 @@ public:
 
   void check_and_update(const BridgeManagerContext & ctx);
 
-  void handle_request(const MqMsgBridge & msg, const BridgeManagerContext & ctx);
   void handle_request(const MqMsgPerformanceBridge & msg, const BridgeManagerContext & ctx);
 };
 

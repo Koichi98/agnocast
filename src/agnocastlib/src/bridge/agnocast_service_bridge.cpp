@@ -7,7 +7,6 @@
 
 #include <algorithm>
 #include <array>
-#include <cassert>
 #include <cerrno>
 #include <map>
 #include <utility>
@@ -227,12 +226,9 @@ int ServiceBridgeItem::start_r2a_bridge(const BridgeManagerContext & ctx)
   if (service_type_.has_value() && ctx.performance_loader != nullptr) {
     entity = ctx.performance_loader->create_r2a_service_bridge(
       ctx.container_node, service_name_, *service_type_, service_qos);
-  } else if (factory_spec_.has_value() && ctx.standard_loader != nullptr) {
-    // TODO(bdm-k): Populate this once the standard bridge loader is updated.
-    set_error_string("Standard bridge support is not yet implemented");
-    return -1;
   } else {
-    assert(false && "missing configuration members or bridge loader");
+    set_error_string("missing configuration members or bridge loader");
+    return -1;
   }
 
   if (entity.entity_handle == nullptr) {
@@ -255,12 +251,9 @@ int ServiceBridgeItem::start_a2r_bridge(const BridgeManagerContext & ctx)
   if (service_type_.has_value() && ctx.performance_loader != nullptr) {
     entity = ctx.performance_loader->create_a2r_service_bridge(
       ctx.container_node, service_name_, *service_type_, rclcpp::ServicesQoS());
-  } else if (factory_spec_.has_value() && ctx.standard_loader != nullptr) {
-    // TODO(bdm-k): Populate this once the standard bridge loader is updated.
-    set_error_string("Standard bridge support is not yet implemented");
-    return -1;
   } else {
-    assert(false && "missing configuration members or bridge loader");
+    set_error_string("missing configuration members or bridge loader");
+    return -1;
   }
 
   if (entity.entity_handle == nullptr) {
@@ -272,36 +265,6 @@ int ServiceBridgeItem::start_a2r_bridge(const BridgeManagerContext & ctx)
   entity_ = entity;
   shadow_node_ = nullptr;
   return 0;
-}
-
-void ServiceBridgeItem::update_configuration(const MqMsgBridge & msg)
-{
-  if (service_name_.empty()) {
-    service_name_ = static_cast<const char *>(msg.srv_target.service_name);
-  }
-  if (!factory_spec_.has_value()) {
-    BridgeFactorySpec factory_spec;
-    if (msg.factory.in_main_executable) {
-      factory_spec.shared_lib_path = std::nullopt;
-    } else {
-      factory_spec.shared_lib_path =
-        std::string(static_cast<const char *>(msg.factory.shared_lib_path));
-    }
-    factory_spec.fn_offset_r2a = msg.factory.fn_offset_r2a;
-    factory_spec.fn_offset_a2r = msg.factory.fn_offset_a2r;
-    factory_spec_ = std::move(factory_spec);
-  }
-  if (!shadow_node_identity_.has_value() && msg.srv_target.create_shadow_node) {
-    shadow_node_identity_ = {
-      static_cast<const char *>(msg.srv_target.shadow_node_namespace),
-      static_cast<const char *>(msg.srv_target.shadow_node_name)};
-  }
-
-  if (msg.direction == BridgeDirection::ROS2_TO_AGNOCAST) {
-    may_start_r2a_bridge_ = true;
-  } else {
-    may_start_a2r_bridge_ = true;
-  }
 }
 
 void ServiceBridgeItem::update_configuration(const MqMsgPerformanceBridge & msg)
@@ -438,12 +401,6 @@ void ServiceBridgeItem::handle_request_with_direction(
       }
       break;
   }
-}
-
-void ServiceBridgeItem::handle_request(const MqMsgBridge & msg, const BridgeManagerContext & ctx)
-{
-  update_configuration(msg);
-  handle_request_with_direction(msg.direction, ctx);
 }
 
 void ServiceBridgeItem::handle_request(
