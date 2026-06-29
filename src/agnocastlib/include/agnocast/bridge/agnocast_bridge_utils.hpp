@@ -69,6 +69,10 @@ rclcpp::QoS get_service_qos(const std::string & service_name);
 bool is_agnocast_service_alive(const std::string & service_name, std::string & reason);
 std::pair<std::string, std::string> split_full_node_name(const std::string & fqn);
 
+void register_service_bridge(
+  const std::string & service_type, const std::string & service_name, BridgeDirection direction,
+  const std::optional<std::pair<std::string, std::string>> & shadow_node_identity);
+
 /// @brief A builder class for creating bridge registration messages.
 ///
 /// It detects errors such as string truncation when copying string fields, and

@@ -1,6 +1,7 @@
 #include "agnocast/bridge/agnocast_bridge_utils.hpp"
 
 #include "agnocast/agnocast.hpp"
+#include "agnocast/bridge/agnocast_bridge_node.hpp"
 
 #include <rclcpp/rclcpp.hpp>
 
@@ -389,6 +390,17 @@ std::pair<MqMsgPerformanceBridge, std::string>
 BridgeRegistrationMsgBuilder::build_performance_message()
 {
   return {msg_, failed_ ? std::move(reason_) : std::string{}};
+}
+
+void register_service_bridge(
+  const std::string & service_type, const std::string & service_name, BridgeDirection direction,
+  const std::optional<std::pair<std::string, std::string>> & shadow_node_identity)
+{
+  if (get_bridge_mode() != BridgeMode::On) {
+    return;
+  }
+  send_performance_service_bridge_registration_by_type_name(
+    service_type, service_name, direction, shadow_node_identity);
 }
 
 }  // namespace agnocast
