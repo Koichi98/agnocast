@@ -30,9 +30,6 @@ namespace agnocast
 
 static constexpr size_t DEFAULT_QOS_DEPTH = 10;
 
-template <typename MessageT>
-void send_performance_pubsub_bridge_registration(
-  const std::string & topic_name, topic_local_id_t id, BridgeDirection direction);
 inline void send_performance_pubsub_bridge_registration_by_type_name(
   const std::string & topic_name, topic_local_id_t id, const std::string & message_type_name,
   BridgeDirection direction);
@@ -40,16 +37,6 @@ template <typename ServiceT>
 void send_performance_service_bridge_registration(
   const std::string & service_name, BridgeDirection direction,
   const std::optional<std::pair<std::string, std::string>> & shadow_node_identity);
-
-template <typename MessageT>
-void register_pubsub_bridge_core(
-  const std::string & topic_name, topic_local_id_t id, BridgeDirection direction)
-{
-  auto bridge_mode = get_bridge_mode();
-  if (bridge_mode == BridgeMode::On) {
-    send_performance_pubsub_bridge_registration<MessageT>(topic_name, id, direction);
-  }
-}
 
 inline void register_pubsub_bridge_by_type_name(
   const std::string & topic_name, topic_local_id_t id, const std::string & message_type,
@@ -73,28 +60,6 @@ void register_service_bridge_core(
       service_name, direction, shadow_node_identity);
   }
 }
-
-// Policy for agnocast::Subscription.
-// Registers a bridge that forwards messages from ROS 2 to Agnocast (R2A).
-struct RosToAgnocastPubsubRegistrationPolicy
-{
-  template <typename MessageT>
-  static void register_bridge(const std::string & topic_name, topic_local_id_t id)
-  {
-    register_pubsub_bridge_core<MessageT>(topic_name, id, BridgeDirection::ROS2_TO_AGNOCAST);
-  }
-};
-
-// Policy for agnocast::Publisher.
-// Registers a bridge that forwards messages from Agnocast to ROS 2 (A2R).
-struct AgnocastToRosPubsubRegistrationPolicy
-{
-  template <typename MessageT>
-  static void register_bridge(const std::string & topic_name, topic_local_id_t id)
-  {
-    register_pubsub_bridge_core<MessageT>(topic_name, id, BridgeDirection::AGNOCAST_TO_ROS2);
-  }
-};
 
 // Policy for agnocast::Service.
 // Registers a bridge that forwards requests from ROS 2 to Agnocast (R2A).
@@ -176,15 +141,6 @@ void send_mq_message(
   }
 
   mq_close(mq);
-}
-
-template <typename MessageT>
-void send_performance_pubsub_bridge_registration(
-  const std::string & topic_name, topic_local_id_t id, BridgeDirection direction)
-{
-  const std::string message_type_name = rosidl_generator_traits::name<MessageT>();
-  send_performance_pubsub_bridge_registration_by_type_name(
-    topic_name, id, message_type_name, direction);
 }
 
 inline void send_performance_pubsub_bridge_registration_by_type_name(
