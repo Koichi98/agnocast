@@ -224,8 +224,16 @@ int ServiceBridgeItem::start_r2a_bridge(const BridgeManagerContext & ctx)
 
   ServiceBridgeEntity entity;
   if (service_type_.has_value() && ctx.performance_loader != nullptr) {
-    entity = ctx.performance_loader->create_r2a_service_bridge(
-      ctx.container_node, service_name_, *service_type_, service_qos);
+    try {
+      entity = ctx.performance_loader->create_r2a_service_bridge(
+        ctx.container_node, service_name_, *service_type_, service_qos);
+    } catch (const std::exception & e) {
+      set_error_string(e.what());
+      return -1;
+    } catch (...) {
+      set_error_string("Unknown error");
+      return -1;
+    }
   } else {
     set_error_string("missing configuration members or bridge loader");
     return -1;
@@ -249,8 +257,16 @@ int ServiceBridgeItem::start_a2r_bridge(const BridgeManagerContext & ctx)
 {
   ServiceBridgeEntity entity;
   if (service_type_.has_value() && ctx.performance_loader != nullptr) {
-    entity = ctx.performance_loader->create_a2r_service_bridge(
-      ctx.container_node, service_name_, *service_type_, rclcpp::ServicesQoS());
+    try {
+      entity = ctx.performance_loader->create_a2r_service_bridge(
+        ctx.container_node, service_name_, *service_type_, rclcpp::ServicesQoS());
+    } catch (const std::exception & e) {
+      set_error_string(e.what());
+      return -1;
+    } catch (...) {
+      set_error_string("Unknown error");
+      return -1;
+    }
   } else {
     set_error_string("missing configuration members or bridge loader");
     return -1;
