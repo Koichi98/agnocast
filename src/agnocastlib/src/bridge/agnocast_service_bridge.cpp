@@ -283,21 +283,21 @@ int ServiceBridgeItem::start_a2r_bridge(const BridgeManagerContext & ctx)
   return 0;
 }
 
-void ServiceBridgeItem::update_configuration(const MqMsgPerformanceBridge & msg)
+void ServiceBridgeItem::update_configuration(const BridgeMsgServicePayload & payload)
 {
   if (service_name_.empty()) {
-    service_name_ = static_cast<const char *>(msg.srv_target.service_name);
+    service_name_ = static_cast<const char *>(payload.service_name);
   }
   if (!service_type_.has_value()) {
-    service_type_ = static_cast<const char *>(msg.srv_target.service_type);
+    service_type_ = static_cast<const char *>(payload.service_type);
   }
-  if (!shadow_node_identity_.has_value() && msg.srv_target.create_shadow_node) {
+  if (!shadow_node_identity_.has_value() && payload.create_shadow_node) {
     shadow_node_identity_ = {
-      static_cast<const char *>(msg.srv_target.shadow_node_namespace),
-      static_cast<const char *>(msg.srv_target.shadow_node_name)};
+      static_cast<const char *>(payload.shadow_node_namespace),
+      static_cast<const char *>(payload.shadow_node_name)};
   }
 
-  if (msg.direction == BridgeDirection::ROS2_TO_AGNOCAST) {
+  if (payload.direction == BridgeDirection::ROS2_TO_AGNOCAST) {
     may_start_r2a_bridge_ = true;
   } else {
     may_start_a2r_bridge_ = true;
@@ -420,10 +420,10 @@ void ServiceBridgeItem::handle_request_with_direction(
 }
 
 void ServiceBridgeItem::handle_request(
-  const MqMsgPerformanceBridge & msg, const BridgeManagerContext & ctx)
+  const BridgeMsgServicePayload & payload, const BridgeManagerContext & ctx)
 {
-  update_configuration(msg);
-  handle_request_with_direction(msg.direction, ctx);
+  update_configuration(payload);
+  handle_request_with_direction(payload.direction, ctx);
 }
 
 }  // namespace agnocast

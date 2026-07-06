@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agnocast/agnocast_callback_isolated_executor.hpp"
-#include "agnocast/agnocast_mq.hpp"
+#include "agnocast/bridge/agnocast_bridge_msg.hpp"
 #include "agnocast/bridge/performance/agnocast_performance_bridge_loader.hpp"
 
 #include <rclcpp/rclcpp.hpp>
@@ -54,7 +54,7 @@ class ServiceBridgeItem
   int start_r2a_bridge(const BridgeManagerContext & ctx);
   int start_a2r_bridge(const BridgeManagerContext & ctx);
 
-  void update_configuration(const MqMsgPerformanceBridge & msg);
+  void update_configuration(const BridgeMsgServicePayload & payload);
 
   void check_and_update_r2a(const BridgeManagerContext & ctx);
   void check_and_update_a2r(const BridgeManagerContext & ctx);
@@ -68,7 +68,7 @@ public:
 
   void check_and_update(const BridgeManagerContext & ctx);
 
-  void handle_request(const MqMsgPerformanceBridge & msg, const BridgeManagerContext & ctx);
+  void handle_request(const BridgeMsgServicePayload & payload, const BridgeManagerContext & ctx);
 };
 
 }  // namespace agnocast

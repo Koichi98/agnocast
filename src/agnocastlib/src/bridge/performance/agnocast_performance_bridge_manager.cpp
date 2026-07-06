@@ -3,15 +3,16 @@
 
 #include "agnocast/agnocast_callback_isolated_executor.hpp"
 #include "agnocast/agnocast_ioctl.hpp"
-#include "agnocast/agnocast_mq.hpp"
 #include "agnocast/agnocast_utils.hpp"
+#include "agnocast/bridge/agnocast_bridge_msg.hpp"
 #include "agnocast/bridge/agnocast_bridge_utils.hpp"
 
-#include <mqueue.h>
 #include <sys/prctl.h>
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstddef>
+#include <cstring>
 
 namespace agnocast
 {
@@ -55,13 +56,10 @@ void PerformanceBridgeManager::run()
 
   start_ros_execution();
 
-  event_loop_.set_mq_handler([this](int fd) { this->on_mq_request(fd); });
+  event_loop_.set_message_handler(
+    [this](const void * data, std::size_t size) { this->on_bridge_message(data, size); });
   event_loop_.set_signal_handler([this]() { this->on_signal(); });
   event_loop_.set_socket_handler([this]() { return this->on_socket_request(); });
-  // One bridge manager runs per IPC namespace, so its daemon request MQ is per-NS too.
-  event_loop_.register_aux_mq(
-    create_mq_name_for_daemon_bridge(PERFORMANCE_BRIDGE_VIRTUAL_PID), DAEMON_BRIDGE_MQ_MAX_MESSAGES,
-    DAEMON_BRIDGE_MQ_MESSAGE_SIZE, [this](int fd) { this->on_daemon_mq_request(fd); });
 
   while (!shutdown_requested_) {
     if (!event_loop_.spin_once(EVENT_LOOP_TIMEOUT_MS)) {
@@ -102,66 +100,83 @@ void PerformanceBridgeManager::start_ros_execution()
   });
 }
 
-void PerformanceBridgeManager::on_mq_request(int fd)
+void PerformanceBridgeManager::on_bridge_message(const void * data, std::size_t size)
 {
-  MqMsgPerformanceBridge msg{};
-
-  ssize_t bytes_read = mq_receive(fd, reinterpret_cast<char *>(&msg), sizeof(msg), nullptr);
-  if (bytes_read < 0) {
-    if (errno != EAGAIN) {
-      RCLCPP_WARN_STREAM(
-        logger_, "mq_receive failed for mq_name='" << event_loop_.get_mq_name() << "' (fd=" << fd
-                                                   << "): " << strerror(errno));
-    }
+  if (size < offsetof(BridgeMsg, payload)) {
+    RCLCPP_WARN(
+      logger_,
+      "bridge msg too small to carry a discriminator: got %zu bytes, expected at least %zu", size,
+      offsetof(BridgeMsg, payload));
     return;
   }
 
-  if (msg.is_service) {
-    BridgeManagerContext ctx{container_node_, executor_, logger_, loader_};
-    std::string service_name = static_cast<const char *>(msg.srv_target.service_name);
-    ServiceBridgeItem sb_item;
+  BridgeMsg msg{};
+  const size_t copy_size = std::min(size, sizeof(BridgeMsg));
+  std::memcpy(&msg, data, copy_size);
 
-    auto it = active_service_bridges_.find(service_name);
-    if (it != active_service_bridges_.end()) {
-      sb_item = std::move(it->second);
-      active_service_bridges_.erase(it);
+  const auto validate_variant_size = [&](size_t expected) -> bool {
+    if (size < expected) {
+      RCLCPP_WARN(
+        logger_, "bridge msg (type=%u) truncated: got %zu bytes, expected at least %zu",
+        static_cast<uint32_t>(msg.type), size, expected);
+      return false;
     }
+    return true;
+  };
 
-    sb_item.handle_request(msg, ctx);
-    if (sb_item.state() != ServiceBridgeState::NONE) {
-      active_service_bridges_.emplace(service_name, std::move(sb_item));
-    }
-  } else {
-    std::string topic_name = static_cast<const char *>(msg.pubsub_target.topic_name);
-    topic_local_id_t target_id = msg.pubsub_target.target_id;
-    std::string message_type = static_cast<const char *>(msg.pubsub_target.message_type);
+  switch (msg.type) {
+    case BridgeMsgType::Service: {
+      if (!validate_variant_size(bridge_msg_wire_size<BridgeMsgServicePayload>())) {
+        return;
+      }
+      const auto & payload = msg.payload.service;
+      BridgeManagerContext ctx{container_node_, executor_, logger_, loader_};
+      std::string service_name = static_cast<const char *>(payload.service_name);
+      ServiceBridgeItem sb_item;
 
-    request_cache_[topic_name][target_id] = msg;
+      auto it = active_service_bridges_.find(service_name);
+      if (it != active_service_bridges_.end()) {
+        sb_item = std::move(it->second);
+        active_service_bridges_.erase(it);
+      }
 
-    create_pubsub_bridge_if_needed(
-      topic_name, request_cache_[topic_name], message_type, msg.direction);
-  }
-}
-
-void PerformanceBridgeManager::on_daemon_mq_request(int fd)
-{
-  MqMsgDaemonBridge req{};
-  while (!shutdown_requested_) {
-    ssize_t bytes_read = mq_receive(fd, reinterpret_cast<char *>(&req), sizeof(req), nullptr);
-    if (bytes_read < 0) {
-      // EAGAIN just means the queue is drained; anything else is unexpected and
-      // would otherwise silently drop a daemon bridge request.
-      if (errno != EAGAIN) {
-        RCLCPP_WARN_STREAM(
-          logger_, "mq_receive failed for daemon bridge mq (fd=" << fd << "): " << strerror(errno));
+      sb_item.handle_request(payload, ctx);
+      if (sb_item.state() != ServiceBridgeState::NONE) {
+        active_service_bridges_.emplace(service_name, std::move(sb_item));
       }
       break;
     }
-    register_daemon_pubsub_request(req);
+    case BridgeMsgType::PubSub: {
+      if (!validate_variant_size(bridge_msg_wire_size<BridgeMsgPubSubPayload>())) {
+        return;
+      }
+      const auto & payload = msg.payload.pubsub;
+      std::string topic_name = static_cast<const char *>(payload.topic_name);
+      topic_local_id_t target_id = payload.target_id;
+      std::string message_type = static_cast<const char *>(payload.message_type);
+
+      request_cache_[topic_name][target_id] = payload;
+
+      create_pubsub_bridge_if_needed(
+        topic_name, request_cache_[topic_name], message_type, payload.direction);
+      break;
+    }
+    case BridgeMsgType::DaemonPubSub: {
+      if (!validate_variant_size(bridge_msg_wire_size<BridgeMsgDaemonPubSubPayload>())) {
+        return;
+      }
+      register_daemon_pubsub_request(msg.payload.daemon_pubsub);
+      break;
+    }
+    default:
+      RCLCPP_WARN(
+        logger_, "Received bridge message with unknown type: %u", static_cast<uint32_t>(msg.type));
+      break;
   }
 }
 
-void PerformanceBridgeManager::register_daemon_pubsub_request(const MqMsgDaemonBridge & req)
+void PerformanceBridgeManager::register_daemon_pubsub_request(
+  const BridgeMsgDaemonPubSubPayload & req)
 {
   const std::string topic_name = static_cast<const char *>(req.topic_name);
   const std::string message_type = static_cast<const char *>(req.type_name);
@@ -273,7 +288,7 @@ void PerformanceBridgeManager::check_and_create_pubsub_bridges()
     }
 
     const std::string message_type =
-      static_cast<const char *>(requests.begin()->second.pubsub_target.message_type);
+      static_cast<const char *>(requests.begin()->second.message_type);
 
     create_pubsub_bridge_if_needed(
       topic_name, requests, message_type, BridgeDirection::ROS2_TO_AGNOCAST);

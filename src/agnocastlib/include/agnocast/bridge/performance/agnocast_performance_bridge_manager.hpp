@@ -27,7 +27,7 @@ public:
   void run();
 
 private:
-  using RequestMap = std::unordered_map<topic_local_id_t, MqMsgPerformanceBridge>;
+  using RequestMap = std::unordered_map<topic_local_id_t, BridgeMsgPubSubPayload>;
 
   // A cross-NS bridge request from the per-NS daemon. Unlike an intra-NS request,
   // there is no local endpoint to resolve the plugin / QoS from, so the type and
@@ -64,12 +64,11 @@ private:
 
   void start_ros_execution();
 
-  void on_mq_request(int fd);
-  void on_daemon_mq_request(int fd);
+  void on_bridge_message(const void * data, std::size_t size);
   void on_signal();
   std::string on_socket_request() const;
 
-  void register_daemon_pubsub_request(const MqMsgDaemonBridge & req);
+  void register_daemon_pubsub_request(const BridgeMsgDaemonPubSubPayload & req);
   bool is_daemon_forced(const std::string & topic_name, BridgeDirection direction) const;
   void create_daemon_forced_bridges();
   void activate_daemon_forced_bridge(
