@@ -86,6 +86,12 @@ target_include_directories(server PRIVATE
   ${agnocastlib_INCLUDE_DIRS}
 )
 
+add_executable(generic_server src/minimal_generic_server.cpp)
+ament_target_dependencies(generic_server rclcpp agnocastlib agnocast_sample_interfaces)
+target_include_directories(generic_server PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
 add_executable(no_rclcpp_server src/no_rclcpp_server.cpp)
 ament_target_dependencies(no_rclcpp_server agnocastlib agnocast_sample_interfaces)
 target_include_directories(no_rclcpp_server PRIVATE
@@ -97,6 +103,9 @@ ament_target_dependencies(no_rclcpp_client agnocastlib agnocast_sample_interface
 target_include_directories(no_rclcpp_client PRIVATE
   ${agnocastlib_INCLUDE_DIRS}
 )
+
+add_executable(ros2_client src/ros2_client.cpp)
+ament_target_dependencies(ros2_client rclcpp agnocast_sample_interfaces)
 
 add_executable(sim_time_timer src/sim_time_timer.cpp)
 ament_target_dependencies(sim_time_timer rclcpp agnocastlib)
@@ -183,10 +192,16 @@ install(TARGETS client
 install(TARGETS server
   DESTINATION lib/${PROJECT_NAME})
 
+install(TARGETS generic_server
+  DESTINATION lib/${PROJECT_NAME})
+
 install(TARGETS no_rclcpp_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS no_rclcpp_client
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS ros2_client
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS sim_time_timer
