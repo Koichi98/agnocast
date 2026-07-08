@@ -13,9 +13,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <span>
+#include <string>
 #include <vector>
 
 extern "C" {
@@ -402,6 +404,16 @@ pid_t spawn_daemon_process(Func && func)
     // case, a process may be reading from the pipe and waiting on it to close, which can cause
     // the process to hang because the daemon never closes it. Redirecting to /dev/null works around
     // this issue.
+    //
+    // Debug escape hatch: when AGNOCAST_BRIDGE_DEBUG is set we KEEP the inherited stdout/stderr so
+    // the bridge manager's diagnostics reach the launch-captured stdout/stderr (and cloud log
+    // collection). Trade-off: the daemon holds the inherited pipe open, which can delay shutdown of
+    // a reader waiting for EOF. Only use this flag for debugging.
+    const char * bridge_debug_env = std::getenv("AGNOCAST_BRIDGE_DEBUG");
+    const bool keep_stdio_for_debug =
+      bridge_debug_env != nullptr && std::string(bridge_debug_env) != "0" &&
+      std::string(bridge_debug_env) != "off" && std::string(bridge_debug_env) != "false";
+
     struct stat st_out = {};
     struct stat st_err = {};
     if (fstat(STDOUT_FILENO, &st_out) < 0) {
@@ -412,8 +424,9 @@ pid_t spawn_daemon_process(Func && func)
     }
 
     if (
-      S_ISFIFO(st_out.st_mode) || S_ISFIFO(st_err.st_mode) || S_ISSOCK(st_out.st_mode) ||
-      S_ISSOCK(st_err.st_mode)) {
+      !keep_stdio_for_debug &&
+      (S_ISFIFO(st_out.st_mode) || S_ISFIFO(st_err.st_mode) || S_ISSOCK(st_out.st_mode) ||
+       S_ISSOCK(st_err.st_mode))) {
       int devnull = open("/dev/null", O_RDWR);
       if (devnull < 0) {
         fail("Failed to open /dev/null: %s");

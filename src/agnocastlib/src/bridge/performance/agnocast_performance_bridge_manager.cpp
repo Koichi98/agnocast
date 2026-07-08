@@ -24,6 +24,11 @@ namespace
 // `export AGNOCAST_BRIDGE_DEBUG=1` to log the a2r/r2a activation gate every poll.
 // Transition events (request received / bridge created / bridge removed) are logged
 // unconditionally at INFO regardless of this flag.
+//
+// NOTE: the bridge manager runs in a forked daemon process whose stdout/stderr are normally
+// redirected to /dev/null under `ros2 launch` (spawn_daemon_process in agnocast.cpp). That
+// redirect is skipped while AGNOCAST_BRIDGE_DEBUG is set, so these RCLCPP logs reach the
+// launch-captured stdout/stderr (and thus cloud log collection).
 bool bridge_debug_enabled()
 {
   static const bool enabled = []() {
@@ -143,7 +148,8 @@ void PerformanceBridgeManager::on_mq_request(int fd)
     request_cache_[topic_name][target_id] = msg;
 
     RCLCPP_INFO(
-      logger_, "[bridge-dbg] request received: topic='%s' type='%s' dir=%s target_id=%d",
+      logger_,
+      "[bridge-dbg] request received: topic='%s' type='%s' dir=%s target_id=%d",
       topic_name.c_str(), message_type.c_str(),
       msg.direction == BridgeDirection::AGNOCAST_TO_ROS2 ? "A2R" : "R2A", target_id);
 
@@ -335,7 +341,8 @@ bool PerformanceBridgeManager::should_create_pubsub_bridge(
     if (stats.count <= 0) {
       if (bridge_debug_enabled()) {
         RCLCPP_INFO(
-          logger_, "[bridge-dbg] R2A gate topic='%s' agnocast_sub_count=%d (<=0, skip)",
+        logger_,
+          "[bridge-dbg] R2A gate topic='%s' agnocast_sub_count=%d (<=0, skip)",
           topic_name.c_str(), stats.count);
       }
       return false;
@@ -358,7 +365,8 @@ bool PerformanceBridgeManager::should_create_pubsub_bridge(
   if (stats.count <= 0) {
     if (bridge_debug_enabled()) {
       RCLCPP_INFO(
-        logger_, "[bridge-dbg] A2R gate topic='%s' agnocast_pub_count=%d (<=0, skip)",
+        logger_,
+        "[bridge-dbg] A2R gate topic='%s' agnocast_pub_count=%d (<=0, skip)",
         topic_name.c_str(), stats.count);
     }
     return false;
@@ -413,7 +421,8 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
 
     if (result.entity_handle) {
       RCLCPP_INFO(
-        logger_, "[bridge-dbg] %s pubsub bridge CREATED for topic='%s' (type='%s')",
+        logger_,
+        "[bridge-dbg] %s pubsub bridge CREATED for topic='%s' (type='%s')",
         is_r2a ? "R2A" : "A2R", topic_name.c_str(), message_type.c_str());
       if (is_r2a) {
         if (!update_ros2_publisher_num(container_node_.get(), topic_name)) {
