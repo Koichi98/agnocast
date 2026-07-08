@@ -12,9 +12,31 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdlib>
+#include <string>
 
 namespace agnocast
 {
+
+namespace
+{
+// Verbose per-poll bridge diagnostics. Off by default; enable with
+// `export AGNOCAST_BRIDGE_DEBUG=1` to log the a2r/r2a activation gate every poll.
+// Transition events (request received / bridge created / bridge removed) are logged
+// unconditionally at INFO regardless of this flag.
+bool bridge_debug_enabled()
+{
+  static const bool enabled = []() {
+    const char * e = std::getenv("AGNOCAST_BRIDGE_DEBUG");
+    if (e == nullptr) {
+      return false;
+    }
+    const std::string v(e);
+    return v != "0" && v != "off" && v != "false";
+  }();
+  return enabled;
+}
+}  // namespace
 
 PerformanceBridgeManager::PerformanceBridgeManager()
 : logger_(rclcpp::get_logger("agnocast_performance_bridge_manager")),
@@ -120,6 +142,11 @@ void PerformanceBridgeManager::on_mq_request(int fd)
 
     request_cache_[topic_name][target_id] = msg;
 
+    RCLCPP_INFO(
+      logger_, "[bridge-dbg] request received: topic='%s' type='%s' dir=%s target_id=%d",
+      topic_name.c_str(), message_type.c_str(),
+      msg.direction == BridgeDirection::AGNOCAST_TO_ROS2 ? "A2R" : "R2A", target_id);
+
     create_pubsub_bridge_if_needed(
       topic_name, request_cache_[topic_name], message_type, msg.direction);
   }
@@ -188,6 +215,11 @@ void PerformanceBridgeManager::check_and_remove_pubsub_bridges()
     }
 
     if (result.count <= 0 || !is_demanded_by_ros2) {
+      RCLCPP_INFO(
+        logger_,
+        "[bridge-dbg] R2A bridge REMOVED topic='%s' (agnocast_sub_count=%d "
+        "has_external_ros2_publisher=%s)",
+        topic_name.c_str(), result.count, is_demanded_by_ros2 ? "true" : "false");
       if (r2a_it->second.callback_group) {
         executor_->stop_callback_group(r2a_it->second.callback_group);
       }
@@ -218,6 +250,11 @@ void PerformanceBridgeManager::check_and_remove_pubsub_bridges()
     }
 
     if (result.count <= 0 || !is_demanded_by_ros2) {
+      RCLCPP_INFO(
+        logger_,
+        "[bridge-dbg] A2R bridge REMOVED topic='%s' (agnocast_pub_count=%d "
+        "has_external_ros2_subscriber=%s)",
+        topic_name.c_str(), result.count, is_demanded_by_ros2 ? "true" : "false");
       if (a2r_it->second.callback_group) {
         executor_->stop_callback_group(a2r_it->second.callback_group);
       }
@@ -296,10 +333,22 @@ bool PerformanceBridgeManager::should_create_pubsub_bridge(
 
     const auto stats = get_agnocast_subscriber_count(topic_name);
     if (stats.count <= 0) {
+      if (bridge_debug_enabled()) {
+        RCLCPP_INFO(
+          logger_, "[bridge-dbg] R2A gate topic='%s' agnocast_sub_count=%d (<=0, skip)",
+          topic_name.c_str(), stats.count);
+      }
       return false;
     }
 
-    return has_external_ros2_publisher(container_node_.get(), topic_name);
+    const bool has_ext_pub = has_external_ros2_publisher(container_node_.get(), topic_name);
+    if (bridge_debug_enabled()) {
+      RCLCPP_INFO(
+        logger_,
+        "[bridge-dbg] R2A gate topic='%s' agnocast_sub_count=%d has_external_ros2_publisher=%s",
+        topic_name.c_str(), stats.count, has_ext_pub ? "true" : "false");
+    }
+    return has_ext_pub;
   }
   if (active_pubsub_a2r_bridges_.count(topic_name) > 0) {
     return false;
@@ -307,10 +356,22 @@ bool PerformanceBridgeManager::should_create_pubsub_bridge(
 
   const auto stats = get_agnocast_publisher_count(topic_name);
   if (stats.count <= 0) {
+    if (bridge_debug_enabled()) {
+      RCLCPP_INFO(
+        logger_, "[bridge-dbg] A2R gate topic='%s' agnocast_pub_count=%d (<=0, skip)",
+        topic_name.c_str(), stats.count);
+    }
     return false;
   }
 
-  return has_external_ros2_subscriber(container_node_.get(), topic_name);
+  const bool has_ext_sub = has_external_ros2_subscriber(container_node_.get(), topic_name);
+  if (bridge_debug_enabled()) {
+    RCLCPP_INFO(
+      logger_,
+      "[bridge-dbg] A2R gate topic='%s' agnocast_pub_count=%d has_external_ros2_subscriber=%s",
+      topic_name.c_str(), stats.count, has_ext_sub ? "true" : "false");
+  }
+  return has_ext_sub;
 }
 
 void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
@@ -329,6 +390,12 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
     }
   }
   if (qos_source_id == -1) {
+    if (bridge_debug_enabled()) {
+      RCLCPP_INFO(
+        logger_,
+        "[bridge-dbg] %s create for topic='%s' skipped: no matching request in cache",
+        direction == BridgeDirection::ROS2_TO_AGNOCAST ? "R2A" : "A2R", topic_name.c_str());
+    }
     return;
   }
 
@@ -345,6 +412,9 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
     }
 
     if (result.entity_handle) {
+      RCLCPP_INFO(
+        logger_, "[bridge-dbg] %s pubsub bridge CREATED for topic='%s' (type='%s')",
+        is_r2a ? "R2A" : "A2R", topic_name.c_str(), message_type.c_str());
       if (is_r2a) {
         if (!update_ros2_publisher_num(container_node_.get(), topic_name)) {
           RCLCPP_ERROR(
@@ -358,6 +428,12 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
         }
         active_pubsub_a2r_bridges_[topic_name] = result;
       }
+    } else {
+      RCLCPP_WARN(
+        logger_,
+        "[bridge-dbg] %s bridge factory returned null handle for topic='%s' (type='%s'); "
+        "bridge NOT created",
+        is_r2a ? "R2A" : "A2R", topic_name.c_str(), message_type.c_str());
     }
 
   } catch (const std::exception & e) {
