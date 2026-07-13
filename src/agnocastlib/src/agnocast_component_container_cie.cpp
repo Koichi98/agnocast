@@ -156,6 +156,21 @@ void ComponentManagerCallbackIsolated::start_executor_for_callback_group(
   auto agnocast_topics = agnocast::get_agnocast_topics_by_group(callback_group);
   std::string group_id = agnocast::create_callback_group_id(callback_group, node, agnocast_topics);
 
+  {
+    std::string topics_joined;
+    for (const auto & t : agnocast_topics) {
+      if (!topics_joined.empty()) topics_joined += ",";
+      topics_joined += t;
+    }
+    RCLCPP_INFO(
+      this->get_logger(),
+      "[bridge-dbg] start_executor_for_callback_group group_id='%s' node='%s' "
+      "agnocast_topics=[%s] -> using %s executor",
+      group_id.c_str(), node->get_fully_qualified_name(), topics_joined.c_str(),
+      agnocast_topics.empty() ? "SingleThreadedExecutor (ROS2-only, NOT agnocast-capable)"
+                               : "SingleThreadedAgnocastExecutor (agnocast-capable)");
+  }
+
   std::shared_ptr<rclcpp::Executor> executor;
 
   if (agnocast_topics.empty()) {

@@ -30,21 +30,44 @@ extern "C" PerformancePubsubBridgeResult create_r2a_pubsub_bridge_@(snake_type_n
     agnocast::PublisherOptions{},
     true);
 
+  RCLCPP_INFO(
+    rclcpp::get_logger("ros2agnocast"),
+    "[bridge-dbg] R2A agnocast publisher created: topic='%s' resolved_agnocast_topic='%s'",
+    topic_name.c_str(), agno_pub->get_topic_name());
+
+  // Per-bridge-instance counter (NOT a macro-local static) so that logging stays isolated
+  // per topic even when multiple R2A bridges share the same message type.
+  auto ros2_recv_count = std::make_shared<std::atomic<uint64_t>>(0);
+
   return create_r2a_generic_bridge(
     node, topic_name, sub_qos, "@(msg_type)",
-    [agno_pub](std::shared_ptr<rclcpp::SerializedMessage> serialized_msg) {
+    [agno_pub, topic_name, ros2_recv_count](
+      std::shared_ptr<rclcpp::SerializedMessage> serialized_msg) {
       static const rclcpp::Serialization<MsgT> serialization;
+      const uint64_t n = ++(*ros2_recv_count);
+      if (n == 1 || n % 100 == 0) {
+        RCLCPP_INFO(
+          rclcpp::get_logger("ros2agnocast"),
+          "[bridge-dbg] R2A received message #%lu from ROS 2 on topic='%s'",
+          static_cast<unsigned long>(n), topic_name.c_str());
+      }
       auto loaned_msg = agno_pub->borrow_loaned_message();
       try {
         serialization.deserialize_message(serialized_msg.get(), &(*loaned_msg));
       } catch (const std::exception & e) {
         RCLCPP_ERROR(
           rclcpp::get_logger("ros2agnocast"),
-          "Failed to deserialize message in r2a bridge: %s",
-          e.what());
+          "[bridge-dbg] R2A failed to deserialize message on topic='%s': %s",
+          topic_name.c_str(), e.what());
         return;
       }
       agno_pub->publish(std::move(loaned_msg));
+      if (n == 1 || n % 100 == 0) {
+        RCLCPP_INFO(
+          rclcpp::get_logger("ros2agnocast"),
+          "[bridge-dbg] R2A forwarded message #%lu to agnocast on topic='%s'",
+          static_cast<unsigned long>(n), topic_name.c_str());
+      }
     });
 }
 
@@ -58,6 +81,15 @@ extern "C" PerformancePubsubBridgeResult create_a2r_pubsub_bridge_@(snake_type_n
   auto ros_pub = node->create_generic_publisher(
     topic_name, "@(msg_type)",
     rclcpp::QoS(agnocast::DEFAULT_QOS_DEPTH).reliable().transient_local());
+
+  RCLCPP_INFO(
+    rclcpp::get_logger("ros2agnocast"),
+    "[bridge-dbg] A2R generic publisher created: requested_topic='%s' resolved_topic='%s' "
+    "sub_qos: depth=%zu reliability=%s durability=%s",
+    topic_name.c_str(), ros_pub->get_topic_name(), sub_qos.depth(),
+    sub_qos.reliability() == rclcpp::ReliabilityPolicy::Reliable ? "reliable" : "best_effort",
+    sub_qos.durability() == rclcpp::DurabilityPolicy::TransientLocal ? "transient_local"
+                                                                      : "volatile");
 
   auto cb_group = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 

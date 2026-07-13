@@ -413,9 +413,25 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
     PerformancePubsubBridgeResult result;
     if (is_r2a) {
       auto qos = get_subscriber_qos(topic_name, qos_source_id);
+      RCLCPP_INFO(
+        logger_,
+        "[bridge-dbg] R2A create for topic='%s' using qos_source_id=%d: "
+        "depth=%zu reliability=%s durability=%s",
+        topic_name.c_str(), qos_source_id, qos.depth(),
+        qos.reliability() == rclcpp::ReliabilityPolicy::Reliable ? "reliable" : "best_effort",
+        qos.durability() == rclcpp::DurabilityPolicy::TransientLocal ? "transient_local"
+                                                                      : "volatile");
       result = loader_.create_r2a_pubsub_bridge(container_node_, topic_name, message_type, qos);
     } else {
       auto qos = get_publisher_qos(topic_name, qos_source_id);
+      RCLCPP_INFO(
+        logger_,
+        "[bridge-dbg] A2R create for topic='%s' using qos_source_id=%d: "
+        "depth=%zu reliability=%s durability=%s",
+        topic_name.c_str(), qos_source_id, qos.depth(),
+        qos.reliability() == rclcpp::ReliabilityPolicy::Reliable ? "reliable" : "best_effort",
+        qos.durability() == rclcpp::DurabilityPolicy::TransientLocal ? "transient_local"
+                                                                      : "volatile");
       result = loader_.create_a2r_pubsub_bridge(container_node_, topic_name, message_type, qos);
     }
 
