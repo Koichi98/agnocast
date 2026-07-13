@@ -9,6 +9,7 @@
 #include "rclcpp/serialization.hpp"
 #include "rclcpp/serialized_message.hpp"
 
+#include <atomic>
 #include <memory>
 #include <utility>
 
@@ -60,19 +61,37 @@ extern "C" PerformancePubsubBridgeResult create_a2r_pubsub_bridge_@(snake_type_n
 
   auto cb_group = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
-  auto agno_callback = [ros_pub](const agnocast::ipc_shared_ptr<MsgT> msg) {
+  // Per-bridge-instance counter (NOT a macro-local static) so that logging stays isolated
+  // per topic even when multiple A2R bridges share the same message type.
+  auto agno_recv_count = std::make_shared<std::atomic<uint64_t>>(0);
+
+  auto agno_callback = [ros_pub, topic_name, agno_recv_count](
+                          const agnocast::ipc_shared_ptr<MsgT> msg) {
     static const rclcpp::Serialization<MsgT> serialization;
+    const uint64_t n = ++(*agno_recv_count);
+    if (n == 1 || n % 100 == 0) {
+      RCLCPP_INFO(
+        rclcpp::get_logger("ros2agnocast"),
+        "[bridge-dbg] A2R received message #%lu from agnocast on topic='%s'",
+        static_cast<unsigned long>(n), topic_name.c_str());
+    }
     rclcpp::SerializedMessage serialized_msg;
     try {
       serialization.serialize_message(msg.get(), &serialized_msg);
     } catch (const std::exception & e) {
       RCLCPP_ERROR(
         rclcpp::get_logger("ros2agnocast"),
-        "Failed to serialize message in a2r bridge: %s",
-        e.what());
+        "[bridge-dbg] A2R failed to serialize message on topic='%s': %s",
+        topic_name.c_str(), e.what());
       return;
     }
     ros_pub->publish(serialized_msg);
+    if (n == 1 || n % 100 == 0) {
+      RCLCPP_INFO(
+        rclcpp::get_logger("ros2agnocast"),
+        "[bridge-dbg] A2R forwarded message #%lu to ROS 2 on topic='%s'",
+        static_cast<unsigned long>(n), topic_name.c_str());
+    }
   };
 
   agnocast::SubscriptionOptions sub_opts;
