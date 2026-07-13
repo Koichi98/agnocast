@@ -40,11 +40,30 @@ union ioctl_add_subscriber_args SubscriptionBase::initialize(
   add_subscriber_args.is_take_sub = is_take_sub;
   add_subscriber_args.ignore_local_publications = ignore_local_publications;
   add_subscriber_args.is_bridge = is_bridge;
+
+  RCLCPP_INFO(
+    logger,
+    "[agnocast-dbg] AGNOCAST_ADD_SUBSCRIBER_CMD request: pid=%d topic='%s' node='%s' "
+    "qos_depth=%u qos_transient_local=%d qos_reliable=%d is_take_sub=%d "
+    "ignore_local_publications=%d is_bridge=%d",
+    getpid(), topic_name_.c_str(), node_name.c_str(), add_subscriber_args.qos_depth,
+    add_subscriber_args.qos_is_transient_local, add_subscriber_args.qos_is_reliable, is_take_sub,
+    ignore_local_publications, is_bridge);
+
   if (ioctl(agnocast_fd, AGNOCAST_ADD_SUBSCRIBER_CMD, &add_subscriber_args) < 0) {
-    RCLCPP_ERROR(logger, "AGNOCAST_ADD_SUBSCRIBER_CMD failed: %s", strerror(errno));
+    RCLCPP_ERROR(
+      logger, "[agnocast-dbg] AGNOCAST_ADD_SUBSCRIBER_CMD failed: pid=%d topic='%s' node='%s': %s",
+      getpid(), topic_name_.c_str(), node_name.c_str(), strerror(errno));
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   }
+
+  RCLCPP_INFO(
+    logger,
+    "[agnocast-dbg] AGNOCAST_ADD_SUBSCRIBER_CMD success: pid=%d topic='%s' node='%s' "
+    "topic_local_id=%d is_take_sub=%d is_bridge=%d",
+    getpid(), topic_name_.c_str(), node_name.c_str(), add_subscriber_args.ret_id, is_take_sub,
+    is_bridge);
 
   return add_subscriber_args;
 }
@@ -89,12 +108,19 @@ mqd_t open_mq_for_subscription(
   mqd_t mq = mq_open(mq_name.c_str(), O_CREAT | O_RDONLY | O_NONBLOCK, mq_mode, &attr);
   if (mq == -1) {
     RCLCPP_ERROR_STREAM(
-      logger, "mq_open failed for topic '" << topic_name << "' (subscriber_id=" << subscriber_id
-                                           << ", mq_name='" << mq_name
-                                           << "'): " << strerror(errno));
+      logger, "[agnocast-dbg] mq_open (subscriber side) failed: pid=" << getpid() << " topic='"
+                                           << topic_name << "' subscriber_id=" << subscriber_id
+                                           << " mq_name='" << mq_name
+                                           << "': " << strerror(errno));
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   }
+
+  RCLCPP_INFO_STREAM(
+    logger, "[agnocast-dbg] mq_open (subscriber side) success: pid=" << getpid() << " topic='"
+                                        << topic_name << "' subscriber_id=" << subscriber_id
+                                        << " mq_name='" << mq_name << "' mqd=" << mq);
+
   mq_subscription = std::make_pair(mq, mq_name);
 
   return mq;

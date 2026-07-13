@@ -61,11 +61,27 @@ topic_local_id_t initialize_publisher(
   pub_args.qos_depth = qos.depth();
   pub_args.qos_is_transient_local = qos.durability() == rclcpp::DurabilityPolicy::TransientLocal;
   pub_args.is_bridge = is_bridge;
+
+  RCLCPP_INFO(
+    logger,
+    "[agnocast-dbg] AGNOCAST_ADD_PUBLISHER_CMD request: pid=%d topic='%s' node='%s' "
+    "qos_depth=%u qos_transient_local=%d is_bridge=%d",
+    getpid(), topic_name.c_str(), node_name.c_str(), pub_args.qos_depth,
+    pub_args.qos_is_transient_local, is_bridge);
+
   if (ioctl(agnocast_fd, AGNOCAST_ADD_PUBLISHER_CMD, &pub_args) < 0) {
-    RCLCPP_ERROR(logger, "AGNOCAST_ADD_PUBLISHER_CMD failed: %s", strerror(errno));
+    RCLCPP_ERROR(
+      logger, "[agnocast-dbg] AGNOCAST_ADD_PUBLISHER_CMD failed: pid=%d topic='%s' node='%s': %s",
+      getpid(), topic_name.c_str(), node_name.c_str(), strerror(errno));
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   }
+
+  RCLCPP_INFO(
+    logger,
+    "[agnocast-dbg] AGNOCAST_ADD_PUBLISHER_CMD success: pid=%d topic='%s' node='%s' "
+    "topic_local_id=%d is_bridge=%d",
+    getpid(), topic_name.c_str(), node_name.c_str(), pub_args.ret_id, is_bridge);
 
   return pub_args.ret_id;
 }
@@ -111,12 +127,18 @@ union ioctl_publish_msg_args publish_core(
       if (mq == -1) {
         // Right after a subscriber is added, its message queue has not been created yet. Therefore,
         // the `mq_open` call above might fail. In that case, we just continue.
-        RCLCPP_DEBUG_STREAM(
-          logger, "mq_open failed for topic '" << topic_name << "' (subscriber_id=" << subscriber_id
-                                               << ", mq_name='" << mq_name
-                                               << "'): " << strerror(errno));
+        RCLCPP_INFO_STREAM(
+          logger, "[agnocast-dbg] mq_open (publisher side) failed: pid=" << getpid() << " topic='"
+                                               << topic_name << "' subscriber_id=" << subscriber_id
+                                               << " entry_id=" << publish_msg_args.ret_entry_id
+                                               << " mq_name='" << mq_name
+                                               << "': " << strerror(errno));
         continue;
       }
+      RCLCPP_INFO_STREAM(
+        logger, "[agnocast-dbg] mq_open (publisher side) success: pid=" << getpid() << " topic='"
+                                             << topic_name << "' subscriber_id=" << subscriber_id
+                                             << " mq_name='" << mq_name << "' mqd=" << mq);
       opened_mqs.insert({subscriber_id, {mq, true}});
     }
 
@@ -128,9 +150,16 @@ union ioctl_publish_msg_args publish_core(
       // already been sent.
       if (errno != EAGAIN) {
         RCLCPP_ERROR_STREAM(
-          logger, "mq_send failed for topic '" << topic_name << "' (subscriber_id=" << subscriber_id
-                                               << "): " << strerror(errno));
+          logger, "[agnocast-dbg] mq_send failed: pid=" << getpid() << " topic='" << topic_name
+                                               << "' subscriber_id=" << subscriber_id
+                                               << " entry_id=" << publish_msg_args.ret_entry_id
+                                               << ": " << strerror(errno));
       }
+    } else if (publish_msg_args.ret_entry_id == 0 || publish_msg_args.ret_entry_id % 100 == 0) {
+      RCLCPP_INFO_STREAM(
+        logger, "[agnocast-dbg] mq_send success: pid=" << getpid() << " topic='" << topic_name
+                                             << "' subscriber_id=" << subscriber_id
+                                             << " entry_id=" << publish_msg_args.ret_entry_id);
     }
   }
 

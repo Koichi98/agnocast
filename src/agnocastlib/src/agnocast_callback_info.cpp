@@ -205,14 +205,25 @@ void SubscriptionEventHandler::handle(EpollEventLocalID event_local_id)
   if (ret < 0) {
     if (errno != EAGAIN) {
       RCLCPP_ERROR_STREAM(
-        logger, "mq_receive failed for topic '"
-                  << callback_info.topic_name << "' (subscriber_id=" << callback_info.subscriber_id
-                  << "): " << strerror(errno));
+        logger, "[agnocast-dbg] mq_receive failed: pid=" << my_pid_ << " topic='"
+                  << callback_info.topic_name << "' subscriber_id=" << callback_info.subscriber_id
+                  << " callback_info_id=" << callback_info_id << ": " << strerror(errno));
       close(agnocast_fd);
       exit(EXIT_FAILURE);
+    } else {
+      RCLCPP_DEBUG_STREAM(
+        logger, "[agnocast-dbg] mq_receive got EAGAIN (epoll woke up but nothing to receive): pid="
+                  << my_pid_ << " topic='" << callback_info.topic_name
+                  << "' subscriber_id=" << callback_info.subscriber_id
+                  << " callback_info_id=" << callback_info_id);
     }
     return;
   }
+
+  RCLCPP_INFO_STREAM(
+    logger, "[agnocast-dbg] mq_receive success: pid=" << my_pid_ << " topic='"
+              << callback_info.topic_name << "' subscriber_id=" << callback_info.subscriber_id
+              << " callback_info_id=" << callback_info_id);
 
   agnocast::enqueue_receive_and_execute(
     callback_info_id, my_pid_, callback_info, *ready_agnocast_executables_mutex_,
