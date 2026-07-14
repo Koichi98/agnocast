@@ -76,11 +76,42 @@ void CallbackIsolatedAgnocastExecutor::spin()
       auto agnocast_topics = agnocast::get_agnocast_topics_by_group(group);
       auto callback_group_id = agnocast::create_callback_group_id(group, node, agnocast_topics);
 
-      if (agnocast_topics.empty()) {
+      // The executor type is decided from a snapshot of the group's agnocast subscriptions taken
+      // here, and the monitoring loop never revisits a group once it is associated with an
+      // executor. A group spawned before its agnocast subscriptions are registered therefore gets a
+      // plain rclcpp executor -- which has no agnocast epoll -- and its message queues are created
+      // but never read, for the lifetime of the process. Log the verdict so that case is visible.
+      // Once per callback group, so this is not a hot path.
+      std::string topics_joined;
+      for (const auto & t : agnocast_topics) {
+        if (!topics_joined.empty()) {
+          topics_joined += ", ";
+        }
+        topics_joined += t;
+      }
+
+      // XXX TEMPORARY DIAGNOSTIC -- DO NOT MERGE: force every group onto the agnocast executor so a
+      // late-registered subscription is still picked up by prepare_epoll(). If this makes
+      // tracking/objects deliver, the spawn-time race above is confirmed as the cause.
+      constexpr bool kForceAgnocastExecutor = true;
+
+      if (agnocast_topics.empty() && !kForceAgnocastExecutor) {
+        RCLCPP_INFO_STREAM(
+          logger, "[agnocast-dbg] CIE spawn: group="
+                    << static_cast<const void *>(group.get()) << " node='" << node->get_name()
+                    << "' agnocast_topics=0 -> PLAIN rclcpp executor (no agnocast epoll: any "
+                       "subscription registered later will never be woken)");
         executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
         std::static_pointer_cast<rclcpp::executors::SingleThreadedExecutor>(executor)
           ->add_callback_group(group, node);
       } else {
+        RCLCPP_INFO_STREAM(
+          logger, "[agnocast-dbg] CIE spawn: group="
+                    << static_cast<const void *>(group.get()) << " node='" << node->get_name()
+                    << "' agnocast_topics=" << agnocast_topics.size() << " [" << topics_joined
+                    << "] -> SingleThreadedAgnocastExecutor"
+                    << (agnocast_topics.empty() ? " (FORCED: group had no agnocast topics yet)"
+                                                : ""));
         executor = std::make_shared<SingleThreadedAgnocastExecutor>(
           rclcpp::ExecutorOptions{}, next_exec_timeout_ms_);
         std::static_pointer_cast<SingleThreadedAgnocastExecutor>(executor)
