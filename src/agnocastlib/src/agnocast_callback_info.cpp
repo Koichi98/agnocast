@@ -160,7 +160,22 @@ void SubscriptionEventHandler::prepare_epoll(
       continue;
     }
 
+    // A rejected callback group leaves need_epoll_update set, so this branch is re-entered on every
+    // spin. Report each subscription only once -- otherwise the very failure we are trying to catch
+    // would flood the log. The consequence is silent and permanent: the mq is created but never
+    // added to epoll, so epoll_wait never fires, mq_receive is never called, and the depth-1
+    // notification queue stays full, making every later mq_send return EAGAIN.
     if (!validate_callback_group(callback_info.callback_group)) {
+      if (warned_unregistered_.insert(callback_info_id).second) {
+        RCLCPP_WARN_STREAM(
+          logger,
+          "[agnocast-dbg] epoll SKIP (callback group rejected by this executor): pid="
+            << my_pid_ << " topic='" << callback_info.topic_name
+            << "' subscriber_id=" << callback_info.subscriber_id
+            << " callback_info_id=" << callback_info_id << " callback_group="
+            << static_cast<const void *>(callback_info.callback_group.get())
+            << ". This subscription will never be woken: its mq is created but not in epoll.");
+      }
       continue;
     }
 
@@ -172,6 +187,13 @@ void SubscriptionEventHandler::prepare_epoll(
       close(agnocast_fd);
       exit(EXIT_FAILURE);
     }
+
+    RCLCPP_INFO_STREAM(
+      logger, "[agnocast-dbg] epoll ADD success: pid="
+                << my_pid_ << " topic='" << callback_info.topic_name
+                << "' subscriber_id=" << callback_info.subscriber_id
+                << " callback_info_id=" << callback_info_id << " mqdes=" << callback_info.mqdes
+                << " is_transient_local=" << callback_info.is_transient_local);
 
     if (callback_info.is_transient_local) {
       agnocast::enqueue_receive_and_execute(
@@ -214,12 +236,27 @@ void SubscriptionEventHandler::handle(EpollEventLocalID event_local_id)
                   << " callback_info_id=" << callback_info_id << ": " << strerror(errno));
       close(agnocast_fd);
       exit(EXIT_FAILURE);
-    } else {
-      RCLCPP_DEBUG_STREAM(
-        logger, "[agnocast-dbg] mq_receive got EAGAIN (epoll woke up but nothing to receive): pid="
-                  << my_pid_ << " topic='" << callback_info.topic_name
-                  << "' subscriber_id=" << callback_info.subscriber_id
-                  << " callback_info_id=" << callback_info_id);
+    } else if (is_dbg_target_topic(callback_info.topic_name)) {
+      // Raised from DEBUG because it proves epoll fired for this subscription at all, which is what
+      // separates "never woken" (no line) from "woken but the queue was empty". One line per
+      // subscription is enough to establish that, and this sits on the wake-up path, so throttle
+      // it to first-and-every-100th rather than logging every spurious wake-up.
+      static std::mutex eagain_count_mutex;
+      static std::unordered_map<std::string, uint64_t> eagain_counts;
+      uint64_t n = 0;
+      {
+        std::lock_guard<std::mutex> lock(eagain_count_mutex);
+        n = ++eagain_counts[callback_info.topic_name + "#" +
+                            std::to_string(callback_info.subscriber_id)];
+      }
+      if (n == 1 || n % 100 == 0) {
+        RCLCPP_INFO_STREAM(
+          logger, "[agnocast-dbg] mq_receive got EAGAIN #"
+                    << n << " (epoll woke up but nothing to receive): pid=" << my_pid_ << " topic='"
+                    << callback_info.topic_name
+                    << "' subscriber_id=" << callback_info.subscriber_id
+                    << " callback_info_id=" << callback_info_id);
+      }
     }
     return;
   }

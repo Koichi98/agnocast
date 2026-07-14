@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <mutex>
 #include <type_traits>
+#include <unordered_set>
 
 namespace agnocast
 {
@@ -136,6 +137,9 @@ class SubscriptionEventHandler : public EpollEventHandler
   pid_t my_pid_;
   std::mutex * ready_agnocast_executables_mutex_;
   std::vector<AgnocastExecutable> * ready_agnocast_executables_;
+  // Subscriptions already reported as skipped, so the per-spin retry warns only once.
+  // Guarded by id2_callback_info_mtx, which prepare_epoll holds for its whole body.
+  std::unordered_set<uint32_t> warned_unregistered_;
 
 public:
   SubscriptionEventHandler(
