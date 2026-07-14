@@ -146,28 +146,45 @@ union ioctl_publish_msg_args publish_core(
     }
 
     struct MqMsgAgnocast mq_msg = {};
+
+    // Count sends per (topic, subscriber) so the first one always reports. ret_entry_id is a
+    // global counter, not a per-topic sequence, so throttling on it alone silences low-rate
+    // topics entirely and makes "no log" indistinguishable from "never sent".
+    uint64_t send_count = 0;
+    {
+      static std::mutex send_count_mutex;
+      static std::unordered_map<std::string, uint64_t> send_counts;
+      std::lock_guard<std::mutex> lock(send_count_mutex);
+      send_count = ++send_counts[topic_name + "#" + std::to_string(subscriber_id)];
+    }
+    const bool report = !dbg_topic_filter_is_unset() || send_count == 1 || send_count % 100 == 0;
+
     // Although the size of the struct is 1, we deliberately send a zero-length message
     if (mq_send(mq, reinterpret_cast<char *>(&mq_msg), 0 /*msg_len*/, 0) == -1) {
-      // If it returns EAGAIN, it means mq_send has already been executed, but the subscriber
-      // hasn't received it yet. Thus, there's no need to send it again since the notification has
-      // already been sent.
-      if (errno != EAGAIN) {
+      const int send_errno = errno;
+      if (send_errno != EAGAIN) {
         RCLCPP_ERROR_STREAM(
-          logger, "[agnocast-dbg] mq_send failed: pid=" << getpid() << " topic='" << topic_name
+          logger, "[agnocast-dbg] mq_send failed #" << send_count << ": pid=" << getpid()
+                                               << " topic='" << topic_name
                                                << "' subscriber_id=" << subscriber_id
                                                << " entry_id=" << publish_msg_args.ret_entry_id
-                                               << ": " << strerror(errno));
-      }
-    } else if (is_dbg_target_topic(topic_name)) {
-      const bool throttled = dbg_topic_filter_is_unset() &&
-                             publish_msg_args.ret_entry_id != 0 &&
-                             publish_msg_args.ret_entry_id % 100 != 0;
-      if (!throttled) {
+                                               << ": " << strerror(send_errno));
+      } else if (is_dbg_target_topic(topic_name) && report) {
+        // EAGAIN means a wake-up is already queued and unread. The queue is depth-1, so this is
+        // benign when the subscriber is merely behind -- but permanent EAGAIN from #1 onward means
+        // the subscriber never drained the doorbell at all.
         RCLCPP_INFO_STREAM(
-          logger, "[agnocast-dbg] mq_send success: pid=" << getpid() << " topic='" << topic_name
+          logger, "[agnocast-dbg] mq_send EAGAIN #" << send_count << " (doorbell still full): pid="
+                                               << getpid() << " topic='" << topic_name
                                                << "' subscriber_id=" << subscriber_id
                                                << " entry_id=" << publish_msg_args.ret_entry_id);
       }
+    } else if (is_dbg_target_topic(topic_name) && report) {
+      RCLCPP_INFO_STREAM(
+        logger, "[agnocast-dbg] mq_send success #" << send_count << ": pid=" << getpid()
+                                             << " topic='" << topic_name
+                                             << "' subscriber_id=" << subscriber_id
+                                             << " entry_id=" << publish_msg_args.ret_entry_id);
     }
   }
 
