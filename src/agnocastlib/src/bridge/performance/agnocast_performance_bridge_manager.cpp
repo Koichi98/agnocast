@@ -13,7 +13,9 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 
 namespace agnocast
 {
@@ -329,6 +331,29 @@ void PerformanceBridgeManager::check_and_request_shutdown()
   }
 }
 
+namespace
+{
+// The gate is re-evaluated on every poll, so an unchanging verdict was being reprinted forever:
+// 15,881 gate lines in one 2-minute run collapsed to 310 distinct messages (98% duplicates), and
+// that alone pushed the log past the 8 MiB cap the CI runner truncates at. Print a gate verdict
+// only when it differs from the last one for that topic+direction; a transition is the only thing
+// worth seeing anyway.
+void log_gate_if_changed(const rclcpp::Logger & logger, const std::string & key, std::string msg)
+{
+  static std::mutex mutex;
+  static std::unordered_map<std::string, std::string> last_msg;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto & prev = last_msg[key];
+    if (prev == msg) {
+      return;
+    }
+    prev = msg;
+  }
+  RCLCPP_INFO(logger, "%s", msg.c_str());
+}
+}  // namespace
+
 bool PerformanceBridgeManager::should_create_pubsub_bridge(
   const std::string & topic_name, BridgeDirection direction) const
 {
@@ -340,20 +365,21 @@ bool PerformanceBridgeManager::should_create_pubsub_bridge(
     const auto stats = get_agnocast_subscriber_count(topic_name);
     if (stats.count <= 0) {
       if (bridge_debug_enabled()) {
-        RCLCPP_INFO(
-        logger_,
-          "[bridge-dbg] R2A gate topic='%s' agnocast_sub_count=%d (<=0, skip)",
-          topic_name.c_str(), stats.count);
+        log_gate_if_changed(
+          logger_, "R2A|" + topic_name,
+          "[bridge-dbg] R2A gate topic='" + topic_name +
+            "' agnocast_sub_count=" + std::to_string(stats.count) + " (<=0, skip)");
       }
       return false;
     }
 
     const bool has_ext_pub = has_external_ros2_publisher(container_node_.get(), topic_name);
     if (bridge_debug_enabled()) {
-      RCLCPP_INFO(
-        logger_,
-        "[bridge-dbg] R2A gate topic='%s' agnocast_sub_count=%d has_external_ros2_publisher=%s",
-        topic_name.c_str(), stats.count, has_ext_pub ? "true" : "false");
+      log_gate_if_changed(
+        logger_, "R2A|" + topic_name,
+        "[bridge-dbg] R2A gate topic='" + topic_name +
+          "' agnocast_sub_count=" + std::to_string(stats.count) +
+          " has_external_ros2_publisher=" + (has_ext_pub ? "true" : "false"));
     }
     return has_ext_pub;
   }
@@ -364,20 +390,21 @@ bool PerformanceBridgeManager::should_create_pubsub_bridge(
   const auto stats = get_agnocast_publisher_count(topic_name);
   if (stats.count <= 0) {
     if (bridge_debug_enabled()) {
-      RCLCPP_INFO(
-        logger_,
-        "[bridge-dbg] A2R gate topic='%s' agnocast_pub_count=%d (<=0, skip)",
-        topic_name.c_str(), stats.count);
+      log_gate_if_changed(
+        logger_, "A2R|" + topic_name,
+        "[bridge-dbg] A2R gate topic='" + topic_name +
+          "' agnocast_pub_count=" + std::to_string(stats.count) + " (<=0, skip)");
     }
     return false;
   }
 
   const bool has_ext_sub = has_external_ros2_subscriber(container_node_.get(), topic_name);
   if (bridge_debug_enabled()) {
-    RCLCPP_INFO(
-      logger_,
-      "[bridge-dbg] A2R gate topic='%s' agnocast_pub_count=%d has_external_ros2_subscriber=%s",
-      topic_name.c_str(), stats.count, has_ext_sub ? "true" : "false");
+    log_gate_if_changed(
+      logger_, "A2R|" + topic_name,
+      "[bridge-dbg] A2R gate topic='" + topic_name +
+        "' agnocast_pub_count=" + std::to_string(stats.count) +
+        " has_external_ros2_subscriber=" + (has_ext_sub ? "true" : "false"));
   }
   return has_ext_sub;
 }
