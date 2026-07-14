@@ -76,12 +76,10 @@ void CallbackIsolatedAgnocastExecutor::spin()
       auto agnocast_topics = agnocast::get_agnocast_topics_by_group(group);
       auto callback_group_id = agnocast::create_callback_group_id(group, node, agnocast_topics);
 
-      // The executor type is decided from a snapshot of the group's agnocast subscriptions taken
-      // here, and the monitoring loop never revisits a group once it is associated with an
-      // executor. A group spawned before its agnocast subscriptions are registered therefore gets a
-      // plain rclcpp executor -- which has no agnocast epoll -- and its message queues are created
-      // but never read, for the lifetime of the process. Log the verdict so that case is visible.
-      // Once per callback group, so this is not a hot path.
+      // The executor type is decided from the group's agnocast subscriptions as seen right now.
+      // For groups added via add_callback_group() this is safe, because the bridge registers the
+      // subscription before adding the group (see PerformanceBridgeManager), so a group reaching
+      // here with no agnocast topics genuinely has none and belongs on a plain rclcpp executor.
       std::string topics_joined;
       for (const auto & t : agnocast_topics) {
         if (!topics_joined.empty()) {
@@ -90,17 +88,11 @@ void CallbackIsolatedAgnocastExecutor::spin()
         topics_joined += t;
       }
 
-      // XXX TEMPORARY DIAGNOSTIC -- DO NOT MERGE: force every group onto the agnocast executor so a
-      // late-registered subscription is still picked up by prepare_epoll(). If this makes
-      // tracking/objects deliver, the spawn-time race above is confirmed as the cause.
-      constexpr bool kForceAgnocastExecutor = true;
-
-      if (agnocast_topics.empty() && !kForceAgnocastExecutor) {
+      if (agnocast_topics.empty()) {
         RCLCPP_INFO_STREAM(
           logger, "[agnocast-dbg] CIE spawn: group="
                     << static_cast<const void *>(group.get()) << " node='" << node->get_name()
-                    << "' agnocast_topics=0 -> PLAIN rclcpp executor (no agnocast epoll: any "
-                       "subscription registered later will never be woken)");
+                    << "' agnocast_topics=0 -> PLAIN rclcpp executor");
         executor = std::make_shared<rclcpp::executors::SingleThreadedExecutor>();
         std::static_pointer_cast<rclcpp::executors::SingleThreadedExecutor>(executor)
           ->add_callback_group(group, node);
@@ -109,9 +101,7 @@ void CallbackIsolatedAgnocastExecutor::spin()
           logger, "[agnocast-dbg] CIE spawn: group="
                     << static_cast<const void *>(group.get()) << " node='" << node->get_name()
                     << "' agnocast_topics=" << agnocast_topics.size() << " [" << topics_joined
-                    << "] -> SingleThreadedAgnocastExecutor"
-                    << (agnocast_topics.empty() ? " (FORCED: group had no agnocast topics yet)"
-                                                : ""));
+                    << "] -> SingleThreadedAgnocastExecutor");
         executor = std::make_shared<SingleThreadedAgnocastExecutor>(
           rclcpp::ExecutorOptions{}, next_exec_timeout_ms_);
         std::static_pointer_cast<SingleThreadedAgnocastExecutor>(executor)
@@ -158,6 +148,26 @@ void CallbackIsolatedAgnocastExecutor::spin()
 
     {
       std::lock_guard<std::mutex> guard{mutex_};
+
+      // Manually added groups (via add_callback_group). These are added with
+      // automatically_add_to_executor_with_node()==false, so the node scan below skips them; they
+      // must be picked up here or they never get a child executor. This mirrors the startup scan,
+      // which also visits weak_groups_to_nodes_ without the automatically-added condition. The
+      // bridge uses this path so that the agnocast subscription is registered before the group is
+      // added, closing the race where a group would otherwise be classified before its
+      // subscription exists.
+      for (const auto & weak_group_to_node : weak_groups_to_nodes_) {
+        auto group = weak_group_to_node.first.lock();
+        if (!group || group->get_associated_with_executor_atomic().load()) {
+          continue;
+        }
+        auto node = weak_group_to_node.second.lock();
+        if (!node) {
+          continue;
+        }
+        new_groups.emplace_back(group, node);
+      }
+
       for (const auto & weak_node : weak_nodes_) {
         auto node = weak_node.lock();
         if (!node) {

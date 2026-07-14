@@ -91,7 +91,12 @@ extern "C" PerformancePubsubBridgeResult create_a2r_pubsub_bridge_@(snake_type_n
     sub_qos.durability() == rclcpp::DurabilityPolicy::TransientLocal ? "transient_local"
                                                                       : "volatile");
 
-  auto cb_group = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+  // automatically_add_to_executor_with_node=false: this group must not be discovered by the
+  // executor's node scan (which would race the agnocast subscription registration below and could
+  // classify the group before the subscription exists). The bridge manager instead adds this group
+  // to the executor explicitly, after the subscription is created. Keep these consistent.
+  auto cb_group =
+    node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
 
   // Per-bridge-instance counter (NOT a macro-local static) so that logging stays isolated
   // per topic even when multiple A2R bridges share the same message type.

@@ -478,6 +478,14 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
           RCLCPP_ERROR(
             logger_, "Failed to update ROS 2 subscriber count for topic '%s'.", topic_name.c_str());
         }
+        // The A2R bridge subscription is an agnocast subscription, so its callback group must be
+        // hosted by an agnocast-capable child executor. The plugin creates the group with
+        // automatically_add_to_executor_with_node()==false and registers the agnocast subscription
+        // before returning, so adding the group here (after the subscription exists) guarantees the
+        // executor classifies it correctly instead of racing the monitoring poll.
+        if (result.callback_group) {
+          executor_->add_callback_group(result.callback_group, container_node_->get_node_base_interface());
+        }
         active_pubsub_a2r_bridges_[topic_name] = result;
       }
     } else {
