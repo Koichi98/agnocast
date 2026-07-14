@@ -8,12 +8,85 @@
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <regex>
+#include <string>
 #include <system_error>
+#include <unordered_map>
 
 namespace agnocast
 {
 rclcpp::Logger logger = rclcpp::get_logger("Agnocast");
 bool is_bridge_process = false;
+
+namespace
+{
+struct DbgTopicFilter
+{
+  bool configured = false;  // AGNOCAST_DBG_TOPIC_REGEX was present in the environment
+  std::regex regex;
+};
+
+const DbgTopicFilter & dbg_topic_filter()
+{
+  static const DbgTopicFilter filter = [] {
+    DbgTopicFilter f;
+    const char * env = std::getenv("AGNOCAST_DBG_TOPIC_REGEX");
+    if (env == nullptr) {
+      RCLCPP_INFO(
+        logger,
+        "[agnocast-dbg] AGNOCAST_DBG_TOPIC_REGEX is unset: per-message pub/sub logs cover every "
+        "topic, throttled to entry #1 and every 100th message.");
+      return f;
+    }
+    f.configured = true;
+    try {
+      f.regex = std::regex(env, std::regex::ECMAScript);
+    } catch (const std::regex_error & e) {
+      // A bad regex must not silently disable the logs the user came here for.
+      RCLCPP_ERROR(
+        logger,
+        "[agnocast-dbg] AGNOCAST_DBG_TOPIC_REGEX='%s' is not a valid regex (%s). Falling back to "
+        "logging every topic with the 1/100 throttle.",
+        env, e.what());
+      f.configured = false;
+      return f;
+    }
+    RCLCPP_INFO(
+      logger,
+      "[agnocast-dbg] AGNOCAST_DBG_TOPIC_REGEX='%s': only matching topics emit per-message pub/sub "
+      "logs, and they emit one line per message (no throttle).",
+      env);
+    return f;
+  }();
+  return filter;
+}
+}  // namespace
+
+bool dbg_topic_filter_is_unset()
+{
+  return !dbg_topic_filter().configured;
+}
+
+bool is_dbg_target_topic(const std::string & topic_name)
+{
+  const DbgTopicFilter & filter = dbg_topic_filter();
+  if (!filter.configured) {
+    return true;
+  }
+
+  // Called once per received/published message, so memoize the regex result per topic.
+  static std::mutex cache_mutex;
+  static std::unordered_map<std::string, bool> cache;
+  std::lock_guard<std::mutex> lock(cache_mutex);
+  const auto it = cache.find(topic_name);
+  if (it != cache.end()) {
+    return it->second;
+  }
+  const bool matched = std::regex_search(topic_name, filter.regex);
+  cache.emplace(topic_name, matched);
+  return matched;
+}
 
 void validate_ld_preload()
 {

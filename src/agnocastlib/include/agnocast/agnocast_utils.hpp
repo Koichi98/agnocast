@@ -14,6 +14,19 @@ extern rclcpp::Logger logger;
 extern int agnocast_fd;
 extern bool is_bridge_process;
 
+// [agnocast-dbg] Per-message pub/sub logging is on the hot path and drowns the log (~470k lines in a
+// 9-minute lsim run). AGNOCAST_DBG_TOPIC_REGEX narrows it to the topics under investigation:
+//
+//   unset  -> every topic logs, but throttled to entry #1 and every 100th message
+//   set    -> only topics matching the regex log, and they log *every* message
+//   ""     -> per-message logging is fully off
+//
+// Registration-time logs (ADD_PUBLISHER / ADD_SUBSCRIBER / mq_open) and all failures are never
+// filtered: they are rare and are what you need when nothing is flowing.
+bool is_dbg_target_topic(const std::string & topic_name);
+// True when no regex is configured, i.e. callers should apply the 1/100 throttle themselves.
+bool dbg_topic_filter_is_unset();
+
 namespace detail
 {
 

@@ -6,6 +6,9 @@
 #include <sys/types.h>
 
 #include <array>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 
 namespace agnocast
 {
@@ -155,11 +158,16 @@ union ioctl_publish_msg_args publish_core(
                                                << " entry_id=" << publish_msg_args.ret_entry_id
                                                << ": " << strerror(errno));
       }
-    } else if (publish_msg_args.ret_entry_id == 0 || publish_msg_args.ret_entry_id % 100 == 0) {
-      RCLCPP_INFO_STREAM(
-        logger, "[agnocast-dbg] mq_send success: pid=" << getpid() << " topic='" << topic_name
-                                             << "' subscriber_id=" << subscriber_id
-                                             << " entry_id=" << publish_msg_args.ret_entry_id);
+    } else if (is_dbg_target_topic(topic_name)) {
+      const bool throttled = dbg_topic_filter_is_unset() &&
+                             publish_msg_args.ret_entry_id != 0 &&
+                             publish_msg_args.ret_entry_id % 100 != 0;
+      if (!throttled) {
+        RCLCPP_INFO_STREAM(
+          logger, "[agnocast-dbg] mq_send success: pid=" << getpid() << " topic='" << topic_name
+                                               << "' subscriber_id=" << subscriber_id
+                                               << " entry_id=" << publish_msg_args.ret_entry_id);
+      }
     }
   }
 
@@ -206,7 +214,33 @@ uint32_t get_subscription_count_core(const std::string & topic_name)
     ros2_count--;
   }
 
-  return inter_count + ros2_count;
+  const uint32_t result = inter_count + ros2_count;
+
+  // [AGN_DEBUG] Report the breakdown whenever the reported count changes for a topic. Callers such
+  // as autoware_image_projection_based_fusion and autoware_tensorrt_yolox gate publishing (and even
+  // tear down their input subscription) on this value, so a count of 0 while real subscribers exist
+  // silently kills a whole pipeline.
+  {
+    static std::mutex agn_debug_mtx;
+    static std::unordered_map<std::string, uint32_t> agn_debug_last;
+    std::lock_guard<std::mutex> lock(agn_debug_mtx);
+    const auto it = agn_debug_last.find(topic_name);
+    if (it == agn_debug_last.end() || it->second != result) {
+      agn_debug_last[topic_name] = result;
+      RCLCPP_INFO(
+        logger,
+        "[AGN_DEBUG] get_subscription_count('%s') = %u  "
+        "(raw: same_process=%u other_process=%u ros2=%u, a2r_bridge=%d r2a_bridge=%d, "
+        "after exclusion: inter=%u ros2=%u). "
+        "NOTE: same_process agnocast subscribers are NOT included in this count.",
+        topic_name.c_str(), result, args.ret_same_process_subscriber_num,
+        args.ret_other_process_subscriber_num, args.ret_ros2_subscriber_num,
+        static_cast<int>(args.ret_a2r_bridge_exist), static_cast<int>(args.ret_r2a_bridge_exist),
+        inter_count, ros2_count);
+    }
+  }
+
+  return result;
 }
 
 uint32_t get_intra_subscription_count_core(const std::string & topic_name)

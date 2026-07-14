@@ -9,7 +9,11 @@
 #include <unistd.h>
 
 #include <array>
+#include <cstdint>
+#include <mutex>
 #include <stdexcept>
+#include <string>
+#include <unordered_map>
 
 namespace agnocast
 {
@@ -220,10 +224,25 @@ void SubscriptionEventHandler::handle(EpollEventLocalID event_local_id)
     return;
   }
 
-  RCLCPP_INFO_STREAM(
-    logger, "[agnocast-dbg] mq_receive success: pid=" << my_pid_ << " topic='"
-              << callback_info.topic_name << "' subscriber_id=" << callback_info.subscriber_id
-              << " callback_info_id=" << callback_info_id);
+  if (is_dbg_target_topic(callback_info.topic_name)) {
+    // Without a topic filter this fires for every message on every topic, so count per
+    // (topic, subscriber) and report only the first and every 100th, mirroring mq_send.
+    static std::mutex recv_count_mutex;
+    static std::unordered_map<std::string, uint64_t> recv_counts;
+    uint64_t n = 0;
+    {
+      std::lock_guard<std::mutex> lock(recv_count_mutex);
+      n = ++recv_counts[callback_info.topic_name + "#" +
+                        std::to_string(callback_info.subscriber_id)];
+    }
+    if (!dbg_topic_filter_is_unset() || n == 1 || n % 100 == 0) {
+      RCLCPP_INFO_STREAM(
+        logger, "[agnocast-dbg] mq_receive success #"
+                  << n << ": pid=" << my_pid_ << " topic='" << callback_info.topic_name
+                  << "' subscriber_id=" << callback_info.subscriber_id
+                  << " callback_info_id=" << callback_info_id);
+    }
+  }
 
   agnocast::enqueue_receive_and_execute(
     callback_info_id, my_pid_, callback_info, *ready_agnocast_executables_mutex_,
