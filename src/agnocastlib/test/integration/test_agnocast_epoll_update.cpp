@@ -118,21 +118,34 @@ protected:
       node, std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME), period,
       [&flag_to_set]() { flag_to_set = true; }, cbg);
   }
+
+  static constexpr bool is_callback_isolated_executor()
+  {
+    return std::is_same_v<ExecutorType, agnocast::CallbackIsolatedAgnocastExecutor> ||
+           std::is_same_v<ExecutorType, agnocast::AgnocastOnlyCallbackIsolatedExecutor>;
+  }
+
+  // The callback-isolated executors pick a child executor per callback group from a snapshot of
+  // the group's agnocast entities taken when the group is first spawned, and never revisit it.
+  // Tests that create the timer after the group has been spawned therefore cannot pass on these
+  // executors yet. See issue #1263.
+  void skip_if_callback_isolated_and_entity_added_after_spawn()
+  {
+    if (is_callback_isolated_executor()) {
+      GTEST_SKIP() << "callback-isolated executor classifies a group before the later-created "
+                      "timer exists; see issue #1263";
+    }
+  }
 };
 
 using ExecutorTypes = ::testing::Types<
   agnocast::SingleThreadedAgnocastExecutor, agnocast::MultiThreadedAgnocastExecutor,
-  // CallbackIsolatedAgnocastExecutor is commented out because this test fails
-  // when the Agnocast callback is created after associating CallbackGroup
-  // with the executor.
-  // See issue #1263 for details:
-  // https://github.com/autowarefoundation/agnocast/issues/1263
-  // TODO(ruth561): Fix the issue and re-enable this executor in the test suite.
-  // agnocast::CallbackIsolatedAgnocastExecutor,
-  agnocast::AgnocastOnlySingleThreadedExecutor, agnocast::AgnocastOnlyMultiThreadedExecutor
-  // AgnocastOnlyCallbackIsolatedExecutor is commented out because it
-  // unexpectedly terminates when adding CallbackGroup via add_callback_group.
-  // TODO(ruth561): Fix the issue and re-enable this executor in the test suite.
+  agnocast::CallbackIsolatedAgnocastExecutor, agnocast::AgnocastOnlySingleThreadedExecutor,
+  agnocast::AgnocastOnlyMultiThreadedExecutor
+  // AgnocastOnlyCallbackIsolatedExecutor is left out: unlike CallbackIsolatedAgnocastExecutor it
+  // still terminates when a callback group is added via add_callback_group, which is a separate
+  // issue from the bridge race fixed here.
+  // TODO(ruth561): Fix that and re-enable this executor.
   // agnocast::AgnocastOnlyCallbackIsolatedExecutor
   >;
 
@@ -188,6 +201,7 @@ TYPED_TEST(EpollUpdateTest, CbgTimerSpinAdd)
 
 TYPED_TEST(EpollUpdateTest, CbgSpinAddTimer)
 {
+  this->skip_if_callback_isolated_and_entity_added_after_spawn();
   std::atomic_bool callback_started{false};
   auto node = this->create_test_node();
 
@@ -206,6 +220,7 @@ TYPED_TEST(EpollUpdateTest, CbgSpinAddTimer)
 
 TYPED_TEST(EpollUpdateTest, SpinAddCbgTimer)
 {
+  this->skip_if_callback_isolated_and_entity_added_after_spawn();
   std::atomic_bool callback_started{false};
   auto node = this->create_test_node();
 
@@ -226,6 +241,7 @@ TYPED_TEST(EpollUpdateTest, SpinAddCbgTimer)
 // Spin -> Timer.
 TYPED_TEST(EpollUpdateTest, CbgAddSpinTimer)
 {
+  this->skip_if_callback_isolated_and_entity_added_after_spawn();
   std::atomic_bool callback_started{false};
   auto node = this->create_test_node();
 
@@ -279,6 +295,7 @@ TYPED_TEST(EpollUpdateTest, AddSpinCbgTimer)
 
 TYPED_TEST(EpollUpdateTest, SpinCbgAddTimer)
 {
+  this->skip_if_callback_isolated_and_entity_added_after_spawn();
   std::atomic_bool callback_started{false};
   auto node = this->create_test_node();
 
@@ -354,6 +371,7 @@ TYPED_TEST(EpollUpdateTest, SpinCbgTimerAddcbg)
 
 TYPED_TEST(EpollUpdateTest, SpinCbgAddcbgTimer)
 {
+  this->skip_if_callback_isolated_and_entity_added_after_spawn();
   std::atomic_bool callback_started{false};
   auto node = this->create_test_node();
 
