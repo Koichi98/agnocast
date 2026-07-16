@@ -191,6 +191,9 @@ void PerformanceBridgeManager::check_and_remove_pubsub_bridges()
 
     if (result.count <= 0 || !is_demanded_by_ros2) {
       if (r2a_it->second.callback_group) {
+        // Mirror the add at creation. Remove before stop so the monitoring loop cannot re-spawn
+        // the group mid-teardown.
+        executor_->remove_callback_group(r2a_it->second.callback_group);
         executor_->stop_callback_group(r2a_it->second.callback_group);
       }
       r2a_it = active_pubsub_r2a_bridges_.erase(r2a_it);
@@ -221,6 +224,9 @@ void PerformanceBridgeManager::check_and_remove_pubsub_bridges()
 
     if (result.count <= 0 || !is_demanded_by_ros2) {
       if (a2r_it->second.callback_group) {
+        // Mirror the add at creation. Remove before stop so the monitoring loop cannot re-spawn
+        // the group mid-teardown.
+        executor_->remove_callback_group(a2r_it->second.callback_group);
         executor_->stop_callback_group(a2r_it->second.callback_group);
       }
       a2r_it = active_pubsub_a2r_bridges_.erase(a2r_it);
@@ -352,11 +358,19 @@ void PerformanceBridgeManager::create_pubsub_bridge_if_needed(
           RCLCPP_ERROR(
             logger_, "Failed to update ROS 2 publisher count for topic '%s'.", topic_name.c_str());
         }
+        if (result.callback_group) {
+          executor_->add_callback_group(
+            result.callback_group, container_node_->get_node_base_interface());
+        }
         active_pubsub_r2a_bridges_[topic_name] = result;
       } else {
         if (!update_ros2_subscriber_num(container_node_.get(), topic_name)) {
           RCLCPP_ERROR(
             logger_, "Failed to update ROS 2 subscriber count for topic '%s'.", topic_name.c_str());
+        }
+        if (result.callback_group) {
+          executor_->add_callback_group(
+            result.callback_group, container_node_->get_node_base_interface());
         }
         active_pubsub_a2r_bridges_[topic_name] = result;
       }
