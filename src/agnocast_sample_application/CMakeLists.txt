@@ -86,6 +86,12 @@ target_include_directories(server PRIVATE
   ${agnocastlib_INCLUDE_DIRS}
 )
 
+add_executable(generic_server src/minimal_generic_server.cpp)
+ament_target_dependencies(generic_server rclcpp agnocastlib agnocast_sample_interfaces)
+target_include_directories(generic_server PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
 add_executable(no_rclcpp_server src/no_rclcpp_server.cpp)
 ament_target_dependencies(no_rclcpp_server agnocastlib agnocast_sample_interfaces)
 target_include_directories(no_rclcpp_server PRIVATE
@@ -181,6 +187,9 @@ install(TARGETS client
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS server
+  DESTINATION lib/${PROJECT_NAME})
+
+install(TARGETS generic_server
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS no_rclcpp_server
