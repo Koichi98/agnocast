@@ -1,0 +1,14 @@
+<launch>
+    <!-- Repro for the A2R-bridge SIGSEGV: publishes a message whose nested `data`
+         sequence is backed by process heap (built outside the borrow window).
+         Run in Performance bridge mode and add a DDS subscriber (e.g.
+         `ros2 topic echo /my_topic`) so the performance bridge daemon serializes
+         the message cross-process and crashes. -->
+    <arg name="use_sim_time" default="false" />
+
+    <node pkg="agnocast_sample_application" exec="repro_heap_talker" name="repro_heap_talker_node" output="screen">
+        <env name="LD_PRELOAD" value="libagnocast_heaphook.so:$(env LD_PRELOAD '')" />
+        <env name="AGNOCAST_BRIDGE_MODE" value="performance" />
+        <param name="use_sim_time" value="$(var use_sim_time)" />
+    </node>
+</launch>

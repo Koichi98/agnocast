@@ -68,6 +68,12 @@ target_include_directories(no_rclcpp_talker PRIVATE
   ${agnocastlib_INCLUDE_DIRS}
 )
 
+add_executable(repro_heap_talker src/repro_heap_nested_publisher.cpp)
+ament_target_dependencies(repro_heap_talker agnocastlib agnocast_sample_interfaces)
+target_include_directories(repro_heap_talker PRIVATE
+  ${agnocastlib_INCLUDE_DIRS}
+)
+
 add_executable(no_rclcpp_take_listener src/no_rclcpp_take_subscriber.cpp)
 ament_target_dependencies(no_rclcpp_take_listener agnocastlib agnocast_sample_interfaces)
 target_include_directories(no_rclcpp_take_listener PRIVATE
@@ -172,6 +178,8 @@ install(TARGETS no_rclcpp_pubsub
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS no_rclcpp_talker
+  DESTINATION lib/${PROJECT_NAME})
+install(TARGETS repro_heap_talker
   DESTINATION lib/${PROJECT_NAME})
 
 install(TARGETS no_rclcpp_take_listener
