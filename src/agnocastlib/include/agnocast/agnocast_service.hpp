@@ -26,9 +26,12 @@ enum class ServiceRole : uint8_t {
   AgnocastOnly,
 };
 
-// Internal implementation - users should use agnocast::Service<ServiceT> instead.
+/**
+ * @brief Service server for zero-copy Agnocast service communication.
+ * @tparam ServiceT The ROS service type (e.g., std_srvs::srv::SetBool).
+ */
 template <typename ServiceT>
-class BasicService : public std::enable_shared_from_this<BasicService<ServiceT>>
+class Service : public std::enable_shared_from_this<Service<ServiceT>>
 {
 private:
   // TODO(bdm-k): Consider supporting callbacks that take lvalue references.
@@ -40,7 +43,7 @@ private:
   };
   template <typename Func>
   struct is_deferred_cb : std::bool_constant<std::is_invocable_v<
-                            std::decay_t<Func>, std::shared_ptr<BasicService<ServiceT>>,
+                            std::decay_t<Func>, std::shared_ptr<Service<ServiceT>>,
                             ipc_shared_ptr<typename ServiceT::Request> &&>>
   {
   };
@@ -155,10 +158,10 @@ private:
   }
 
 public:
-  using SharedPtr = std::shared_ptr<BasicService<ServiceT>>;
+  using SharedPtr = std::shared_ptr<Service<ServiceT>>;
 
   template <typename Func>
-  BasicService(
+  Service(
     rclcpp::Node * node, const std::string & service_name, Func && callback,
     const rclcpp::QoS & qos, rclcpp::CallbackGroup::SharedPtr group,
     ServiceRole role = ServiceRole::Default)
@@ -168,7 +171,7 @@ public:
   }
 
   template <typename Func>
-  BasicService(
+  Service(
     agnocast::Node * node, const std::string & service_name, Func && callback,
     const rclcpp::QoS & qos, rclcpp::CallbackGroup::SharedPtr group,
     ServiceRole role = ServiceRole::Default)
@@ -383,15 +386,5 @@ public:
 
   ipc_shared_ptr<void> borrow_loaned_response(const ipc_shared_ptr<void> & request);
 };
-
-/**
- * @brief The user-facing Agnocast service server.
- * Alias for `BasicService<ServiceT>`. Use this type (not BasicService directly) when declaring
- * service server variables.
- * @tparam ServiceT The ROS service type (e.g., std_srvs::srv::SetBool).
- */
-AGNOCAST_PUBLIC
-template <typename ServiceT>
-using Service = BasicService<ServiceT>;
 
 }  // namespace agnocast
