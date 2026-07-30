@@ -246,6 +246,12 @@ rclcpp::QoS get_service_qos(const std::string & service_name)
   topic_info_args.topic_info_ret_buffer_addr =
     reinterpret_cast<uint64_t>(topic_info_buffer->data());
   topic_info_args.topic_info_ret_buffer_size = 1;
+  // A topic name can exist in several domains and this ioctl selects one explicitly.
+  // The bridge manager is forked per (IPC namespace, domain) and registers itself
+  // under its own ROS_DOMAIN_ID, so the domain it serves is always its own; leaving
+  // this at the zero-initialized default would query domain 0 and find no service
+  // whenever ROS_DOMAIN_ID is non-zero.
+  topic_info_args.domain_id = get_ros_domain_id();
 
   if (ioctl(agnocast_fd, AGNOCAST_GET_TOPIC_SUBSCRIBER_INFO_CMD, &topic_info_args) < 0) {
     if (errno == ENOBUFS) {
