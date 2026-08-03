@@ -23,6 +23,7 @@ public:
 
   virtual ~NodeGraph() = default;
 
+  std::vector<std::string> get_node_names() const override;
   size_t count_publishers(const std::string & topic_name) const override;
   size_t count_subscribers(const std::string & topic_name) const override;
 
@@ -31,8 +32,6 @@ public:
   void notify_shutdown() override;
 
   // ===== Not supported methods (throw runtime_error) =====
-  // Reporting the agnocast nodes requires the kmod to expose them, which it does not do yet.
-  std::vector<std::string> get_node_names() const override;
   std::map<std::string, std::vector<std::string>> get_topic_names_and_types(
     bool no_demangle = false) const override;
   std::map<std::string, std::vector<std::string>> get_service_names_and_types() const override;

@@ -1552,6 +1552,119 @@ unlock:
   return ret;
 }
 
+// Open-addressing set used to deduplicate node names while the read lock is held.
+// Slots hold `offset + 1` into the packed name buffer, so 0 means empty. Sized well above
+// MAX_NODE_NUM so that probing always terminates on a free slot.
+#define NODE_NAME_SLOT_BITS 11
+#define NODE_NAME_SLOT_NUM (1u << NODE_NAME_SLOT_BITS)
+
+// Appends `name` to the packed buffer unless it is already there. Performs no allocation and
+// nothing that can sleep, because it runs under global_htables_rwsem.
+static int add_unique_name(
+  const char * name, uint32_t * slots, char * buf, const size_t buf_size, size_t * used,
+  uint32_t * num)
+{
+  const size_t len = strlen(name) + 1;
+  uint32_t idx = full_name_hash(NULL, name, len - 1) & (NODE_NAME_SLOT_NUM - 1);
+
+  while (slots[idx] != 0) {
+    if (strcmp(&buf[slots[idx] - 1], name) == 0) return 0;  // already collected
+    idx = (idx + 1) & (NODE_NAME_SLOT_NUM - 1);
+  }
+
+  if (*num >= MAX_NODE_NUM) {
+    dev_warn(agnocast_device, "Node count exceeds limit: MAX_NODE_NUM=%d\n", MAX_NODE_NUM);
+    return -ENOBUFS;
+  }
+
+  if (*used + len > buf_size) {
+    dev_warn(
+      agnocast_device, "Node names exceed the given buffer: node_name_buffer_size=%zu\n", buf_size);
+    return -ENOBUFS;
+  }
+
+  memcpy(buf + *used, name, len);
+  slots[idx] = (uint32_t)(*used + 1);
+  *used += len;
+  (*num)++;
+  return 0;
+}
+
+// The read section deliberately does no allocation and no copy_to_user: both can sleep, and
+// global_htables_rwsem is writer-preferring, so a sleeping reader stalls every publish behind a
+// waiting add/remove endpoint. Names are packed into a kernel buffer here and handed to
+// user-space by the caller after the lock is dropped.
+
+// Collects the node names owned by one topic. Caller holds global_htables_rwsem.
+static int collect_node_names_of_topic(
+  struct topic_wrapper * wrapper, const uint32_t domain_id, uint32_t * slots, char * buf,
+  const size_t buf_size, size_t * used, uint32_t * num)
+{
+  int ret = 0;
+
+  down_read(&wrapper->topic->rwsem);
+
+  struct publisher_info * pub_info;
+  int bkt_pub_info;
+  hash_for_each(wrapper->topic->pub_info_htable, bkt_pub_info, pub_info, node)
+  {
+    if (pub_info->domain_id != domain_id || pub_info->is_bridge) continue;
+
+    ret = add_unique_name(pub_info->node_name, slots, buf, buf_size, used, num);
+    if (ret) goto unlock;
+  }
+
+  struct subscriber_info * sub_info;
+  int bkt_sub_info;
+  hash_for_each(wrapper->topic->sub_info_htable, bkt_sub_info, sub_info, node)
+  {
+    if (sub_info->domain_id != domain_id || sub_info->is_bridge) continue;
+
+    ret = add_unique_name(sub_info->node_name, slots, buf, buf_size, used, num);
+    if (ret) goto unlock;
+  }
+
+unlock:
+  up_read(&wrapper->topic->rwsem);
+  return ret;
+}
+
+int agnocast_ioctl_get_node_names(
+  const struct ipc_namespace * ipc_ns, const uint32_t domain_id, char * buf, const size_t buf_size,
+  size_t * ret_used, uint32_t * ret_node_num)
+{
+  int ret = 0;
+  size_t used = 0;
+  uint32_t num = 0;
+
+  uint32_t * slots = kvcalloc(NODE_NAME_SLOT_NUM, sizeof(*slots), GFP_KERNEL);
+  if (!slots) return -ENOMEM;
+
+  down_read(&global_htables_rwsem);
+
+  struct topic_wrapper * wrapper;
+  int bkt_topic;
+  hash_for_each(topic_hashtable, bkt_topic, wrapper, node)
+  {
+    // Endpoints of both domains of a domain-bridged pair live in one shared topic_struct, so
+    // filter on the wrapper to visit that table once and on the endpoint to pick this domain.
+    if (!ipc_eq(ipc_ns, wrapper->ipc_ns) || wrapper->domain_id != domain_id) {
+      continue;
+    }
+
+    ret = collect_node_names_of_topic(wrapper, domain_id, slots, buf, buf_size, &used, &num);
+    if (ret) goto unlock;
+  }
+
+  *ret_used = used;
+  *ret_node_num = num;
+
+unlock:
+  up_read(&global_htables_rwsem);
+  kvfree(slots);
+  return ret;
+}
+
 int agnocast_ioctl_get_node_subscriber_topics(
   const struct ipc_namespace * ipc_ns, const char * node_name,
   union ioctl_node_info_args * node_info_args)
@@ -2837,6 +2950,41 @@ static long get_topic_list_cmd(union ioctl_topic_list_args __user * arg)
   return ret;
 }
 
+static long get_node_names_cmd(union ioctl_get_node_names_args __user * arg)
+{
+  const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
+
+  union ioctl_get_node_names_args get_node_names_args;
+  if (copy_from_user(&get_node_names_args, arg, sizeof(get_node_names_args))) return -EFAULT;
+
+  const size_t buf_size = min_t(
+    size_t, get_node_names_args.node_name_buffer_size,
+    (size_t)MAX_NODE_NUM * NODE_NAME_BUFFER_SIZE);
+  char __user * user_buf =
+    (char __user *)u64_to_user_ptr(get_node_names_args.node_name_buffer_addr);
+
+  // Staged in kernel memory so that the node names can be collected without doing copy_to_user
+  // while holding global_htables_rwsem.
+  char * buf = kvmalloc(buf_size, GFP_KERNEL);
+  if (!buf) return -ENOMEM;
+
+  size_t used = 0;
+  uint32_t node_num = 0;
+  long ret =
+    agnocast_ioctl_get_node_names(ipc_ns, get_current_domain_id(), buf, buf_size, &used, &node_num);
+  if (ret == 0) {
+    if (copy_to_user(user_buf, buf, used)) {
+      ret = -EFAULT;
+    } else {
+      get_node_names_args.ret_node_num = node_num;
+      if (copy_to_user(arg, &get_node_names_args, sizeof(get_node_names_args))) ret = -EFAULT;
+    }
+  }
+
+  kvfree(buf);
+  return ret;
+}
+
 static long get_node_subscriber_topics_cmd(union ioctl_node_info_args __user * arg)
 {
   int ret = 0;
@@ -3179,6 +3327,8 @@ long agnocast_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
       return get_exit_process_cmd((struct ioctl_get_exit_process_args __user *)arg);
     case AGNOCAST_GET_TOPIC_LIST_CMD:
       return get_topic_list_cmd((union ioctl_topic_list_args __user *)arg);
+    case AGNOCAST_GET_NODE_NAMES_CMD:
+      return get_node_names_cmd((union ioctl_get_node_names_args __user *)arg);
     case AGNOCAST_GET_NODE_SUBSCRIBER_TOPICS_CMD:
       return get_node_subscriber_topics_cmd((union ioctl_node_info_args __user *)arg);
     case AGNOCAST_GET_NODE_PUBLISHER_TOPICS_CMD:

@@ -1,7 +1,12 @@
 #include "agnocast/node/node_interfaces/node_graph.hpp"
 
+#include "agnocast/agnocast_ioctl.hpp"
 #include "agnocast/agnocast_publisher.hpp"
 #include "agnocast/agnocast_subscription.hpp"
+#include "agnocast/agnocast_utils.hpp"
+
+#include <sys/ioctl.h>
+#include <unistd.h>
 
 namespace agnocast::node_interfaces
 {
@@ -60,11 +65,30 @@ std::map<std::string, std::vector<std::string>> NodeGraph::get_subscriber_names_
     "NodeGraph::get_subscriber_names_and_types_by_node is not supported in agnocast. ");
 };
 
-// Supporting this requires the kmod to report the nodes owning an agnocast endpoint, which it
-// does not do yet.
 std::vector<std::string> NodeGraph::get_node_names() const
 {
-  throw std::runtime_error("NodeGraph::get_node_names is not supported in agnocast. ");
+  // Sized to the kernel-side limit so that the kernel never has to report -ENOBUFS.
+  std::vector<char> buffer(static_cast<size_t>(MAX_NODE_NUM) * NODE_NAME_BUFFER_SIZE);
+
+  union ioctl_get_node_names_args get_node_names_args = {};
+  get_node_names_args.node_name_buffer_addr = reinterpret_cast<uint64_t>(buffer.data());
+  get_node_names_args.node_name_buffer_size = static_cast<uint32_t>(buffer.size());
+  if (ioctl(agnocast_fd, AGNOCAST_GET_NODE_NAMES_CMD, &get_node_names_args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_GET_NODE_NAMES_CMD failed: %s", strerror(errno));
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+
+  std::vector<std::string> node_names;
+  node_names.reserve(get_node_names_args.ret_node_num);
+  const char * current_ptr = buffer.data();
+
+  for (uint32_t i = 0; i < get_node_names_args.ret_node_num; ++i) {
+    node_names.emplace_back(current_ptr);
+    current_ptr += node_names.back().length() + 1;
+  }
+
+  return node_names;
 };
 
 std::vector<std::tuple<std::string, std::string, std::string>>
