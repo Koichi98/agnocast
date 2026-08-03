@@ -4,8 +4,10 @@
 
 #include "std_msgs/msg/string.hpp"
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <stdexcept>
@@ -111,6 +113,45 @@ TEST_F(NodeGraphIntegrationTest, node_delegates_counting_to_the_node_graph_inter
   EXPECT_EQ(node_->count_publishers(topic), 1u);
 }
 
+// get_node_names() reports every node of this IPC namespace and ROS_DOMAIN_ID that owns an
+// agnocast endpoint, so the assertions below check for membership rather than for an exact list:
+// the kmod still holds the nodes registered by the tests that ran before this one.
+TEST_F(NodeGraphIntegrationTest, get_node_names_includes_a_node_owning_a_publisher)
+{
+  auto pub = node_->create_publisher<StringMsg>("/test_node_graph_names_pub", 1);
+
+  EXPECT_THAT(graph_->get_node_names(), ::testing::Contains("test_node_graph"));
+}
+
+TEST_F(NodeGraphIntegrationTest, get_node_names_includes_a_node_owning_only_a_subscription)
+{
+  auto sub = node_->create_subscription<StringMsg>(
+    "/test_node_graph_names_sub", 1, [](const agnocast::ipc_shared_ptr<StringMsg> &) {});
+
+  EXPECT_THAT(graph_->get_node_names(), ::testing::Contains("test_node_graph"));
+}
+
+// A node is reported once even when it owns endpoints on several topics.
+TEST_F(NodeGraphIntegrationTest, get_node_names_reports_a_node_once)
+{
+  auto pub1 = node_->create_publisher<StringMsg>("/test_node_graph_dedup_a", 1);
+  auto pub2 = node_->create_publisher<StringMsg>("/test_node_graph_dedup_b", 1);
+  auto sub = node_->create_subscription<StringMsg>(
+    "/test_node_graph_dedup_c", 1, [](const agnocast::ipc_shared_ptr<StringMsg> &) {});
+
+  const auto names = graph_->get_node_names();
+  EXPECT_EQ(std::count(names.begin(), names.end(), "test_node_graph"), 1);
+}
+
+// Only nodes owning an endpoint are visible; constructing a node registers nothing by itself.
+TEST_F(NodeGraphIntegrationTest, get_node_names_excludes_a_node_without_endpoints)
+{
+  auto bare_node = std::make_shared<agnocast::Node>("test_node_graph_bare");
+
+  EXPECT_THAT(
+    graph_->get_node_names(), ::testing::Not(::testing::Contains("test_node_graph_bare")));
+}
+
 // agnocast has no graph events, but rclcpp calls these unconditionally, so they must not throw.
 TEST_F(NodeGraphIntegrationTest, notify_graph_change_and_notify_shutdown_are_no_ops)
 {
@@ -120,7 +161,6 @@ TEST_F(NodeGraphIntegrationTest, notify_graph_change_and_notify_shutdown_are_no_
 
 TEST_F(NodeGraphIntegrationTest, unsupported_methods_throw_runtime_error)
 {
-  EXPECT_THROW(graph_->get_node_names(), std::runtime_error);
   EXPECT_THROW(graph_->get_topic_names_and_types(), std::runtime_error);
   EXPECT_THROW(graph_->get_service_names_and_types(), std::runtime_error);
   EXPECT_THROW(graph_->get_service_names_and_types_by_node("n", "/"), std::runtime_error);
