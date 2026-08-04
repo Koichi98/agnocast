@@ -12,10 +12,13 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <span>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -382,23 +385,163 @@ bool is_version_consistent(
   return true;
 }
 
-// Opt-out for deployments that manage the discovery agent themselves. getenv()
-// does not allocate, so this is safe before agnocast's allocator is ready.
-bool discovery_agent_auto_fork_disabled()
+// getenv() does not allocate, so this is safe before agnocast's allocator is ready.
+bool env_is_truthy(const char * name)
 {
-  const char * v = getenv("AGNOCAST_NO_DISCOVERY_AGENT");
+  const char * v = getenv(name);
   return v != nullptr &&
          (strcmp(v, "1") == 0 || strcasecmp(v, "true") == 0 || strcasecmp(v, "yes") == 0);
 }
 
+// Opt-out for deployments that manage the discovery agent themselves.
+bool discovery_agent_auto_fork_disabled()
+{
+  return env_is_truthy("AGNOCAST_NO_DISCOVERY_AGENT");
+}
+
+// The fallback chain mirrors the one rcl and launch use, so daemon logs land next to node logs.
+std::string resolve_daemon_log_dir()
+{
+  const char * override_dir = getenv("AGNOCAST_DAEMON_LOG_DIR");
+  if (override_dir != nullptr && *override_dir != '\0') {
+    return override_dir;
+  }
+
+  const char * ros_log_dir = getenv("ROS_LOG_DIR");
+  if (ros_log_dir != nullptr && *ros_log_dir != '\0') {
+    return ros_log_dir;
+  }
+
+  const char * ros_home = getenv("ROS_HOME");
+  if (ros_home != nullptr && *ros_home != '\0') {
+    return std::string(ros_home) + "/log";
+  }
+
+  const char * home = getenv("HOME");
+  if (home != nullptr && *home != '\0') {
+    return std::string(home) + "/.ros/log";
+  }
+
+  return "";
+}
+
+bool make_directories(const std::string & path)
+{
+  for (size_t i = 1; i <= path.size(); i++) {
+    if (i != path.size() && path[i] != '/') {
+      continue;
+    }
+    const std::string component = path.substr(0, i);
+    if (mkdir(component.c_str(), 0755) != 0 && errno != EEXIST) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Both knobs are experimental. Warned about from the parent, where RCLCPP_* still reaches the
+// node's stderr, and _ONCE so a process spawning several daemons says it once.
+void warn_if_experimental_log_env_set()
+{
+  const char * log_dir = getenv("AGNOCAST_DAEMON_LOG_DIR");
+  if (log_dir != nullptr && *log_dir != '\0') {
+    RCLCPP_WARN_ONCE(
+      logger, "AGNOCAST_DAEMON_LOG_DIR is experimental and may change or be removed.");
+  }
+  if (env_is_truthy("AGNOCAST_DAEMON_LOG_TO_TTY")) {
+    RCLCPP_WARN_ONCE(
+      logger, "AGNOCAST_DAEMON_LOG_TO_TTY is experimental and may change or be removed.");
+  }
+}
+
+// The name carries the daemon's scope so that daemons which legitimately coexist do not share a
+// file. No pid or timestamp: a duplicate daemon that loses its race and exits immediately would
+// then leave an empty file behind on every node start.
+std::string resolve_daemon_log_path(const char * daemon_name, const uint32_t * domain_id)
+{
+  warn_if_experimental_log_env_set();
+
+  const std::string dir = resolve_daemon_log_dir();
+  if (dir.empty() || !make_directories(dir)) {
+    return "";
+  }
+
+  struct stat ipc_ns_st = {};
+  const unsigned long ipc_ns_inode =
+    (stat("/proc/self/ns/ipc", &ipc_ns_st) == 0) ? ipc_ns_st.st_ino : 0;
+
+  std::string path = dir + "/agnocast_" + daemon_name + "_ns" + std::to_string(ipc_ns_inode);
+  if (domain_id != nullptr) {
+    path += "_d" + std::to_string(*domain_id);
+  }
+  return path + ".log";
+}
+
+// Must run before setsid(), which drops the controlling terminal that /dev/tty needs.
+//
+// dup2 implicitly closes the inherited descriptors, which is the point: a daemon outlives its
+// parent, and ros2 launch or CTest only completes once every pipe it set up is released -- it waits
+// for EOF on stdout/stderr, and on stdin for the last reader to close. fd 0 gets /dev/null rather
+// than out_fd, which is write-only, and closing it outright would let the next open() claim it.
+void redirect_stdio_for_daemon(const char * daemon_name, const std::string & log_path)
+{
+  const int devnull = open("/dev/null", O_RDWR);
+  if (devnull >= 0) {
+    static_cast<void>(dup2(devnull, STDIN_FILENO));
+  }
+
+  int out_fd = -1;
+  bool wrote_to_log_file = false;
+  // Opt-in only; the log file is the default target.
+  if (env_is_truthy("AGNOCAST_DAEMON_LOG_TO_TTY")) {
+    out_fd = open("/dev/tty", O_WRONLY);
+  }
+  if (out_fd < 0 && !log_path.empty()) {
+    out_fd = open(log_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+    wrote_to_log_file = out_fd >= 0;
+  }
+  if (out_fd < 0) {
+    out_fd = devnull;
+  }
+  if (out_fd < 0) {
+    return;
+  }
+
+  // Instances append to one file, so mark where this one starts.
+  if (wrote_to_log_file) {
+    char header[128];
+    const int len = snprintf(
+      header, sizeof(header), "--- agnocast %s daemon started (pid %d) ---\n", daemon_name,
+      static_cast<int>(getpid()));
+    if (len > 0) {
+      const ssize_t written = write(out_fd, header, static_cast<size_t>(len));
+      static_cast<void>(written);
+    }
+  }
+
+  static_cast<void>(dup2(out_fd, STDOUT_FILENO));
+  static_cast<void>(dup2(out_fd, STDERR_FILENO));
+  if (out_fd > STDERR_FILENO) {
+    close(out_fd);
+  }
+  if (devnull > STDERR_FILENO && devnull != out_fd) {
+    close(devnull);
+  }
+  // stdout to a file is fully buffered, so INFO would be lost if the daemon is killed.
+  setvbuf(stdout, nullptr, _IOLBF, 0);
+}
+
 template <typename Func>
-pid_t spawn_daemon_process(Func && func)
+pid_t spawn_daemon_process(const char * daemon_name, const std::string & log_path, Func && func)
 {
   auto fail = [](const char * err_fmt) {
     RCLCPP_ERROR(logger, err_fmt, strerror(errno));
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   };
+
+  // Buffered data would otherwise be duplicated into the child and flushed twice.
+  fflush(nullptr);
 
   pid_t pid = fork();
   if (pid < 0) {
@@ -408,38 +551,7 @@ pid_t spawn_daemon_process(Func && func)
     agnocast::is_bridge_process = true;
     unsetenv("LD_PRELOAD");
 
-    // Redirect stdio to /dev/null when stdout or stderr is an inherited pipe or socket. In that
-    // case, a process may be reading from the pipe and waiting on it to close, which can cause
-    // the process to hang because the daemon never closes it. Redirecting to /dev/null works around
-    // this issue.
-    struct stat st_out = {};
-    struct stat st_err = {};
-    if (fstat(STDOUT_FILENO, &st_out) < 0) {
-      fail("fstat for stdout failed: %s");
-    }
-    if (fstat(STDERR_FILENO, &st_err) < 0) {
-      fail("fstat for stderr failed: %s");
-    }
-
-    if (
-      S_ISFIFO(st_out.st_mode) || S_ISFIFO(st_err.st_mode) || S_ISSOCK(st_out.st_mode) ||
-      S_ISSOCK(st_err.st_mode)) {
-      int devnull = open("/dev/null", O_RDWR);
-      if (devnull < 0) {
-        fail("Failed to open /dev/null: %s");
-      }
-
-      if (dup2(devnull, STDIN_FILENO) < 0) {
-        fail("dup2 for stdin failed: %s");
-      }
-      if (dup2(devnull, STDOUT_FILENO) < 0) {
-        fail("dup2 for stdout failed: %s");
-      }
-      if (dup2(devnull, STDERR_FILENO) < 0) {
-        fail("dup2 for stderr failed: %s");
-      }
-      close(devnull);
-    }
+    redirect_stdio_for_daemon(daemon_name, log_path);
 
     if (setsid() == -1) {
       fail("setsid failed: %s");
@@ -483,8 +595,12 @@ struct initialize_agnocast_result initialize_agnocast(
     exit(EXIT_FAILURE);
   }
 
+  // Kept in a local because add_process_args is a union: ADD_PROCESS overwrites the input
+  // domain_id with its ret_* fields, so it cannot be read back afterwards.
+  const uint32_t domain_id = get_ros_domain_id();
+
   union ioctl_add_process_args add_process_args = {};
-  add_process_args.domain_id = get_ros_domain_id();
+  add_process_args.domain_id = domain_id;
   if (ioctl(agnocast_fd, AGNOCAST_ADD_PROCESS_CMD, &add_process_args) < 0) {
     RCLCPP_ERROR(logger, "AGNOCAST_ADD_PROCESS_CMD failed: %s", strerror(errno));
     close(agnocast_fd);
@@ -496,14 +612,18 @@ struct initialize_agnocast_result initialize_agnocast(
 
   // Create a shm_unlink daemon process if it doesn't exist in its ipc namespace.
   if (!add_process_args.ret_unlink_daemon_exist) {
-    spawn_daemon_process([]() { poll_for_unlink(); });
+    // Namespace-scoped, hence no domain in the log path.
+    spawn_daemon_process(
+      "unlink", resolve_daemon_log_path("unlink", nullptr), []() { poll_for_unlink(); });
   }
   if (bridge_mode == BridgeMode::On && !add_process_args.ret_performance_bridge_daemon_exist) {
     should_spawn_bridge = true;
   }
 
   if (should_spawn_bridge) {
-    spawn_daemon_process([]() { poll_for_bridge_manager(); });
+    spawn_daemon_process(
+      "bridge_manager", resolve_daemon_log_path("bridge_manager", &domain_id),
+      []() { poll_for_bridge_manager(); });
   }
 
   // The forked agent inherits this process's IPC namespace and ROS_DOMAIN_ID, and
@@ -511,7 +631,9 @@ struct initialize_agnocast_result initialize_agnocast(
   // (the data plane does not depend on the observer); a fork() failure still is, as
   // for the other daemons spawned here -- it means system-wide resource exhaustion.
   if (!add_process_args.ret_discovery_agent_exist && !discovery_agent_auto_fork_disabled()) {
-    spawn_daemon_process([]() { exec_discovery_agent(); });
+    spawn_daemon_process(
+      "discovery_agent", resolve_daemon_log_path("discovery_agent", &domain_id),
+      []() { exec_discovery_agent(); });
   }
 
   void * mempool_ptr =
