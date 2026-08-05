@@ -206,8 +206,6 @@ void test_case_take_msg_take_the_latest_one_when_sub_qos_depth_is_two(struct kun
     KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
 
   // Assert
-  // allow_same_message is true, so take is expected to return the most recent entry
-  // regardless of the subscriber's qos_depth.
   KUNIT_EXPECT_EQ(test, ret3, 0);
   KUNIT_EXPECT_EQ(test, ioctl_take_msg_ret.ret_entry_id, ioctl_publish_msg_ret2.ret_entry_id);
   KUNIT_EXPECT_EQ(
@@ -721,8 +719,6 @@ void test_case_take_msg_transient_local_publish_num_smaller_than_sub_qos_smaller
     KUNIT_PUB_SHM_BUF_SIZE, &ioctl_take_msg_ret);
 
   // Assert
-  // allow_same_message is true, so take is expected to return the most recent entry
-  // regardless of the subscriber's qos_depth.
   KUNIT_EXPECT_EQ(test, ret4, 0);
   KUNIT_EXPECT_EQ(test, ioctl_take_msg_ret.ret_entry_id, ioctl_publish_msg_ret2.ret_entry_id);
   KUNIT_EXPECT_EQ(
