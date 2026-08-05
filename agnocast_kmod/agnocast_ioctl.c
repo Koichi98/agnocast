@@ -1165,6 +1165,19 @@ int agnocast_ioctl_take_msg(
 
     candidate_en = en;
     searched_count++;
+
+    // For allow_same_message = false that is the intended result: the
+    // `en->entry_id == latest_received_entry_id` break above stops the walk at the
+    // read watermark, so the surviving candidate is the oldest not-yet-received
+    // entry (FIFO).
+    //
+    // For allow_same_message = true that break is disabled, so the walk would run
+    // past the watermark down to the bottom of the window. take_data() passes true
+    // and is documented to "always return the most recent message", so stop at the
+    // first (newest) qualifying entry instead.
+    if (allow_same_message) {
+      break;
+    }
   }
 
   if (candidate_en) {

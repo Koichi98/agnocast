@@ -347,9 +347,11 @@ public:
 
   /**
    * @brief Retrieve the latest message from the topic.
-   * @param allow_same_message  If true, may return the same message as the previous call
-   *                            (useful for always having the latest value). If false, returns
-   *                            only new messages since the last take.
+   * @param allow_same_message  If true, returns the most recent message regardless of the
+   *                            subscription's history depth, and may return the same message as
+   *                            the previous call (useful for always having the latest value).
+   *                            If false, returns the oldest message not yet received, i.e. FIFO,
+   *                            searching back at most the history depth.
    * @return Shared pointer to the message, or empty if unavailable.
    */
   AGNOCAST_PUBLIC
