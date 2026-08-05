@@ -404,6 +404,8 @@ std::string resolve_daemon_log_dir()
 {
   const char * override_dir = getenv("AGNOCAST_DAEMON_LOG_DIR");
   if (override_dir != nullptr && *override_dir != '\0') {
+    RCLCPP_WARN_ONCE(
+      logger, "AGNOCAST_DAEMON_LOG_DIR is experimental and may change or be removed.");
     return override_dir;
   }
 
@@ -439,28 +441,11 @@ bool make_directories(const std::string & path)
   return true;
 }
 
-// Both knobs are experimental. Warned about from the parent, where RCLCPP_* still reaches the
-// node's stderr, and _ONCE so a process spawning several daemons says it once.
-void warn_if_experimental_log_env_set()
-{
-  const char * log_dir = getenv("AGNOCAST_DAEMON_LOG_DIR");
-  if (log_dir != nullptr && *log_dir != '\0') {
-    RCLCPP_WARN_ONCE(
-      logger, "AGNOCAST_DAEMON_LOG_DIR is experimental and may change or be removed.");
-  }
-  if (env_is_truthy("AGNOCAST_DAEMON_LOG_TO_TTY")) {
-    RCLCPP_WARN_ONCE(
-      logger, "AGNOCAST_DAEMON_LOG_TO_TTY is experimental and may change or be removed.");
-  }
-}
-
 // The name carries the daemon's scope so that daemons which legitimately coexist do not share a
 // file. No pid or timestamp: a duplicate daemon that loses its race and exits immediately would
 // then leave an empty file behind on every node start.
 std::string resolve_daemon_log_path(const char * daemon_name, const uint32_t * domain_id)
 {
-  warn_if_experimental_log_env_set();
-
   const std::string dir = resolve_daemon_log_dir();
   if (dir.empty() || !make_directories(dir)) {
     // Without a log file the daemon falls back to /dev/null, so say so rather than silently
@@ -501,6 +486,10 @@ void redirect_stdio_for_daemon(const char * daemon_name, const std::string & log
   // Opt-in only; the log file is the default target.
   if (env_is_truthy("AGNOCAST_DAEMON_LOG_TO_TTY")) {
     out_fd = open("/dev/tty", O_WRONLY);
+  } else {
+    // rcutils colours per message from isatty(), which already says no for a log file, unless
+    // RCUTILS_COLORIZED_OUTPUT forces it on. Override that: escapes in the file spoil grep.
+    setenv("RCUTILS_COLORIZED_OUTPUT", "0", 1);
   }
   if (out_fd < 0 && !log_path.empty()) {
     out_fd = open(log_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -553,6 +542,11 @@ pid_t spawn_daemon_process(const char * daemon_name, const std::string & log_pat
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   };
+
+  if (env_is_truthy("AGNOCAST_DAEMON_LOG_TO_TTY")) {
+    RCLCPP_WARN_ONCE(
+      logger, "AGNOCAST_DAEMON_LOG_TO_TTY is experimental and may change or be removed.");
+  }
 
   // Buffered data would otherwise be duplicated into the child and flushed twice.
   fflush(nullptr);
