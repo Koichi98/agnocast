@@ -463,6 +463,12 @@ std::string resolve_daemon_log_path(const char * daemon_name, const uint32_t * d
 
   const std::string dir = resolve_daemon_log_dir();
   if (dir.empty() || !make_directories(dir)) {
+    // Without a log file the daemon falls back to /dev/null, so say so rather than silently
+    // discarding its output.
+    RCLCPP_WARN_ONCE(
+      logger,
+      "No writable daemon log directory (tried ROS_LOG_DIR, $ROS_HOME/log, ~/.ros/log), so "
+      "Agnocast daemon output is discarded.");
     return "";
   }
 
@@ -486,19 +492,19 @@ std::string resolve_daemon_log_path(const char * daemon_name, const uint32_t * d
 void redirect_stdio_for_daemon(const char * daemon_name, const std::string & log_path)
 {
   const int devnull = open("/dev/null", O_RDWR);
-  if (devnull >= 0) {
-    static_cast<void>(dup2(devnull, STDIN_FILENO));
+  if (devnull >= 0 && dup2(devnull, STDIN_FILENO) < 0) {
+    _exit(EXIT_FAILURE);
   }
 
   int out_fd = -1;
-  bool wrote_to_log_file = false;
+  bool opened_log_file = false;
   // Opt-in only; the log file is the default target.
   if (env_is_truthy("AGNOCAST_DAEMON_LOG_TO_TTY")) {
     out_fd = open("/dev/tty", O_WRONLY);
   }
   if (out_fd < 0 && !log_path.empty()) {
     out_fd = open(log_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
-    wrote_to_log_file = out_fd >= 0;
+    opened_log_file = out_fd >= 0;
   }
   if (out_fd < 0) {
     out_fd = devnull;
@@ -508,19 +514,27 @@ void redirect_stdio_for_daemon(const char * daemon_name, const std::string & log
   }
 
   // Instances append to one file, so mark where this one starts.
-  if (wrote_to_log_file) {
+  if (opened_log_file) {
     char header[128];
     const int len = snprintf(
       header, sizeof(header), "--- agnocast %s daemon started (pid %d) ---\n", daemon_name,
       static_cast<int>(getpid()));
     if (len > 0) {
-      const ssize_t written = write(out_fd, header, static_cast<size_t>(len));
+      // snprintf reports what it would have written, which can exceed the buffer.
+      const size_t header_len = std::min(static_cast<size_t>(len), sizeof(header) - 1);
+      const ssize_t written = write(out_fd, header, header_len);
       static_cast<void>(written);
     }
   }
 
-  static_cast<void>(dup2(out_fd, STDOUT_FILENO));
-  static_cast<void>(dup2(out_fd, STDERR_FILENO));
+  // A failed dup2 leaves the daemon holding the parent's pipe, which is the hang this function
+  // exists to prevent. A missing daemon is the lesser problem, so give up instead.
+  if (dup2(out_fd, STDOUT_FILENO) < 0 || dup2(out_fd, STDERR_FILENO) < 0) {
+    constexpr char msg[] = "[ERROR] [Agnocast] Failed to redirect the daemon's stdio\n";
+    const ssize_t written = write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    static_cast<void>(written);
+    _exit(EXIT_FAILURE);
+  }
   if (out_fd > STDERR_FILENO) {
     close(out_fd);
   }
