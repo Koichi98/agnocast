@@ -496,12 +496,14 @@ void test_case_take_msg_publish_num_and_sub_qos_depth_and_pub_qos_depth_are_all_
     ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
+  int64_t latest_published_entry_id = ioctl_publish_msg_ret.ret_entry_id;
   for (uint32_t i = 0; i < qos_depth - 1; i++) {
     union ioctl_publish_msg_args ioctl_publish_msg_ret;
     int ret = agnocast_ioctl_publish_msg(
       TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id, ret_addr, subscriber_ids_buf,
       ARRAY_SIZE(subscriber_ids_buf), &ioctl_publish_msg_ret);
     KUNIT_ASSERT_EQ(test, ret, 0);
+    latest_published_entry_id = ioctl_publish_msg_ret.ret_entry_id;
   }
 
   const bool allow_same_message = true;
@@ -515,11 +517,11 @@ void test_case_take_msg_publish_num_and_sub_qos_depth_and_pub_qos_depth_are_all_
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret3, 0);
-  KUNIT_EXPECT_EQ(test, ioctl_take_msg_ret.ret_entry_id, ioctl_publish_msg_ret.ret_entry_id);
+  KUNIT_EXPECT_EQ(test, ioctl_take_msg_ret.ret_entry_id, latest_published_entry_id);
   KUNIT_EXPECT_EQ(
     test,
     agnocast_get_latest_received_entry_id(TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id),
-    ioctl_publish_msg_ret.ret_entry_id);
+    latest_published_entry_id);
   KUNIT_EXPECT_EQ(test, ioctl_take_msg_ret.ret_pub_shm_num, 1);
   KUNIT_EXPECT_EQ(test, pub_shm_infos[0].pid, publisher_pid);
   KUNIT_EXPECT_EQ(test, pub_shm_infos[0].shm_addr, ret_addr);
