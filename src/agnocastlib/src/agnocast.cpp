@@ -481,17 +481,13 @@ void redirect_stdio_for_daemon(const char * daemon_name, const std::string & log
     _exit(EXIT_FAILURE);
   }
 
+  // rcutils colours per message from isatty(), which already says no for a log file, unless
+  // RCUTILS_COLORIZED_OUTPUT forces it on. Override that: escapes in the file spoil grep.
+  setenv("RCUTILS_COLORIZED_OUTPUT", "0", 1);
+
   int out_fd = -1;
   bool opened_log_file = false;
-  // Opt-in only; the log file is the default target.
-  if (env_is_truthy("AGNOCAST_DAEMON_LOG_TO_TTY")) {
-    out_fd = open("/dev/tty", O_WRONLY);
-  } else {
-    // rcutils colours per message from isatty(), which already says no for a log file, unless
-    // RCUTILS_COLORIZED_OUTPUT forces it on. Override that: escapes in the file spoil grep.
-    setenv("RCUTILS_COLORIZED_OUTPUT", "0", 1);
-  }
-  if (out_fd < 0 && !log_path.empty()) {
+  if (!log_path.empty()) {
     out_fd = open(log_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
     opened_log_file = out_fd >= 0;
   }
@@ -542,11 +538,6 @@ pid_t spawn_daemon_process(const char * daemon_name, const std::string & log_pat
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   };
-
-  if (env_is_truthy("AGNOCAST_DAEMON_LOG_TO_TTY")) {
-    RCLCPP_WARN_ONCE(
-      logger, "AGNOCAST_DAEMON_LOG_TO_TTY is experimental and may change or be removed.");
-  }
 
   // Buffered data would otherwise be duplicated into the child and flushed twice.
   fflush(nullptr);
