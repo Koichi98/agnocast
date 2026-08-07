@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0-only OR BSD-2-Clause
 #include "agnocast_internal.h"
 
+#include <linux/file.h>
+
 int major;
 struct class * agnocast_class;
 struct device * agnocast_device;
@@ -31,6 +33,29 @@ const char * agnocast_notify_mq_topic_name(const struct topic_wrapper * wrapper)
 {
   return wrapper->topic->rule ? wrapper->topic->rule->topic_name_a : wrapper->key;
 }
+
+void agnocast_free_publisher_info(struct publisher_info * pub_info)
+{
+  hash_del(&pub_info->node);
+
+  struct gpu_region_info * region;
+  struct gpu_region_info * tmp_region;
+  list_for_each_entry_safe(region, tmp_region, &pub_info->gpu_regions, node)
+  {
+    // Dropping this reference is what eventually returns the device memory to
+    // the driver, once every importer has closed its own descriptor.
+    if (region->handle_file) {
+      fput(region->handle_file);
+    }
+    list_del(&region->node);
+    kfree(region->blob);
+    kfree(region);
+  }
+
+  kfree(pub_info->node_name);
+  kfree(pub_info);
+}
+
 
 static void pre_handler_subscriber_exit(
   struct topic_wrapper * wrapper, const pid_t pid, struct process_info * proc_info)
@@ -110,9 +135,7 @@ static void pre_handler_subscriber_exit(
 
       pub_info->entries_num--;
       if (pub_info->entries_num == 0) {
-        hash_del(&pub_info->node);
-        kfree(pub_info->node_name);
-        kfree(pub_info);
+        agnocast_free_publisher_info(pub_info);
       }
     }
   }
@@ -146,9 +169,7 @@ static void pre_handler_publisher_exit(struct topic_wrapper * wrapper, const pid
     }
 
     if (pub_info->entries_num == 0) {
-      hash_del(&pub_info->node);
-      kfree(pub_info->node_name);
-      kfree(pub_info);
+      agnocast_free_publisher_info(pub_info);
     }
   }
 }
@@ -215,9 +236,7 @@ void agnocast_release_topic_wrapper(struct topic_wrapper * wrapper)
     struct hlist_node * tmp_pub;
     hash_for_each_safe(wrapper->topic->pub_info_htable, bkt_pub, tmp_pub, pub_info, node)
     {
-      hash_del(&pub_info->node);
-      kfree(pub_info->node_name);
-      kfree(pub_info);
+      agnocast_free_publisher_info(pub_info);
     }
 
     struct subscriber_info * sub_info;

@@ -36,6 +36,7 @@ extern struct device * agnocast_device;
 // - Write lock (down_write): when adding/removing entries from hashtables
 extern struct rw_semaphore global_htables_rwsem;
 
+
 // =========================================
 // data structure
 
@@ -79,6 +80,29 @@ struct process_info
 
 extern DECLARE_HASHTABLE(proc_info_htable, PROC_INFO_HASH_BITS);
 
+// A publisher's GPU device-memory region, present only for publishers that
+// registered one. The kernel module stores the export verbatim and does not
+// interpret it; its role is to hold the region's liveness reference so the
+// memory outlives the publishing process, and to hand each importer its own
+// descriptor for the same open file.
+struct gpu_region_info
+{
+  uint32_t region_id;
+  uint32_t backend_type;
+  uint32_t slot_size;
+  uint32_t slot_count;
+  uint64_t mapped_size;
+  uint8_t device_uuid[GPU_DEVICE_UUID_SIZE];
+  // The reference that keeps the allocation alive. NULL for mechanisms whose
+  // handle is not a file descriptor.
+  struct file * handle_file;
+  uint8_t * blob;
+  uint32_t blob_size;
+  // A publisher grows its pool by adding regions rather than failing to borrow,
+  // so it owns a list of them and a message names the one it used.
+  struct list_head node;
+};
+
 struct publisher_info
 {
   topic_local_id_t id;
@@ -91,8 +115,16 @@ struct publisher_info
   bool qos_is_transient_local;
   uint32_t entries_num;
   bool is_bridge;
+  // Empty unless this publisher registered GPU regions.
+  struct list_head gpu_regions;
   struct hlist_node node;
 };
+
+// Unlinks a publisher_info and releases everything it owns. Used by every
+// teardown path so that resources added to publisher_info -- notably the GPU
+// region's file reference -- cannot be released in some paths and leaked in
+// others.
+void agnocast_free_publisher_info(struct publisher_info * pub_info);
 
 struct subscriber_info
 {

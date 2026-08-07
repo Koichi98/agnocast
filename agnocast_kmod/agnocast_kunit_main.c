@@ -12,6 +12,7 @@
 #include "agnocast_kunit/agnocast_kunit_get_node_subscriber_topics.h"
 #include "agnocast_kunit/agnocast_kunit_get_publisher_num.h"
 #include "agnocast_kunit/agnocast_kunit_get_publisher_qos.h"
+#include "agnocast_kunit/agnocast_kunit_gpu_region.h"
 #include "agnocast_kunit/agnocast_kunit_get_subscriber_num.h"
 #include "agnocast_kunit/agnocast_kunit_get_subscriber_qos.h"
 #include "agnocast_kunit/agnocast_kunit_get_topic_publisher_info.h"
@@ -36,6 +37,7 @@ MODULE_LICENSE("Dual BSD/GPL");
 struct kunit_case agnocast_test_cases[] = {
   TEST_CASES_ADD_SUBSCRIBER,
   TEST_CASES_ADD_PUBLISHER,
+  TEST_CASES_GPU_REGION,
   TEST_CASES_REMOVE_SUBSCRIBER,
   TEST_CASES_REMOVE_PUBLISHER,
   TEST_CASES_RELEASE_SUB_REF,
