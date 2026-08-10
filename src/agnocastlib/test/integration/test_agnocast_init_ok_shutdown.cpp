@@ -373,3 +373,108 @@ TEST_F(InitOkShutdownTest, InitAndShutdownAreIdempotent)
   agnocast::shutdown();
   EXPECT_FALSE(agnocast::ok()) << "agnocast::ok() should still be false after second shutdown()";
 }
+
+// A component container's main() calls rclcpp::init() but never agnocast::init(). An
+// agnocast::Node loaded there still creates Agnocast-only executors internally (the
+// use_sim_time clock thread, the tf2 listener thread), so they must come up on their own.
+TEST_F(InitOkShutdownTest, AgnocastOnlyExecutorInitializesContextWhenInitWasNotCalled)
+{
+  ASSERT_FALSE(agnocast::ok()) << "precondition: agnocast::init() has not been called";
+
+  auto executor = std::make_shared<agnocast::AgnocastOnlySingleThreadedExecutor>();
+
+  EXPECT_TRUE(agnocast::ok())
+    << "constructing an Agnocast-only executor should bring the context up by itself";
+
+  std::atomic_bool spin_exited{false};
+  std::thread spin_thread([&]() {
+    executor->spin();
+    spin_exited.store(true);
+  });
+
+  std::this_thread::sleep_for(250ms);
+  EXPECT_FALSE(spin_exited.load()) << "spin() should keep running without an explicit init()";
+
+  agnocast::shutdown();
+  wait_until_or_fail(
+    [&]() { return spin_exited.load(); }, 2s,
+    "executor spin() did not return after agnocast::shutdown().");
+
+  if (spin_thread.joinable()) {
+    spin_thread.join();
+  }
+}
+
+// The lazy initialization above must not fight the shutdown path: objects built during
+// teardown (AgnocastOnlyCallbackIsolatedExecutor::spin() creates an agnocast::Node for its
+// client publisher, for instance) would otherwise revive the context and hang every spin
+// loop that waits for agnocast::ok() to turn false.
+TEST_F(InitOkShutdownTest, LazyInitializationDoesNotReviveShutdownContext)
+{
+  agnocast::init(0, nullptr);
+  ASSERT_TRUE(agnocast::ok());
+
+  agnocast::shutdown();
+  ASSERT_FALSE(agnocast::ok());
+
+  auto executor = std::make_shared<agnocast::AgnocastOnlySingleThreadedExecutor>();
+
+  EXPECT_FALSE(agnocast::ok())
+    << "creating an executor after shutdown() must not bring the context back up";
+
+  std::atomic_bool spin_exited{false};
+  std::thread spin_thread([&]() {
+    executor->spin();
+    spin_exited.store(true);
+  });
+
+  wait_until_or_fail(
+    [&]() { return spin_exited.load(); }, 2s, "spin() did not return with a shutdown context.");
+
+  if (spin_thread.joinable()) {
+    spin_thread.join();
+  }
+}
+
+// A lazy initialization records no command line, so it must not make a later explicit
+// init() a no-op -- that would silently drop the global arguments.
+TEST_F(InitOkShutdownTest, ExplicitInitStillParsesArgumentsAfterLazyInitialization)
+{
+  {
+    auto executor = std::make_shared<agnocast::AgnocastOnlySingleThreadedExecutor>();
+    ASSERT_TRUE(agnocast::ok());
+
+    std::lock_guard<std::mutex> lock(agnocast::g_context_mtx);
+    EXPECT_EQ(nullptr, agnocast::g_context.get_parsed_arguments())
+      << "lazy initialization must not fabricate global arguments";
+  }
+
+  agnocast::init(0, nullptr);
+
+  std::lock_guard<std::mutex> lock(agnocast::g_context_mtx);
+  EXPECT_NE(nullptr, agnocast::g_context.get_parsed_arguments())
+    << "init() after a lazy initialization must still parse the command line";
+}
+
+TEST_F(InitOkShutdownTest, SigintStopsAgnocastOnlyExecutorWhenInitWasNotCalled)
+{
+  ASSERT_FALSE(agnocast::ok()) << "precondition: agnocast::init() has not been called";
+
+  auto executor = std::make_shared<agnocast::AgnocastOnlySingleThreadedExecutor>();
+
+  std::atomic_bool spin_exited{false};
+  std::thread spin_thread([&]() {
+    executor->spin();
+    spin_exited.store(true);
+  });
+  std::this_thread::sleep_for(250ms);
+
+  ASSERT_EQ(kill(getpid(), SIGINT), 0);
+
+  wait_until_or_fail(
+    [&]() { return spin_exited.load(); }, 2s, "executor spin() did not stop after SIGINT.");
+
+  if (spin_thread.joinable()) {
+    spin_thread.join();
+  }
+}
