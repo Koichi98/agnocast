@@ -105,6 +105,7 @@ rclcpp::QoS SubscriptionBase::init_base(
   initialize(
     actual_qos, is_take_sub, options.ignore_local_publications, role, node_name, type_name);
 
+  actual_qos_ = actual_qos;
   return actual_qos;
 }
 

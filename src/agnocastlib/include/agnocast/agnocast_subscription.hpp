@@ -17,7 +17,9 @@
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
+#include <type_traits>
 
 namespace agnocast
 {
@@ -33,6 +35,14 @@ void map_read_only_area(const pid_t pid, const uint64_t shm_addr, const uint64_t
 rclcpp::CallbackGroup::SharedPtr get_default_callback_group_for_tracepoint(agnocast::Node * node);
 const void * get_node_base_address(Node * node);
 const void * get_node_base_address(rclcpp::Node * node);
+
+// rclcpp overload of the above, so callback-less subscription construction can be written once
+// for both node types. rclcpp::Node needs no out-of-line definition to break an include cycle.
+inline rclcpp::CallbackGroup::SharedPtr get_default_callback_group_for_tracepoint(
+  rclcpp::Node * node)
+{
+  return node->get_node_base_interface()->get_default_callback_group();
+}
 
 /**
  * @brief Options for configuring an Agnocast subscription.
@@ -107,7 +117,9 @@ class SubscriptionBase
 protected:
   topic_local_id_t id_{-1};
   const std::string topic_name_;
-  int notify_eventfd_ = -1;  // publish-notification eventfd (-1 for take subscriptions)
+  int notify_eventfd_ = -1;  // publish-notification eventfd (-1 for callback-less subscriptions)
+  // Effective QoS after any qos_overriding_options are applied. Set by init_base().
+  rclcpp::QoS actual_qos_{1};
   void initialize(
     const rclcpp::QoS & qos, const bool is_take_sub, const bool ignore_local_publications,
     SubscriptionRole role, const std::string & node_name, const std::string & type_name);
@@ -129,6 +141,15 @@ public:
   const char * get_topic_name() const { return topic_name_.c_str(); }
 
   uint32_t get_publisher_count() const { return get_publisher_count_core(topic_name_); }
+
+  /**
+   * @brief Return the effective QoS of this subscription.
+   *
+   * Mirrors `rclcpp::SubscriptionBase::get_actual_qos()`. This is the QoS passed at construction
+   * with any `SubscriptionOptions::qos_overriding_options` applied.
+   */
+  AGNOCAST_PUBLIC
+  rclcpp::QoS get_actual_qos() const { return actual_qos_; }
 
   virtual ~SubscriptionBase()
   {
@@ -164,7 +185,15 @@ AGNOCAST_PUBLIC
 template <typename MessageT>
 class Subscription : public SubscriptionBase
 {
-  uint32_t callback_info_id_;
+  // Empty when the subscription was constructed without a callback. That case is what the kmod
+  // calls a "take subscription": no eventfd is registered and publishers skip it when signalling.
+  std::optional<uint32_t> callback_info_id_;
+
+  // Cached pointer from the most recent take(allow_same_message=true) call.
+  // When the same entry is returned again, a copy sharing the same control_block is returned
+  // so that the kernel-side reference is not released until all userspace copies are destroyed.
+  agnocast::ipc_shared_ptr<const MessageT> last_taken_ptr_;
+  std::mutex last_taken_ptr_mtx_;
 
   // Returns rosidl message name for MessageT, or empty string if MessageT is not a rosidl message
   // type.
@@ -174,6 +203,30 @@ class Subscription : public SubscriptionBase
       return rosidl_generator_traits::name<MessageT>();
     }
     return std::string{};
+  }
+
+  // A 4th positional argument of type SubscriptionOptions selects the callback-less overload
+  // below, so it must not be deduced as a callback here.
+  template <typename Func>
+  static constexpr bool is_callback_arg_v =
+    !std::is_same_v<std::decay_t<Func>, agnocast::SubscriptionOptions>;
+
+  template <typename NodeT>
+  void constructor_impl_no_callback(
+    NodeT * node, const std::string & type_name, const rclcpp::QoS & qos,
+    agnocast::SubscriptionOptions options, SubscriptionRole role)
+  {
+    const rclcpp::QoS actual_qos = init_base(node, qos, type_name, true, options, role);
+
+    {
+      auto default_cbg = get_default_callback_group_for_tracepoint(node);
+      auto dummy_cb = []() {};
+      std::string dummy_cb_symbols = "dummy_take" + topic_name_;
+      TRACEPOINT(
+        agnocast_subscription_init, static_cast<const void *>(this), get_node_base_address(node),
+        static_cast<const void *>(&dummy_cb), static_cast<const void *>(default_cbg.get()),
+        dummy_cb_symbols.c_str(), topic_name_.c_str(), actual_qos.depth(), 0);
+    }
   }
 
   template <typename NodeT, typename Func>
@@ -195,7 +248,7 @@ class Subscription : public SubscriptionBase
       callback_group);
 
     {
-      uint64_t pid_callback_info_id = (static_cast<uint64_t>(getpid()) << 32) | callback_info_id_;
+      uint64_t pid_callback_info_id = (static_cast<uint64_t>(getpid()) << 32) | *callback_info_id_;
       TRACEPOINT(
         agnocast_subscription_init, static_cast<const void *>(this), get_node_base_address(node),
         callback_addr, static_cast<const void *>(callback_group.get()), callback_symbol,
@@ -206,7 +259,7 @@ class Subscription : public SubscriptionBase
 public:
   using SharedPtr = std::shared_ptr<Subscription<MessageT>>;
 
-  template <typename Func>
+  template <typename Func, std::enable_if_t<is_callback_arg_v<Func>, int> = 0>
   Subscription(
     rclcpp::Node * node, const std::string & topic_name, const rclcpp::QoS & qos, Func && callback,
     agnocast::SubscriptionOptions options, SubscriptionRole role = SubscriptionRole::Default)
@@ -216,7 +269,7 @@ public:
       node, get_message_type_name(), qos, std::forward<Func>(callback), options, role);
   }
 
-  template <typename Func>
+  template <typename Func, std::enable_if_t<is_callback_arg_v<Func>, int> = 0>
   Subscription(
     agnocast::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
     Func && callback, agnocast::SubscriptionOptions options,
@@ -225,6 +278,29 @@ public:
   {
     constructor_impl(
       node, get_message_type_name(), qos, std::forward<Func>(callback), options, role);
+  }
+
+  /// Construct without a callback. Messages are then retrieved by polling take(), and the
+  /// subscription registers no eventfd so publishers skip it when signalling. Mirrors the
+  /// rclcpp idiom of a subscription whose callback group is never spun.
+  Subscription(
+    rclcpp::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
+    agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions(),
+    SubscriptionRole role = SubscriptionRole::Default)
+  : SubscriptionBase(node, topic_name)
+  {
+    constructor_impl_no_callback(node, get_message_type_name(), qos, options, role);
+  }
+
+  /// @copydoc Subscription(rclcpp::Node*, const std::string&, const rclcpp::QoS&,
+  ///          agnocast::SubscriptionOptions, SubscriptionRole)
+  Subscription(
+    agnocast::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
+    agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions(),
+    SubscriptionRole role = SubscriptionRole::Default)
+  : SubscriptionBase(node, topic_name)
+  {
+    constructor_impl_no_callback(node, get_message_type_name(), qos, options, role);
   }
 
   template <typename Func, typename U = MessageT, std::enable_if_t<std::is_void_v<U>, int> = 0>
@@ -247,103 +323,14 @@ public:
     constructor_impl(node, type_name, qos, std::forward<Func>(callback), options, role);
   }
 
-  ~Subscription()
-  {
-    // Remove from callback info map to prevent stale references on re-subscription and to avoid
-    // fd reuse conflicts. ~SubscriptionBase() closes the eventfd once this body returns, after
-    // which the OS may reuse the same fd number for a new subscription. If the old entry remained
-    // in id2_callback_info, adding the new fd to epoll (EPOLL_CTL_ADD) could fail with EEXIST
-    // because epoll would still associate that fd number with the stale entry.
-    std::lock_guard<std::mutex> lock(id2_callback_info_mtx);
-    id2_callback_info.erase(callback_info_id_);
-  }
-};
-
-// NOTE on Subscription<void>:
-//   Subscription<void> is the subscription counterpart of TypeErasedPublisher. We do not create a
-//   separate TypeErasedSubscription class because it would share most of its code with
-//   Subscription<MessageT>, making a void specialization the cleaner choice.
-
-/**
- * @brief Agnocast polling take-subscription for a compile-time known message type.
- *
- * Does not use a callback; the caller retrieves the latest message by calling
- * take(). Use PollingSubscriber<MessageT> for a higher-level wrapper.
- *
- * @tparam MessageT  ROS message type.
- */
-AGNOCAST_PUBLIC
-template <typename MessageT>
-class TakeSubscription : public SubscriptionBase
-{
-private:
-  // Cached pointer from the most recent take(allow_same_message=true) call.
-  // When the same entry is returned again, a copy sharing the same control_block is returned
-  // so that the kernel-side reference is not released until all userspace copies are destroyed.
-  agnocast::ipc_shared_ptr<const MessageT> last_taken_ptr_;
-  std::mutex last_taken_ptr_mtx_;
-
-  template <typename NodeT>
-  rclcpp::QoS constructor_impl(
-    NodeT * node, const rclcpp::QoS & qos, agnocast::SubscriptionOptions options,
-    SubscriptionRole role)
-  {
-    // Gated to message types — service types pulled in by
-    // BasicService<ServiceT> have no rosidl message name. The empty string
-    // signals "skip registry" to initialize().
-    std::string type_name;
-    if constexpr (rosidl_generator_traits::is_message<MessageT>::value) {
-      type_name = rosidl_generator_traits::name<MessageT>();
-    }
-    return init_base(node, qos, type_name, true, options, role);
-  }
-
-public:
-  using SharedPtr = std::shared_ptr<TakeSubscription<MessageT>>;
-
-  TakeSubscription(
-    rclcpp::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
-    agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions(),
-    SubscriptionRole role = SubscriptionRole::Default)
-  : SubscriptionBase(node, topic_name)
-  {
-    const rclcpp::QoS actual_qos = constructor_impl(node, qos, options, role);
-
-    {
-      auto default_cbg = node->get_node_base_interface()->get_default_callback_group();
-      auto dummy_cb = []() {};
-      std::string dummy_cb_symbols = "dummy_take" + topic_name_;
-      TRACEPOINT(
-        agnocast_subscription_init, static_cast<const void *>(this),
-        static_cast<const void *>(
-          node->get_node_base_interface()->get_shared_rcl_node_handle().get()),
-        static_cast<const void *>(&dummy_cb), static_cast<const void *>(default_cbg.get()),
-        dummy_cb_symbols.c_str(), topic_name_.c_str(), actual_qos.depth(), 0);
-    }
-  }
-
-  TakeSubscription(
-    agnocast::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
-    agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions(),
-    SubscriptionRole role = SubscriptionRole::Default)
-  : SubscriptionBase(node, topic_name)
-  {
-    const rclcpp::QoS actual_qos = constructor_impl(node, qos, options, role);
-
-    {
-      auto default_cbg = get_default_callback_group_for_tracepoint(node);
-      auto dummy_cb = []() {};
-      std::string dummy_cb_symbols = "dummy_take" + topic_name_;
-      TRACEPOINT(
-        agnocast_subscription_init, static_cast<const void *>(this),
-        static_cast<const void *>(get_node_base_address(node)),
-        static_cast<const void *>(&dummy_cb), static_cast<const void *>(default_cbg.get()),
-        dummy_cb_symbols.c_str(), topic_name_.c_str(), actual_qos.depth(), 0);
-    }
-  }
-
   /**
-   * @brief Retrieve the latest message from the topic.
+   * @brief Retrieve the latest message from the topic without going through the callback.
+   *
+   * Mirrors `rclcpp::Subscription::take()` in that it is available on every subscription, not
+   * just callback-less ones. Note the same caveat as rclcpp: if this subscription also has a
+   * callback that is being spun by an executor, the callback and take() consume from the same
+   * per-subscriber cursor and will steal messages from each other. Use one or the other.
+   *
    * @param allow_same_message  If true, may return the same message as the previous call
    *                            (useful for always having the latest value). If false, returns
    *                            only new messages since the last take.
@@ -412,6 +399,61 @@ public:
 
     MessageT * ptr = reinterpret_cast<MessageT *>(take_args.ret_addr);
     return agnocast::ipc_shared_ptr<const MessageT>(ptr, topic_name_, id_, take_args.ret_entry_id);
+  }
+
+  ~Subscription()
+  {
+    // Nothing to erase when constructed without a callback: no entry was ever registered and
+    // no eventfd was opened.
+    if (!callback_info_id_.has_value()) {
+      return;
+    }
+
+    // Remove from callback info map to prevent stale references on re-subscription and to avoid
+    // fd reuse conflicts. ~SubscriptionBase() closes the eventfd once this body returns, after
+    // which the OS may reuse the same fd number for a new subscription. If the old entry remained
+    // in id2_callback_info, adding the new fd to epoll (EPOLL_CTL_ADD) could fail with EEXIST
+    // because epoll would still associate that fd number with the stale entry.
+    std::lock_guard<std::mutex> lock(id2_callback_info_mtx);
+    id2_callback_info.erase(*callback_info_id_);
+  }
+};
+
+// NOTE on Subscription<void>:
+//   Subscription<void> is the subscription counterpart of TypeErasedPublisher. We do not create a
+//   separate TypeErasedSubscription class because it would share most of its code with
+//   Subscription<MessageT>, making a void specialization the cleaner choice.
+
+/**
+ * @brief Backwards-compatible spelling of a callback-less Subscription<MessageT>.
+ *
+ * Retained so existing call sites keep compiling. `Subscription<MessageT>` now supports both
+ * callback delivery and take(), mirroring `rclcpp::Subscription`, so prefer constructing a
+ * `Subscription<MessageT>` without a callback instead of using this class.
+ *
+ * @tparam MessageT  ROS message type.
+ */
+AGNOCAST_PUBLIC
+template <typename MessageT>
+class TakeSubscription : public Subscription<MessageT>
+{
+public:
+  using SharedPtr = std::shared_ptr<TakeSubscription<MessageT>>;
+
+  TakeSubscription(
+    rclcpp::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
+    agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions(),
+    SubscriptionRole role = SubscriptionRole::Default)
+  : Subscription<MessageT>(node, topic_name, qos, options, role)
+  {
+  }
+
+  TakeSubscription(
+    agnocast::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
+    agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions(),
+    SubscriptionRole role = SubscriptionRole::Default)
+  : Subscription<MessageT>(node, topic_name, qos, options, role)
+  {
   }
 };
 
