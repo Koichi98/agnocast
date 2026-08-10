@@ -6,9 +6,12 @@
 #include "agnocast/agnocast_subscription.hpp"
 #include "agnocast/agnocast_utils.hpp"
 #include "agnocast/bridge/agnocast_bridge_node.hpp"
+#include "agnocast/internal/service_introspection.hpp"
 #include "agnocast/internal/service_wire_type.hpp"
 #include "rclcpp/rclcpp.hpp"
 
+#include <array>
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -56,6 +59,10 @@ private:
   const rclcpp::QoS qos_;
   std::mutex publishers_mtx_;
   std::unordered_map<std::string, typename ServiceResponsePublisher::SharedPtr> publishers_;
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+  // Declared before subscriber_ so it outlives the request callback that reads it.
+  internal::ServiceIntrospection<ServiceT> introspection_;
+#endif
   typename ServiceRequestSubscriber::SharedPtr subscriber_;
 
   typename ServiceResponsePublisher::SharedPtr get_or_create_publisher_for(
@@ -91,10 +98,30 @@ private:
       ipc_shared_ptr<ResponseT> response = publisher->borrow_loaned_message();
       response->seqno = request->seqno;
 
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+      // The correlation metadata has to be copied out before the callback, which consumes
+      // `request`.
+      const bool introspect = introspection_.is_enabled();
+      std::array<uint8_t, 16> client_gid{};
+      int64_t seqno = 0;
+      if (introspect) {
+        client_gid = internal::make_service_client_gid(request->node_name);
+        seqno = request->seqno;
+        introspection_.emit_request_received(client_gid, seqno, request.get());
+      }
+#endif
+
       ipc_shared_ptr<typename ServiceT::Response> response_double(response);
 
       callback(
         ipc_shared_ptr<typename ServiceT::Request>(std::move(request)), std::move(response_double));
+
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+      // Must run before publish(), which invalidates `response`.
+      if (introspect) {
+        introspection_.emit_response_sent(client_gid, seqno, response.get());
+      }
+#endif
 
       publisher->publish(std::move(response));
 
@@ -110,6 +137,14 @@ private:
   auto wrap_deferred_service_callback_for_subscriber(Func && callback)
   {
     return [this, callback = std::forward<Func>(callback)](ipc_shared_ptr<RequestT> && request) {
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+      // RESPONSE_SENT for this path is emitted by send_response(), which is where the deferred
+      // callback eventually hands the response back.
+      if (introspection_.is_enabled()) {
+        introspection_.emit_request_received(
+          internal::make_service_client_gid(request->node_name), request->seqno, request.get());
+      }
+#endif
       callback(this->shared_from_this(), std::move(request));
     };
   }
@@ -196,8 +231,41 @@ public:
     auto internal_request = static_ipc_shared_ptr_cast<RequestT>(std::move(request));
     auto internal_response = static_ipc_shared_ptr_cast<ResponseT>(std::move(response));
     auto publisher = get_or_create_publisher_for(internal_request->node_name);
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+    // Must run before publish(), which invalidates `internal_response`.
+    if (introspection_.is_enabled()) {
+      introspection_.emit_response_sent(
+        internal::make_service_client_gid(internal_request->node_name), internal_request->seqno,
+        internal_response.get());
+    }
+#endif
     publisher->publish(std::move(internal_response));
   }
+
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+  /**
+   * @brief Configure ROS 2 service introspection for this service.
+   *
+   * Mirrors `rclcpp::ServiceBase::configure_introspection()`. Agnocast services do not go through
+   * rcl, so the events are published by Agnocast on `<service name>/_service_event` instead of by
+   * rcl; the ROS 2 bridge forwards that topic to DDS. This service emits `REQUEST_RECEIVED` and
+   * `RESPONSE_SENT`; the matching client emits the other two.
+   *
+   * Available from ROS 2 Iron (rclcpp 21) onwards only.
+   *
+   * @param clock Clock used to stamp the events.
+   * @param qos_service_event_pub QoS of the event publisher.
+   * @param introspection_state RCL_SERVICE_INTROSPECTION_OFF, _METADATA or _CONTENTS.
+   */
+  AGNOCAST_PUBLIC
+  void configure_introspection(
+    rclcpp::Clock::SharedPtr clock, const rclcpp::QoS & qos_service_event_pub,
+    rcl_service_introspection_state_t introspection_state)
+  {
+    introspection_.configure(
+      node_, service_name_, std::move(clock), qos_service_event_pub, introspection_state);
+  }
+#endif
 
   /**
    * @brief Allocate a service response message in shared memory. This function is expected to be

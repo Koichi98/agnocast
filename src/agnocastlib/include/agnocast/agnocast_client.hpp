@@ -7,11 +7,13 @@
 #include "agnocast/agnocast_subscription.hpp"
 #include "agnocast/agnocast_utils.hpp"
 #include "agnocast/bridge/agnocast_bridge_utils.hpp"
+#include "agnocast/internal/service_introspection.hpp"
 #include "agnocast/internal/service_wire_type.hpp"
 #include "agnocast/node/agnocast_context.hpp"
 #include "rclcpp/node_interfaces/node_base_interface.hpp"
 #include "rclcpp/rclcpp.hpp"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -166,6 +168,14 @@ private:
   std::mutex seqno2_response_call_info_mtx_;
   std::unordered_map<int64_t, ResponseCallInfo> seqno2_response_call_info_;
   typename ServiceRequestPublisher::SharedPtr publisher_;
+  // Retained so the introspection event publisher can be created later, on the same node.
+  internal::ServiceNodeVariant node_{static_cast<rclcpp::Node *>(nullptr)};
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+  // Declared before subscriber_ so they outlive the response callback that reads them.
+  internal::ServiceIntrospection<ServiceT> introspection_;
+  // Constant for the lifetime of the client: the GID is derived from the node name.
+  std::array<uint8_t, 16> client_gid_{};
+#endif
   typename ServiceResponseSubscriber::SharedPtr subscriber_;
 
   template <typename NodeT>
@@ -174,6 +184,11 @@ private:
     rclcpp::CallbackGroup::SharedPtr group, ClientRole role)
   {
     init_base(node, service_name);
+
+    node_ = node;
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+    client_gid_ = internal::make_service_client_gid(node_name_);
+#endif
 
     // TransientLocal durability is not allowed for services.
     const rclcpp::QoS qos = rclcpp::QoS(qos_arg).durability_volatile();
@@ -197,6 +212,13 @@ private:
       seqno2_response_call_info_.erase(it);
       /* --- critical section end --- */
       lock.unlock();
+
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+      // Must run before the response is handed to the promise, which moves it out.
+      if (introspection_.is_enabled()) {
+        introspection_.emit_response_received(client_gid_, response->seqno, response.get());
+      }
+#endif
 
       info.promise.set_value(ipc_shared_ptr<typename ServiceT::Response>(std::move(response)));
       if (info.callback.has_value()) {
@@ -264,6 +286,13 @@ public:
       shared_future = it->second.shared_future.value();
     }
 
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+    // Must run before publish(), which invalidates `internal_request`.
+    if (introspection_.is_enabled()) {
+      introspection_.emit_request_sent(client_gid_, seqno, internal_request.get());
+    }
+#endif
+
     publisher_->publish(std::move(internal_request));
     return SharedFutureAndRequestId(std::move(shared_future), seqno);
   }
@@ -285,9 +314,41 @@ public:
       future = it->second.promise.get_future();
     }
 
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+    // Must run before publish(), which invalidates `internal_request`.
+    if (introspection_.is_enabled()) {
+      introspection_.emit_request_sent(client_gid_, seqno, internal_request.get());
+    }
+#endif
+
     publisher_->publish(std::move(internal_request));
     return FutureAndRequestId(std::move(future), seqno);
   }
+
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+  /**
+   * @brief Configure ROS 2 service introspection for this client.
+   *
+   * Mirrors `rclcpp::ClientBase::configure_introspection()`. Agnocast clients do not go through
+   * rcl, so the events are published by Agnocast on `<service name>/_service_event` instead of by
+   * rcl; the ROS 2 bridge forwards that topic to DDS. This client emits `REQUEST_SENT` and
+   * `RESPONSE_RECEIVED`; the matching service emits the other two.
+   *
+   * Available from ROS 2 Iron (rclcpp 21) onwards only.
+   *
+   * @param clock Clock used to stamp the events.
+   * @param qos_service_event_pub QoS of the event publisher.
+   * @param introspection_state RCL_SERVICE_INTROSPECTION_OFF, _METADATA or _CONTENTS.
+   */
+  AGNOCAST_PUBLIC
+  void configure_introspection(
+    rclcpp::Clock::SharedPtr clock, const rclcpp::QoS & qos_service_event_pub,
+    rcl_service_introspection_state_t introspection_state)
+  {
+    introspection_.configure(
+      node_, service_name_, std::move(clock), qos_service_event_pub, introspection_state);
+  }
+#endif
 };
 
 /**

@@ -153,6 +153,21 @@ Each interface is accessible via getter methods such as `get_node_base_interface
 | `add_service()` | ✗ | **Throws Exception** | No | Use `agnocast::create_service()` or `agnocast::Node::create_service()` |
 | `resolve_service_name()` | ✓ | **Full Support** | - | |
 
+#### Service Introspection
+
+`agnocast::Service` and `agnocast::Client` provide `configure_introspection(clock, qos, state)` with the same signature and the same reconfiguration semantics as `rclcpp::ServiceBase` / `rclcpp::ClientBase`.
+
+| Item | agnocast | Notes |
+|------|----------|-------|
+| Availability | ROS 2 Iron (rclcpp 21) and later | The `ServiceT::Event` message and `rcl_service_introspection_state_t` do not exist on Humble, so the method is not declared there — the same gate `autoware_component_interface_utils` uses |
+| Event topic | ✓ | `<resolved service name>/_service_event`, the ROS 2 convention |
+| Transport | Agnocast publisher | rcl publishes these events for an rclcpp service, but agnocast services never touch rcl. The event topic is an ordinary Agnocast topic, so the ROS 2 Bridge forwards it to DDS and `ros2 service echo` works; without a bridge the events are still visible via `ros2 topic echo_agnocast` |
+| `metadata` / `contents` modes | ✓ | `contents` fills the `request` / `response` sequences, `metadata` leaves them empty |
+| `sequence_number` | ✓ | The Agnocast service call seqno |
+| `client_gid` | ⚠ | Derived from the calling node's fully-qualified name, since Agnocast has no rmw GID and the wire format carries only the node name. Both ends compute the same value. Two `Client` instances for the same service inside one node therefore share a GID while numbering sequences independently, so `(client_gid, sequence_number)` can collide between them |
+| `GenericService` / `GenericClient` | ✗ | Not supported for the type-erased service API |
+| Overhead when disabled | None beyond one relaxed atomic load per request and per response | Introspection is off unless `configure_introspection()` is called |
+
 ---
 
 ### 2.7 NodeLoggingInterface
@@ -335,6 +350,7 @@ The following tables compare methods that are **directly defined** in each class
 | `create_timer()` | ✓ | ✓ | Supports ROS_TIME (simulation time). Return type differs (`agnocast::TimerBase::SharedPtr` vs `rclcpp::TimerBase::SharedPtr`). Note: dynamic deactivation of ROS time (`use_sim_time` changed from `true` to `false` at runtime) is not yet supported. |
 | `create_client<ServiceT>()` | ✓ | ✓ | Return type differs (rclcpp::Client vs. agnocast::Client). |
 | `create_service<ServiceT>()` | ✓ | ✓ | Return type differs (rclcpp::Service vs. agnocast::Service). |
+| `Service`/`Client::configure_introspection()` | ✓ | ✓ | ROS 2 Iron and later only. Events are published on an Agnocast topic rather than by rcl. See [Service Introspection](#service-introspection). |
 
 #### Graph API (ROS Network Discovery)
 
