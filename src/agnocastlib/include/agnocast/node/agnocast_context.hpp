@@ -20,6 +20,24 @@ public:
   CommandLineParams command_line_params;
 
   void init(int argc, char const * const * argv);
+
+  // Mark the context as initialized without parsing command-line arguments and
+  // without touching the process-global rcl logging configuration.
+  //
+  // Used when an agnocast::Node lives in a process that never calls agnocast::init(),
+  // e.g. a component container whose main() only calls rclcpp::init(). There, rclcpp
+  // owns the logging configuration and the command line, so agnocast must not claim
+  // either; it only needs agnocast::ok() to report the context as alive so that the
+  // Agnocast-only executors it spawns internally (clock thread, tf listener) keep
+  // spinning. get_parsed_arguments() keeps returning nullptr in this mode, which
+  // callers already handle.
+  //
+  // Does nothing once shutdown() has run: a node created during teardown must not
+  // revive the context. Only an explicit init() may do that.
+  //
+  // @return whether the context is initialized after the call.
+  bool init_without_arguments();
+
   void shutdown();
   bool is_initialized() const { return initialized_; }
 
@@ -30,6 +48,9 @@ public:
 
 private:
   bool initialized_ = false;
+  // Set by shutdown(), cleared by init(). Distinguishes "not initialized yet" from
+  // "already torn down", which init_without_arguments() must not undo.
+  bool shutdown_called_ = false;
   ParsedArguments parsed_arguments_;
 };
 

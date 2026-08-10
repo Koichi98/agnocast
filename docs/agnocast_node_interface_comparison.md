@@ -404,6 +404,18 @@ The following tables compare methods that are **directly defined** in each class
 
 **Note**: While `agnocast::Node` can be loaded into a Component Container, the Component Container itself becomes a DDS participant. Therefore, the performance maximization benefits—which are the primary purpose of using `agnocast::Node`—cannot be fully realized when using a Component Container.
 
+### 5.1 What a Component Container does not provide
+
+A container's `main()` calls `rclcpp::init()` but never `agnocast::init()`, so the Agnocast global context is brought up lazily when the first `agnocast::Node` (or Agnocast-only executor) is created. This has three consequences:
+
+- **Global arguments do not apply.** `agnocast::init()` is what parses the process command line, so a lazily initialized context exposes no global arguments. Only the `NodeOptions::arguments()` that the Component Manager passes in are honored; remaps and parameter overrides given as global `--ros-args` to the container do not reach the node.
+- **Logging stays under rclcpp's control.** The lazy path deliberately skips `rcl_logging_configure_with_output_handler()` so that it does not take over the output handler that `rclcpp::init()` installed for the whole container.
+- **Agnocast installs SIGINT/SIGTERM handlers.** They chain to the handlers `rclcpp::init()` installed rather than replacing them, so the container's own shutdown path still runs. This is what lets the Agnocast-only executors that `agnocast::Node` spawns internally (the `use_sim_time` clock thread, the `tf2` listener thread) stop on Ctrl-C.
+
+Once the context has been shut down, creating further nodes does not revive it; only an explicit `agnocast::init()` does.
+
+Note also that the container drives the node with its own `rclcpp::Executor`-derived executor (`SingleThreadedAgnocastExecutor`, `MultiThreadedAgnocastExecutor`, `CallbackIsolatedAgnocastExecutor`). The `AgnocastOnly*` executors cannot be used by a Component Manager because they do not derive from `rclcpp::Executor`.
+
 ---
 
 ## 6. Dependencies on rcl/rclcpp

@@ -1,6 +1,7 @@
 #include "agnocast/node/agnocast_context.hpp"
 
 #include "agnocast/agnocast_tracepoint_wrapper.h"
+#include "agnocast_context_internal.hpp"
 #include "agnocast_signal_handler.hpp"
 
 #include <rcl/arguments.h>
@@ -17,7 +18,10 @@ std::mutex g_context_mtx;
 
 void Context::init(int argc, char const * const * argv)
 {
-  if (initialized_) {
+  // Only a previous init() makes this a no-op. A lazy init_without_arguments() leaves
+  // parsed_arguments_ empty, so an explicit init() afterwards must still parse the command
+  // line instead of silently dropping the global arguments.
+  if (initialized_ && parsed_arguments_.is_valid()) {
     return;
   }
 
@@ -48,7 +52,21 @@ void Context::init(int argc, char const * const * argv)
   }
 
   initialized_ = true;
+  shutdown_called_ = false;
   TRACEPOINT(agnocast_init, static_cast<const void *>(this));
+}
+
+bool Context::init_without_arguments()
+{
+  if (initialized_ || shutdown_called_) {
+    return initialized_;
+  }
+
+  // Deliberately no parse_arguments() and no rcl_logging_configure_with_output_handler():
+  // see the declaration in agnocast_context.hpp.
+  initialized_ = true;
+  TRACEPOINT(agnocast_init, static_cast<const void *>(this));
+  return true;
 }
 
 void Context::shutdown()
@@ -57,6 +75,7 @@ void Context::shutdown()
     return;
   }
   initialized_ = false;
+  shutdown_called_ = true;
 }
 
 void init(int argc, char const * const * argv)
@@ -66,6 +85,21 @@ void init(int argc, char const * const * argv)
     g_context.init(argc, argv);
   }
   SignalHandler::install();
+}
+
+void ensure_initialized()
+{
+  bool initialized = false;
+  {
+    std::lock_guard<std::mutex> lock(g_context_mtx);
+    initialized = g_context.init_without_arguments();
+  }
+
+  // Skip while the context is shut down, so that objects created during teardown do not
+  // reinstall the handler that agnocast::shutdown() has just removed.
+  if (initialized) {
+    SignalHandler::install();
+  }
 }
 
 void shutdown()
