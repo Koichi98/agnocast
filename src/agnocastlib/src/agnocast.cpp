@@ -1,9 +1,8 @@
 #include "agnocast/agnocast.hpp"
 
 #include "agnocast/agnocast_ioctl.hpp"
-#include "agnocast/agnocast_mq.hpp"
 #include "agnocast/agnocast_version.hpp"
-#include "agnocast/bridge/performance/agnocast_performance_bridge_manager.hpp"
+#include "agnocast/bridge/agnocast_bridge_manager.hpp"
 
 #include <dlfcn.h>
 #include <strings.h>
@@ -34,16 +33,16 @@ std::vector<int> shm_fds;
 std::mutex shm_fds_mtx;
 std::mutex mmap_mtx;
 // mmap_mtx: Prevents a race condition and segfault between two threads
-// in a multithreaded executor using the same mqueue_fd.
+// in a multithreaded executor using the same notification eventfd.
 //
 // Race Scenario:
 // 1. Thread 1 (T1):
-//    - Calls epoll_wait(), mq_receive(), then ioctl(RECEIVE_CMD), initially obtaining
+//    - Calls epoll_wait(), reads the eventfd, then ioctl(RECEIVE_CMD), initially obtaining
 //      publisher info (PID, shared memory address `shm_addr`).
 //    - Critical: OS context switch occurs *after* ioctl() but *before* T1 fully
 //      processes/maps `shm_addr`.
 // 2. Thread 2 (T2):
-//    - Calls epoll_wait(), mq_receive(), then ioctl(RECEIVE_CMD) on the same mqueue_fd,
+//    - Calls epoll_wait(), reads the eventfd, then ioctl(RECEIVE_CMD) on the same eventfd,
 //      but does *not* receive publisher info (assuming it's already set up).
 //    - Proceeds to a callback which attempts to use `shm_addr`, leading to a SEGFAULT.
 //
@@ -158,13 +157,13 @@ void initialize_bridge_allocator(void * mempool_ptr, size_t mempool_size)
 initialize_agnocast_result acquire_agnocast_resources_for_bridge()
 {
   union ioctl_add_process_args add_process_args = {};
-  add_process_args.is_performance_bridge_manager = true;
+  add_process_args.is_bridge_manager = true;
   add_process_args.domain_id = get_ros_domain_id();
   if (ioctl(agnocast_fd, AGNOCAST_ADD_PROCESS_CMD, &add_process_args) < 0) {
     throw std::runtime_error(std::string("AGNOCAST_ADD_PROCESS_CMD failed: ") + strerror(errno));
   }
 
-  if (add_process_args.ret_performance_bridge_daemon_exist) {
+  if (add_process_args.ret_bridge_daemon_exist) {
     close(agnocast_fd);
     exit(EXIT_SUCCESS);
   }
@@ -184,18 +183,11 @@ initialize_agnocast_result acquire_agnocast_resources_for_bridge()
 
 void poll_for_unlink()
 {
-  std::vector<exit_subscription_mq_info> mq_info_buf(MAX_SUBSCRIPTION_NUM_PER_PROCESS);
-
   while (true) {
     sleep(1);
 
     struct ioctl_get_exit_process_args get_exit_process_args = {};
     do {
-      get_exit_process_args = {};
-      get_exit_process_args.subscription_mq_info_buffer_addr =
-        reinterpret_cast<uint64_t>(mq_info_buf.data());
-      get_exit_process_args.subscription_mq_info_buffer_size =
-        static_cast<uint32_t>(mq_info_buf.size());
       if (ioctl(agnocast_fd, AGNOCAST_GET_EXIT_PROCESS_CMD, &get_exit_process_args) < 0) {
         RCLCPP_ERROR(logger, "AGNOCAST_GET_EXIT_PROCESS_CMD failed: %s", strerror(errno));
         close(agnocast_fd);
@@ -205,15 +197,6 @@ void poll_for_unlink()
       if (get_exit_process_args.ret_pid > 0) {
         const std::string shm_name = create_shm_name(get_exit_process_args.ret_pid);
         shm_unlink(shm_name.c_str());
-
-        // Unlink subscription MQs that the exited process owned
-        for (uint32_t i = 0; i < get_exit_process_args.ret_subscription_mq_info_num; i++) {
-          // NOLINTNEXTLINE(cppcoreguidelines-pro-bounds-array-to-pointer-decay,hicpp-no-array-decay)
-          const std::string topic_name(mq_info_buf[i].topic_name);
-          const std::string sub_mq_name =
-            create_mq_name_for_agnocast_publish(topic_name, mq_info_buf[i].subscriber_id);
-          mq_unlink(sub_mq_name.c_str());
-        }
       }
     } while (get_exit_process_args.ret_pid > 0);
 
@@ -230,7 +213,7 @@ void poll_for_bridge_manager()
   try {
     const auto resources = acquire_agnocast_resources_for_bridge();
     initialize_bridge_allocator(resources.mempool_ptr, resources.mempool_size);
-    PerformanceBridgeManager manager;
+    BridgeManager manager;
     manager.run();
   } catch (const std::exception & e) {
     RCLCPP_ERROR(logger, "BridgeManager crashed: %s", e.what());
@@ -245,8 +228,8 @@ void poll_for_bridge_manager()
 void exec_discovery_agent()
 {
   execlp(
-    "ros2", "ros2", "run", "ros2agnocast_discovery_agent", "discovery_agent", "--exit-when-idle",
-    static_cast<char *>(nullptr));
+    "ros2", "ros2", "run", "ros2agnocast_discovery_agent", "agnocast_discovery_agent",
+    "--exit-when-idle", static_cast<char *>(nullptr));
   // execlp only returns on failure. This still runs in the pre-allocator forked child, so the
   // failure path must be async-signal-safe and allocation-free: RCLCPP_ERROR / strerror / exit()
   // may allocate or run atexit handlers before the TLSF allocator is ready. Use write() + _exit().
@@ -429,14 +412,23 @@ pid_t spawn_daemon_process(Func && func)
         fail("Failed to open /dev/null: %s");
       }
 
+      // Send the output to the terminal rather than discarding it. Must be opened before setsid(),
+      // which drops the controlling terminal /dev/tty resolves against. stdin stays on /dev/null
+      // because this is write-only, so reads see EOF rather than EBADF.
+      const int tty = open("/dev/tty", O_WRONLY);
+      const int out_fd = (tty >= 0) ? tty : devnull;
+
       if (dup2(devnull, STDIN_FILENO) < 0) {
         fail("dup2 for stdin failed: %s");
       }
-      if (dup2(devnull, STDOUT_FILENO) < 0) {
+      if (dup2(out_fd, STDOUT_FILENO) < 0) {
         fail("dup2 for stdout failed: %s");
       }
-      if (dup2(devnull, STDERR_FILENO) < 0) {
+      if (dup2(out_fd, STDERR_FILENO) < 0) {
         fail("dup2 for stderr failed: %s");
+      }
+      if (out_fd != devnull) {
+        close(out_fd);
       }
       close(devnull);
     }
@@ -498,7 +490,7 @@ struct initialize_agnocast_result initialize_agnocast(
   if (!add_process_args.ret_unlink_daemon_exist) {
     spawn_daemon_process([]() { poll_for_unlink(); });
   }
-  if (bridge_mode == BridgeMode::On && !add_process_args.ret_performance_bridge_daemon_exist) {
+  if (bridge_mode == BridgeMode::On && !add_process_args.ret_bridge_daemon_exist) {
     should_spawn_bridge = true;
   }
 

@@ -395,7 +395,7 @@ class DiscoveryAgent(Node):
             return
         if self._idle_tracker.update(ret == 1):
             if self._lib.agnocast_discovery_agent_commit_exit(self._domain_id) == 1:
-                self.get_logger().info(
+                self.get_logger().debug(
                     f'no Agnocast node in (ipc_ns={self._ipc_ns_inode}, domain={self._domain_id}) '
                     f'for {EXIT_WHEN_IDLE_GRACE_SEC:.0f}s; exiting.')
                 raise ExternalShutdownException()
@@ -494,6 +494,18 @@ def main(argv=None) -> int:
         if rclpy.ok():
             rclpy.shutdown()
     return 0
+
+
+def main_deprecated_alias(argv=None) -> int:
+    """Entry point for the old ``discovery_agent`` name: warn once, then run ``main()``.
+
+    Kept so launch files and units that still spawn ``discovery_agent`` keep working; it is
+    scheduled for removal, which is a user-facing break and needs its own release.
+    """
+    sys.stderr.write(
+        'agnocast_discovery_agent: the `discovery_agent` executable is deprecated; '
+        'use `agnocast_discovery_agent` instead.\n')
+    return main(argv)
 
 
 if __name__ == '__main__':
