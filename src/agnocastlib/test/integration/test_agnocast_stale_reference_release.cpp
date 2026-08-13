@@ -1,12 +1,16 @@
 // Integration test for releasing a message reference after its Subscription is gone.
 //
-// ~SubscriptionBase issues AGNOCAST_REMOVE_SUBSCRIBER_CMD, which makes the kernel module clear this
-// subscriber's bit on every entry of the topic. A reference released afterwards therefore finds no
-// bit to clear and the ioctl fails with EINVAL. This used to be treated as fatal
-// (close(agnocast_fd) + exit(EXIT_FAILURE)), so an application that merely held a message longer
-// than its subscription was killed at shutdown. release_subscriber_reference() now warns once and
-// continues, which is what these tests check: reaching the end of the test proves the process
-// survived.
+// This happens when user code declares an ipc_shared_ptr member before the Subscription member that
+// filled it: members are destroyed in reverse declaration order, so the pointer outlives the
+// Subscription. ~SubscriptionBase issues AGNOCAST_REMOVE_SUBSCRIBER_CMD, which makes the kernel
+// module clear this subscriber's bit on every entry of the topic, so the later release finds no bit
+// to clear.
+//
+// That used to make the ioctl fail with EINVAL, which agnocastlib treated as fatal
+// (close(agnocast_fd) + exit(EXIT_FAILURE)) -- killing an application whose only mistake was
+// holding a message longer than its subscription. Clearing the bit is idempotent and the entry is
+// reclaimed elsewhere, so the kernel module now reports success for an already-released reference.
+// Reaching the end of each test proves the process survived.
 
 #include "agnocast/agnocast.hpp"
 #include "agnocast/agnocast_publisher.hpp"
@@ -75,8 +79,7 @@ TEST_F(StaleReferenceReleaseTest, release_after_subscription_destroyed_does_not_
 }
 
 // ---------------------------------------------------------------------------
-// The warning is rate-limited to once per process, but every subsequent release must still be
-// non-fatal.
+// Repeated stale releases across several topics must all stay non-fatal.
 // ---------------------------------------------------------------------------
 TEST_F(StaleReferenceReleaseTest, repeated_stale_releases_stay_non_fatal)
 {
