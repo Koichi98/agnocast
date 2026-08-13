@@ -2707,8 +2707,9 @@ static long get_exit_process_cmd(struct ioctl_get_exit_process_args __user * arg
   bool daemon_should_exit = false;
   agnocast_commit_exit_process(ipc_ns, global_pid, &daemon_should_exit);
 
-  // Patch ret_daemon_should_exit. Not fatal: proc_info is already freed, so -EFAULT would kill the
-  // daemon while it holds the ret_pid whose shm needs unlinking; the flag is re-derived next poll.
+  // Patch ret_daemon_should_exit. Not fatal: when a pid was returned, its proc_info has already
+  // been committed, so -EFAULT would make the daemon exit while discarding the ret_pid whose shm
+  // needs unlinking; the flag is advisory and re-derived on the next poll.
   if (copy_to_user(&arg->ret_daemon_should_exit, &daemon_should_exit, sizeof(daemon_should_exit))) {
     dev_warn(agnocast_device, "Failed to report the daemon exit flag. (%s)\n", __func__);
   }
