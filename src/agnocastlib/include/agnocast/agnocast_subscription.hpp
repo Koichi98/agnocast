@@ -460,7 +460,7 @@ public:
 /**
  * @brief Agnocast polling subscriber for a compile-time known message type.
  *
- * Wraps TakeSubscription<MessageT> and exposes a simple take_data() API
+ * Wraps a callback-less Subscription<MessageT> and exposes a simple take_data() API
  * that always returns the most recent message (or an empty pointer if nothing
  * has been published yet).
  *
@@ -470,7 +470,7 @@ AGNOCAST_PUBLIC
 template <typename MessageT>
 class PollingSubscriber
 {
-  typename TakeSubscription<MessageT>::SharedPtr subscriber_;
+  typename Subscription<MessageT>::SharedPtr subscriber_;
 
 public:
   using SharedPtr = std::shared_ptr<PollingSubscriber<MessageT>>;
@@ -480,8 +480,7 @@ public:
     agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions(),
     SubscriptionRole role = SubscriptionRole::Default)
   {
-    subscriber_ =
-      std::make_shared<TakeSubscription<MessageT>>(node, topic_name, qos, options, role);
+    subscriber_ = std::make_shared<Subscription<MessageT>>(node, topic_name, qos, options, role);
   };
 
   explicit PollingSubscriber(
@@ -489,8 +488,7 @@ public:
     agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions(),
     SubscriptionRole role = SubscriptionRole::Default)
   {
-    subscriber_ =
-      std::make_shared<TakeSubscription<MessageT>>(node, topic_name, qos, options, role);
+    subscriber_ = std::make_shared<Subscription<MessageT>>(node, topic_name, qos, options, role);
   };
 
   /// @deprecated Use take_data() instead.
