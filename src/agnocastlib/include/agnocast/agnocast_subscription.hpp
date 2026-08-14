@@ -119,7 +119,6 @@ protected:
   topic_local_id_t id_{-1};
   const std::string topic_name_;
   int notify_eventfd_ = -1;  // publish-notification eventfd (-1 for callback-less subscriptions)
-  rclcpp::QoS actual_qos_{1};
   void initialize(
     const rclcpp::QoS & qos, const bool is_take_sub, const bool ignore_local_publications,
     SubscriptionRole role, const std::string & node_name, const std::string & type_name);
@@ -141,15 +140,6 @@ public:
   const char * get_topic_name() const { return topic_name_.c_str(); }
 
   uint32_t get_publisher_count() const { return get_publisher_count_core(topic_name_); }
-
-  /**
-   * @brief Return the effective QoS of this subscription.
-   *
-   * Mirrors `rclcpp::SubscriptionBase::get_actual_qos()`. This is the QoS passed at construction
-   * with any `SubscriptionOptions::qos_overriding_options` applied.
-   */
-  AGNOCAST_PUBLIC
-  rclcpp::QoS get_actual_qos() const { return actual_qos_; }
 
   virtual ~SubscriptionBase()
   {
@@ -211,12 +201,6 @@ class Subscription : public SubscriptionBase
     return std::string{};
   }
 
-  // A 4th positional argument of type SubscriptionOptions selects the callback-less overload
-  // below, so it must not be deduced as a callback here.
-  template <typename Func>
-  static constexpr bool is_callback_arg_v =
-    !std::is_same_v<std::decay_t<Func>, agnocast::SubscriptionOptions>;
-
   template <typename NodeT>
   void constructor_impl_no_callback(
     NodeT * node, const std::string & type_name, const rclcpp::QoS & qos,
@@ -224,15 +208,13 @@ class Subscription : public SubscriptionBase
   {
     const rclcpp::QoS actual_qos = init_base(node, qos, type_name, true, options, role);
 
-    {
-      auto default_cbg = get_default_callback_group_for_tracepoint(node);
-      auto dummy_cb = []() {};
-      std::string dummy_cb_symbols = "dummy_take" + topic_name_;
-      TRACEPOINT(
-        agnocast_subscription_init, static_cast<const void *>(this), get_node_base_address(node),
-        static_cast<const void *>(&dummy_cb), static_cast<const void *>(default_cbg.get()),
-        dummy_cb_symbols.c_str(), topic_name_.c_str(), actual_qos.depth(), 0);
-    }
+    auto default_cbg = get_default_callback_group_for_tracepoint(node);
+    auto dummy_cb = []() {};
+    std::string dummy_cb_symbols = "dummy_take" + topic_name_;
+    TRACEPOINT(
+      agnocast_subscription_init, static_cast<const void *>(this), get_node_base_address(node),
+      static_cast<const void *>(&dummy_cb), static_cast<const void *>(default_cbg.get()),
+      dummy_cb_symbols.c_str(), topic_name_.c_str(), actual_qos.depth(), 0);
   }
 
   template <typename NodeT, typename Func>
@@ -265,7 +247,7 @@ class Subscription : public SubscriptionBase
 public:
   using SharedPtr = std::shared_ptr<Subscription<MessageT>>;
 
-  template <typename Func, std::enable_if_t<is_callback_arg_v<Func>, int> = 0>
+  template <typename Func>
   Subscription(
     rclcpp::Node * node, const std::string & topic_name, const rclcpp::QoS & qos, Func && callback,
     agnocast::SubscriptionOptions options, SubscriptionRole role = SubscriptionRole::Default)
@@ -275,7 +257,7 @@ public:
       node, get_message_type_name(), qos, std::forward<Func>(callback), options, role);
   }
 
-  template <typename Func, std::enable_if_t<is_callback_arg_v<Func>, int> = 0>
+  template <typename Func>
   Subscription(
     agnocast::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
     Func && callback, agnocast::SubscriptionOptions options,
