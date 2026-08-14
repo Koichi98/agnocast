@@ -5,14 +5,29 @@
 #include "agnocast/node/agnocast_node.hpp"
 
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <memory>
+#include <mutex>
+#include <string>
+#include <unordered_map>
 
 using namespace std::chrono;
 using namespace std::chrono_literals;
 
 namespace agnocast
 {
+
+std::atomic<int64_t> & get_service_sequence_counter(const std::string & response_topic_name)
+{
+  // Never erased: a counter must outlive every client holding its address.
+  static std::mutex counters_mtx;
+  static std::unordered_map<std::string, std::atomic<int64_t>> counters;
+
+  std::lock_guard<std::mutex> lock(counters_mtx);
+  return counters.try_emplace(response_topic_name).first->second;
+}
 
 uint32_t get_agnocast_sub_count(const std::string & topic_name)
 {
@@ -127,7 +142,7 @@ ipc_shared_ptr<void> GenericClient::borrow_loaned_request()
     request_members_, [this](size_t size) { return publisher_->borrow_loaned_message(size); });
 
   generic_request_wrapper.node_name() = node_name_;
-  generic_request_wrapper.seqno() = next_sequence_number_.fetch_add(1);
+  generic_request_wrapper.seqno() = next_sequence_number_->fetch_add(1);
 
   return std::move(generic_request_wrapper).take_request();
 }

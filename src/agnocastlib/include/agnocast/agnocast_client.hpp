@@ -35,6 +35,18 @@ bool wait_for_service_nanoseconds(
   const std::function<bool()> & check_context_ok, const std::string & service_name,
   std::chrono::nanoseconds timeout);
 
+/// @brief Return the sequence-number counter shared by every client reading the given response
+/// topic.
+///
+/// All clients of one service on one node share a response topic and tell responses apart by
+/// sequence number alone, so the numbers must be unique across those clients rather than per
+/// instance. This is also what makes `(client_gid, sequence_number)` a unique transaction ID for
+/// ROS 2 service introspection, since `client_gid` is derived from the node name.
+///
+/// @param response_topic_name From create_service_response_topic_name().
+/// @return Reference to the counter, valid for the lifetime of the process.
+std::atomic<int64_t> & get_service_sequence_counter(const std::string & response_topic_name);
+
 extern int agnocast_fd;
 
 enum class ClientRole : uint8_t {
@@ -71,7 +83,7 @@ struct ResponseCallInfo
 class ClientBase
 {
 protected:
-  std::atomic<int64_t> next_sequence_number_{0};
+  std::atomic<int64_t> * next_sequence_number_{nullptr};
   std::string node_name_;
   std::string service_name_;
   std::function<bool()> check_context_ok_;
@@ -81,6 +93,8 @@ protected:
   {
     node_name_ = node->get_fully_qualified_name();
     service_name_ = node->get_node_services_interface()->resolve_service_name(service_name);
+    next_sequence_number_ =
+      &get_service_sequence_counter(create_service_response_topic_name(service_name_, node_name_));
 
     check_context_ok_ = [context = node->get_node_base_interface()->get_context()]() {
       if constexpr (std::is_same_v<agnocast::Node, NodeT>) {
@@ -168,9 +182,9 @@ private:
   std::mutex seqno2_response_call_info_mtx_;
   std::unordered_map<int64_t, ResponseCallInfo> seqno2_response_call_info_;
   typename ServiceRequestPublisher::SharedPtr publisher_;
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
   // Retained so the introspection event publisher can be created later, on the same node.
   internal::ServiceNodeVariant node_{static_cast<rclcpp::Node *>(nullptr)};
-#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
   // Declared before subscriber_ so they outlive the response callback that reads them.
   internal::ServiceIntrospection<ServiceT> introspection_;
   // Constant for the lifetime of the client: the GID is derived from the node name.
@@ -185,8 +199,8 @@ private:
   {
     init_base(node, service_name);
 
-    node_ = node;
 #if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+    node_ = node;
     client_gid_ = internal::make_service_client_gid(node_name_);
 #endif
 
@@ -205,7 +219,10 @@ private:
       auto it = seqno2_response_call_info_.find(response->seqno);
       if (it == seqno2_response_call_info_.end()) {
         lock.unlock();
-        RCLCPP_ERROR(node->get_logger(), "Agnocast internal implementation error: bad entry id");
+        // A miss is normal: sibling clients share this response topic.
+        RCLCPP_DEBUG(
+          node->get_logger(), "Ignoring service response %ld addressed to another client",
+          response->seqno);
         return;
       }
       ResponseCallInfo info = std::move(it->second);
@@ -261,7 +278,7 @@ public:
   {
     auto request = publisher_->borrow_loaned_message();
     request->node_name = node_name_;
-    request->seqno = next_sequence_number_.fetch_add(1);
+    request->seqno = next_sequence_number_->fetch_add(1);
     return ipc_shared_ptr<typename ServiceT::Request>(std::move(request));
   }
 
@@ -329,9 +346,9 @@ public:
   /**
    * @brief Configure ROS 2 service introspection for this client.
    *
-   * Mirrors `rclcpp::ClientBase::configure_introspection()`. Agnocast clients do not go through
-   * rcl, so the events are published by Agnocast on `<service name>/_service_event` instead of by
-   * rcl; the ROS 2 bridge forwards that topic to DDS. This client emits `REQUEST_SENT` and
+   * Mirrors `rclcpp::Client<ServiceT>::configure_introspection()`. Agnocast clients do not go
+   * through rcl, so the events are published by Agnocast on `<service name>/_service_event` instead
+   * of by rcl; the ROS 2 bridge forwards that topic to DDS. This client emits `REQUEST_SENT` and
    * `RESPONSE_RECEIVED`; the matching service emits the other two.
    *
    * Available from ROS 2 Iron (rclcpp 21) onwards only.
@@ -421,7 +438,10 @@ private:
       auto it = seqno2_response_call_info_.find(response_seqno);
       if (it == seqno2_response_call_info_.end()) {
         lock.unlock();
-        RCLCPP_ERROR(node->get_logger(), "Agnocast internal implementation error: bad entry id");
+        // A miss is normal: sibling clients share this response topic.
+        RCLCPP_DEBUG(
+          node->get_logger(), "Ignoring service response %ld addressed to another client",
+          response_seqno);
         return;
       }
       ResponseCallInfo info = std::move(it->second);

@@ -246,10 +246,10 @@ public:
   /**
    * @brief Configure ROS 2 service introspection for this service.
    *
-   * Mirrors `rclcpp::ServiceBase::configure_introspection()`. Agnocast services do not go through
-   * rcl, so the events are published by Agnocast on `<service name>/_service_event` instead of by
-   * rcl; the ROS 2 bridge forwards that topic to DDS. This service emits `REQUEST_RECEIVED` and
-   * `RESPONSE_SENT`; the matching client emits the other two.
+   * Mirrors `rclcpp::Service<ServiceT>::configure_introspection()`. Agnocast services do not go
+   * through rcl, so the events are published by Agnocast on `<service name>/_service_event` instead
+   * of by rcl; the ROS 2 bridge forwards that topic to DDS. This service emits `REQUEST_RECEIVED`
+   * and `RESPONSE_SENT`; the matching client emits the other two.
    *
    * Available from ROS 2 Iron (rclcpp 21) onwards only.
    *

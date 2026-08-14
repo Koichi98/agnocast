@@ -32,6 +32,8 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <shared_mutex>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <variant>
@@ -47,21 +49,29 @@ namespace internal
 /// Node handle held by a Service/Client, used to create the event publisher lazily.
 using ServiceNodeVariant = std::variant<rclcpp::Node *, agnocast::Node *>;
 
+/// The suffix ROS 2 appends to a service name to form its introspection event topic. The literal is
+/// only repeated for distributions without rcl's macro, so the helper stays compilable there.
+#if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
+constexpr const char * k_service_event_topic_postfix = RCL_SERVICE_INTROSPECTION_TOPIC_POSTFIX;
+#else
+constexpr const char * k_service_event_topic_postfix = "/_service_event";
+#endif
+
 /// Return the topic name ROS 2 uses for service introspection events, i.e. the resolved service
-/// name with "/_service_event" appended.
+/// name with k_service_event_topic_postfix appended.
 std::string create_service_event_topic_name(const std::string & resolved_service_name);
 
 /// Derive the 16-byte `client_gid` reported in service events from the calling node's
 /// fully-qualified name.
 ///
-/// ROS 2 uses the client's rmw GID here. Agnocast has no rmw entity for a service client, and the
-/// only client identity carried on the wire is the node name (see
-/// agnocast/internal/service_wire_type.hpp), so the GID is derived from that name instead. Both
-/// ends of a call compute it independently and agree, without changing the wire format.
+/// ROS 2 uses the client's rmw GID here. Agnocast has no rmw entity for a service client and the
+/// wire carries only the node name, so the GID is derived from that name instead and both ends of a
+/// call compute the same value without a wire-format change.
 ///
-/// Limitation: two Client instances for the same service inside one node share a GID, while their
-/// sequence numbers are counted per instance, so (client_gid, sequence_number) can collide between
-/// them. Distinguishing them requires carrying an identifier on the wire.
+/// Consequently the GID identifies a node, not a client instance, and is stable across restarts
+/// rather than unique per session. Sequence numbers are shared per node (see
+/// get_service_sequence_counter()) so that `(client_gid, sequence_number)` still identifies one
+/// transaction.
 std::array<uint8_t, 16> make_service_client_gid(const std::string & node_fqn);
 
 #if AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED
@@ -82,9 +92,12 @@ class ServiceIntrospection
 
   // Stored as the underlying integer so it can live in an atomic.
   std::atomic<int> state_{RCL_SERVICE_INTROSPECTION_OFF};
-  std::mutex mtx_;
+  // Shared, so that concurrent service calls do not serialize against each other, nor behind the
+  // publisher construction configure() performs under the lock.
+  std::shared_mutex mtx_;
   rclcpp::Clock::SharedPtr clock_;
   typename EventPublisher::SharedPtr publisher_;
+  rclcpp::QoS configured_qos_{rclcpp::QoS(1)};
 
   /// @brief Publish one service event.
   ///
@@ -100,7 +113,7 @@ class ServiceIntrospection
     rclcpp::Clock::SharedPtr clock;
     int state = RCL_SERVICE_INTROSPECTION_OFF;
     {
-      std::lock_guard<std::mutex> lock(mtx_);
+      std::shared_lock<std::shared_mutex> lock(mtx_);
       state = state_.load(std::memory_order_relaxed);
       if (state == RCL_SERVICE_INTROSPECTION_OFF) {
         return;
@@ -133,13 +146,16 @@ class ServiceIntrospection
   }
 
 public:
-  /// @brief Enable, reconfigure or disable introspection. Mirrors rclcpp's semantics: passing
-  /// RCL_SERVICE_INTROSPECTION_OFF stops event publication, and passing a different state switches
-  /// modes. The event publisher is created on the first enabling call and kept afterwards, so
-  /// toggling does not tear the topic down.
+  /// @brief Enable, reconfigure or disable introspection. Passing RCL_SERVICE_INTROSPECTION_OFF
+  /// stops event publication, and passing a different state switches modes.
+  ///
+  /// Unlike rcl, the event publisher is kept once created rather than destroyed on OFF, because
+  /// tearing it down would withdraw the bridge request and churn the ROS 2 side on every toggle.
+  /// The QoS of the first enabling call therefore wins.
+  ///
   /// @param node The node that owns the service or client.
   /// @param resolved_service_name The service name after remapping/expansion.
-  /// @param clock Clock used to stamp events.
+  /// @param clock Clock used to stamp events. Must not be null.
   /// @param qos QoS of the event publisher.
   /// @param state Introspection state to apply.
   void configure(
@@ -147,18 +163,23 @@ public:
     rclcpp::Clock::SharedPtr clock, const rclcpp::QoS & qos,
     rcl_service_introspection_state_t state)
   {
-    std::lock_guard<std::mutex> lock(mtx_);
+    std::lock_guard<std::shared_mutex> lock(mtx_);
 
     if (state == RCL_SERVICE_INTROSPECTION_OFF) {
       state_.store(RCL_SERVICE_INTROSPECTION_OFF, std::memory_order_relaxed);
       return;
     }
 
-    clock_ = std::move(clock);
+    if (clock == nullptr) {
+      throw std::invalid_argument(
+        "configure_introspection() requires a non-null clock to stamp service events (service: " +
+        resolved_service_name + ")");
+    }
+
+    // TransientLocal durability is not allowed for services, and events follow the same rule.
+    const rclcpp::QoS event_qos = rclcpp::QoS(qos).durability_volatile();
 
     if (!publisher_) {
-      // TransientLocal durability is not allowed for services, and events follow the same rule.
-      const rclcpp::QoS event_qos = rclcpp::QoS(qos).durability_volatile();
       const std::string topic_name = create_service_event_topic_name(resolved_service_name);
       std::visit(
         [this, &topic_name, &event_qos](auto * n) {
@@ -166,8 +187,16 @@ public:
             n, topic_name, event_qos, agnocast::PublisherOptions{}, PublisherRole::Default);
         },
         node);
+      configured_qos_ = event_qos;
+    } else if (event_qos != configured_qos_) {
+      RCLCPP_WARN(
+        logger,
+        "configure_introspection() was already called for '%s' with a different QoS. The event "
+        "publisher keeps the QoS of the first call; the new QoS is ignored.",
+        resolved_service_name.c_str());
     }
 
+    clock_ = std::move(clock);
     state_.store(state, std::memory_order_relaxed);
   }
 

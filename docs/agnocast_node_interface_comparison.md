@@ -155,18 +155,21 @@ Each interface is accessible via getter methods such as `get_node_base_interface
 
 #### Service Introspection
 
-`agnocast::Service` and `agnocast::Client` provide `configure_introspection(clock, qos, state)` with the same signature and the same reconfiguration semantics as `rclcpp::ServiceBase` / `rclcpp::ClientBase`.
+`agnocast::Service` and `agnocast::Client` provide `configure_introspection(clock, qos, state)` with the same signature as `rclcpp::Service<ServiceT>` / `rclcpp::Client<ServiceT>`. The behaviour matches for the states themselves; the deviations are listed below.
 
 | Item | agnocast | Notes |
 |------|----------|-------|
 | Availability | ROS 2 Iron (rclcpp 21) and later | The `ServiceT::Event` message and `rcl_service_introspection_state_t` do not exist on Humble, so the method is not declared there — the same gate `autoware_component_interface_utils` uses |
-| Event topic | ✓ | `<resolved service name>/_service_event`, the ROS 2 convention |
+| Event topic | ✓ | `<resolved service name>` + `RCL_SERVICE_INTROSPECTION_TOPIC_POSTFIX`, the ROS 2 convention |
 | Transport | Agnocast publisher | rcl publishes these events for an rclcpp service, but agnocast services never touch rcl. The event topic is an ordinary Agnocast topic, so the ROS 2 Bridge forwards it to DDS and `ros2 service echo` works; without a bridge the events are still visible via `ros2 topic echo_agnocast` |
 | `metadata` / `contents` modes | ✓ | `contents` fills the `request` / `response` sequences, `metadata` leaves them empty |
 | `sequence_number` | ✓ | The Agnocast service call seqno |
-| `client_gid` | ⚠ | Derived from the calling node's fully-qualified name, since Agnocast has no rmw GID and the wire format carries only the node name. Both ends compute the same value. Two `Client` instances for the same service inside one node therefore share a GID while numbering sequences independently, so `(client_gid, sequence_number)` can collide between them |
+| `client_gid` | ⚠ | Derived from the calling node's fully-qualified name, since Agnocast has no rmw GID and the wire format carries only the node name. Both ends compute the same value. It therefore identifies a node rather than a client instance, and is stable across restarts instead of unique per session; sequence numbers are shared per node so `(client_gid, sequence_number)` still identifies one transaction |
+| Reconfiguration | ⚠ | Switching between `OFF` / `metadata` / `contents` behaves as in rclcpp, but the event publisher is created on the first enabling call and then kept for the lifetime of the service or client, whereas rcl destroys it on `OFF`. Keeping it avoids churning the ROS 2 Bridge on every toggle; the cost is that the QoS of the first enabling call wins, and a later call with a different QoS is rejected with a warning |
+| Error reporting | ⚠ | A null `clock` throws `std::invalid_argument`. rclcpp instead throws whatever `rcl` reports; there is no `rcl` call here to fail |
 | `GenericService` / `GenericClient` | ✗ | Not supported for the type-erased service API |
 | Overhead when disabled | None beyond one relaxed atomic load per request and per response | Introspection is off unless `configure_introspection()` is called |
+| Overhead when enabled | One shared-mode lock plus one event publish per request and per response | The event carries a copy of the payload in `contents` mode |
 
 ---
 

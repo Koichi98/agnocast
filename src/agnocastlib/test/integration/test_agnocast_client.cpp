@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdint>
 #include <future>
 #include <memory>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -131,6 +133,93 @@ TEST_F(ClientTest, RequestIdIsUnique)
 
 /* --- ClientTest: end --- */
 
+// Every client of one service on one node reads the same response topic and tells responses apart
+// by sequence number alone.
+class SharedResponseTopicTest : public ::testing::Test
+{
+protected:
+  using SetBool = std_srvs::srv::SetBool;
+
+  std::shared_ptr<rclcpp::Node> node_;
+  std::shared_ptr<agnocast::SingleThreadedAgnocastExecutor> executor_;
+  std::thread spin_thread_;
+
+  void SetUp() override
+  {
+    rclcpp::init(0, nullptr);
+    node_ = std::make_shared<rclcpp::Node>("shared_response_topic_test_node");
+    executor_ = std::make_shared<agnocast::SingleThreadedAgnocastExecutor>();
+    executor_->add_node(node_);
+    spin_thread_ = std::thread([this]() { executor_->spin(); });
+  }
+
+  void TearDown() override
+  {
+    executor_->cancel();
+    if (spin_thread_.joinable()) {
+      spin_thread_.join();
+    }
+    if (rclcpp::ok()) {
+      rclcpp::shutdown();
+    }
+  }
+
+  auto create_service()
+  {
+    auto cb_group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    return agnocast::create_service<SetBool>(
+      node_.get(), "shared_response_topic_service",
+      [](
+        agnocast::ipc_shared_ptr<SetBool::Request> && request,
+        agnocast::ipc_shared_ptr<SetBool::Response> && response) {
+        response->success = request->data;
+      },
+      rclcpp::ServicesQoS(), cb_group);
+  }
+
+  auto create_client()
+  {
+    auto cb_group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    return agnocast::create_client<SetBool>(
+      node_.get(), "shared_response_topic_service", rclcpp::ServicesQoS(), cb_group);
+  }
+};
+
+TEST_F(SharedResponseTopicTest, SequenceNumbersDoNotCollideBetweenClientsOnTheSameNode)
+{
+  auto client1 = create_client();
+  auto client2 = create_client();
+
+  auto request1 = client1->borrow_loaned_request();
+  auto request2 = client2->borrow_loaned_request();
+  auto id1 = client1->async_send_request(std::move(request1)).request_id;
+  auto id2 = client2->async_send_request(std::move(request2)).request_id;
+
+  EXPECT_NE(id1, id2);
+}
+
+TEST_F(SharedResponseTopicTest, EachClientResolvesItsOwnResponse)
+{
+  auto client1 = create_client();
+  auto client2 = create_client();
+  auto service = create_service();
+  ASSERT_TRUE(client1->wait_for_service(1s));
+
+  auto request1 = client1->borrow_loaned_request();
+  request1->data = true;
+  auto request2 = client2->borrow_loaned_request();
+  request2->data = false;
+
+  auto future1 = client1->async_send_request(std::move(request1));
+  auto future2 = client2->async_send_request(std::move(request2));
+
+  ASSERT_EQ(future1.future.wait_for(5s), std::future_status::ready);
+  ASSERT_EQ(future2.future.wait_for(5s), std::future_status::ready);
+
+  EXPECT_TRUE(future1.future.get()->success);
+  EXPECT_FALSE(future2.future.get()->success);
+}
+
 class AgnocastNodeClientTest : public ::testing::Test
 {
   using Request = std_srvs::srv::Empty::Request;
@@ -195,7 +284,15 @@ protected:
   using EventInfo = decltype(std::declval<Event>().info);
 
   static constexpr const char * k_service_name = "introspection_service";
+  // Spelled out, so the test pins the ROS 2 convention independently of the helper.
   static constexpr const char * k_event_topic = "/introspection_service/_service_event";
+  static constexpr const char * k_deferred_service_name = "introspection_deferred_service";
+  static constexpr const char * k_deferred_event_topic =
+    "/introspection_deferred_service/_service_event";
+
+  static constexpr auto k_event_timeout = 5s;
+  // Paid in full by every test asserting an absence, so it is kept short.
+  static constexpr auto k_quiescence = 500ms;
 
   std::shared_ptr<rclcpp::Node> node_;
   std::shared_ptr<agnocast::SingleThreadedAgnocastExecutor> executor_;
@@ -225,10 +322,10 @@ protected:
     }
   }
 
-  void subscribe_events()
+  void subscribe_events(const char * topic = k_event_topic)
   {
     event_sub_ = agnocast::create_subscription<Event>(
-      node_.get(), k_event_topic, rclcpp::QoS(10),
+      node_.get(), topic, rclcpp::QoS(10),
       [this](const agnocast::ipc_shared_ptr<const Event> & msg) {
         std::lock_guard<std::mutex> lock(events_mtx_);
         events_.push_back(*msg);
@@ -249,17 +346,51 @@ protected:
       rclcpp::ServicesQoS(), cb_group);
   }
 
-  auto create_client()
+  auto create_deferred_service()
+  {
+    auto cb_group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
+    return agnocast::create_service<SetBool>(
+      node_.get(), k_deferred_service_name,
+      [](
+        std::shared_ptr<agnocast::Service<SetBool>> service,
+        agnocast::ipc_shared_ptr<SetBool::Request> && request) {
+        auto response = service->borrow_loaned_response(request);
+        response->success = request->data;
+        response->message = "ok";
+        service->send_response(std::move(request), std::move(response));
+      },
+      rclcpp::ServicesQoS(), cb_group);
+  }
+
+  auto create_client(const char * service_name = k_service_name)
   {
     auto cb_group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
     return agnocast::create_client<SetBool>(
-      node_.get(), k_service_name, rclcpp::ServicesQoS(), cb_group);
+      node_.get(), service_name, rclcpp::ServicesQoS(), cb_group);
   }
 
   std::vector<Event> collected_events()
   {
     std::lock_guard<std::mutex> lock(events_mtx_);
     return events_;
+  }
+
+  size_t event_count()
+  {
+    std::lock_guard<std::mutex> lock(events_mtx_);
+    return events_.size();
+  }
+
+  bool wait_for_events(size_t expected)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + k_event_timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (event_count() >= expected) {
+        return true;
+      }
+      std::this_thread::sleep_for(10ms);
+    }
+    return event_count() >= expected;
   }
 
   size_t count_of(uint8_t event_type)
@@ -270,30 +401,47 @@ protected:
       [event_type](const Event & e) { return e.info.event_type == event_type; }));
   }
 
-  // Issue one call and give the executor time to deliver the response and all four events.
-  void call_once(bool data)
+  void call_once(const agnocast::Client<SetBool>::SharedPtr & client, bool data, int64_t * seqno)
   {
-    auto client = create_client();
-    auto service = create_service();
-    ASSERT_TRUE(client->wait_for_service(1s));
-
     auto request = client->borrow_loaned_request();
     request->data = data;
     auto future_and_id = client->async_send_request(std::move(request));
     ASSERT_EQ(future_and_id.future.wait_for(5s), std::future_status::ready);
+    if (seqno != nullptr) {
+      *seqno = future_and_id.request_id;
+    }
+  }
 
-    // The events are published on the same executor, so give them a moment to arrive.
-    std::this_thread::sleep_for(500ms);
+  void enable_introspection(
+    const agnocast::Client<SetBool>::SharedPtr & client,
+    const agnocast::Service<SetBool>::SharedPtr & service, rcl_service_introspection_state_t state)
+  {
+    client->configure_introspection(node_->get_clock(), rclcpp::QoS(1), state);
+    service->configure_introspection(node_->get_clock(), rclcpp::QoS(1), state);
   }
 };
 
 TEST_F(ServiceIntrospectionTest, NoEventsWhenIntrospectionIsOff)
 {
   subscribe_events();
-  call_once(true);
 
-  EXPECT_TRUE(collected_events().empty())
+  auto client = create_client();
+  auto service = create_service();
+  ASSERT_TRUE(client->wait_for_service(1s));
+
+  call_once(client, true, nullptr);
+  std::this_thread::sleep_for(k_quiescence);
+
+  ASSERT_TRUE(collected_events().empty())
     << "introspection defaults to off, so no service events should be published";
+
+  // Positive control: an absence assertion alone would also pass if the subscription never worked.
+  enable_introspection(client, service, RCL_SERVICE_INTROSPECTION_METADATA);
+  call_once(client, true, nullptr);
+
+  EXPECT_TRUE(wait_for_events(4))
+    << "the same subscription must see events once introspection is enabled, otherwise the "
+       "assertion above proves nothing";
 }
 
 TEST_F(ServiceIntrospectionTest, MetadataModePublishesAllFourEventsWithoutPayload)
@@ -302,17 +450,11 @@ TEST_F(ServiceIntrospectionTest, MetadataModePublishesAllFourEventsWithoutPayloa
 
   auto client = create_client();
   auto service = create_service();
-  client->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_METADATA);
-  service->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_METADATA);
+  enable_introspection(client, service, RCL_SERVICE_INTROSPECTION_METADATA);
   ASSERT_TRUE(client->wait_for_service(1s));
 
-  auto request = client->borrow_loaned_request();
-  request->data = true;
-  auto future_and_id = client->async_send_request(std::move(request));
-  ASSERT_EQ(future_and_id.future.wait_for(5s), std::future_status::ready);
-  std::this_thread::sleep_for(500ms);
+  call_once(client, true, nullptr);
+  ASSERT_TRUE(wait_for_events(4)) << "one call must produce all four events";
 
   EXPECT_EQ(count_of(EventInfo::REQUEST_SENT), 1u);
   EXPECT_EQ(count_of(EventInfo::REQUEST_RECEIVED), 1u);
@@ -331,17 +473,11 @@ TEST_F(ServiceIntrospectionTest, ContentsModeCarriesPayload)
 
   auto client = create_client();
   auto service = create_service();
-  client->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_CONTENTS);
-  service->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_CONTENTS);
+  enable_introspection(client, service, RCL_SERVICE_INTROSPECTION_CONTENTS);
   ASSERT_TRUE(client->wait_for_service(1s));
 
-  auto request = client->borrow_loaned_request();
-  request->data = true;
-  auto future_and_id = client->async_send_request(std::move(request));
-  ASSERT_EQ(future_and_id.future.wait_for(5s), std::future_status::ready);
-  std::this_thread::sleep_for(500ms);
+  call_once(client, true, nullptr);
+  ASSERT_TRUE(wait_for_events(4)) << "one call must produce all four events";
 
   const auto events = collected_events();
   ASSERT_EQ(events.size(), 4u);
@@ -368,17 +504,12 @@ TEST_F(ServiceIntrospectionTest, ClientAndServerAgreeOnGidAndSequenceNumber)
 
   auto client = create_client();
   auto service = create_service();
-  client->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_METADATA);
-  service->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_METADATA);
+  enable_introspection(client, service, RCL_SERVICE_INTROSPECTION_METADATA);
   ASSERT_TRUE(client->wait_for_service(1s));
 
-  auto request = client->borrow_loaned_request();
-  request->data = false;
-  auto future_and_id = client->async_send_request(std::move(request));
-  ASSERT_EQ(future_and_id.future.wait_for(5s), std::future_status::ready);
-  std::this_thread::sleep_for(500ms);
+  int64_t seqno = -1;
+  call_once(client, false, &seqno);
+  ASSERT_TRUE(wait_for_events(4)) << "one call must produce all four events";
 
   const auto events = collected_events();
   ASSERT_EQ(events.size(), 4u);
@@ -388,8 +519,34 @@ TEST_F(ServiceIntrospectionTest, ClientAndServerAgreeOnGidAndSequenceNumber)
   for (const auto & event : events) {
     EXPECT_EQ(event.info.client_gid, expected_gid)
       << "all four events of one call must carry the caller's GID";
-    EXPECT_EQ(event.info.sequence_number, future_and_id.request_id)
+    EXPECT_EQ(event.info.sequence_number, seqno)
       << "all four events of one call must carry the call's sequence number";
+  }
+}
+
+// The deferred path emits RESPONSE_SENT from send_response(), a separate emission site.
+TEST_F(ServiceIntrospectionTest, DeferredCallbackPathEmitsAllFourEvents)
+{
+  subscribe_events(k_deferred_event_topic);
+
+  auto client = create_client(k_deferred_service_name);
+  auto service = create_deferred_service();
+  enable_introspection(client, service, RCL_SERVICE_INTROSPECTION_CONTENTS);
+  ASSERT_TRUE(client->wait_for_service(1s));
+
+  int64_t seqno = -1;
+  call_once(client, true, &seqno);
+  ASSERT_TRUE(wait_for_events(4))
+    << "a deferred-callback service must emit the same four events as a basic one";
+
+  EXPECT_EQ(count_of(EventInfo::REQUEST_SENT), 1u);
+  EXPECT_EQ(count_of(EventInfo::REQUEST_RECEIVED), 1u);
+  EXPECT_EQ(count_of(EventInfo::RESPONSE_SENT), 1u)
+    << "RESPONSE_SENT must be emitted exactly once, by send_response()";
+  EXPECT_EQ(count_of(EventInfo::RESPONSE_RECEIVED), 1u);
+
+  for (const auto & event : collected_events()) {
+    EXPECT_EQ(event.info.sequence_number, seqno);
   }
 }
 
@@ -399,37 +556,39 @@ TEST_F(ServiceIntrospectionTest, ReconfiguringToOffStopsEvents)
 
   auto client = create_client();
   auto service = create_service();
-  client->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_METADATA);
-  service->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_METADATA);
+  enable_introspection(client, service, RCL_SERVICE_INTROSPECTION_METADATA);
   ASSERT_TRUE(client->wait_for_service(1s));
 
-  {
-    auto request = client->borrow_loaned_request();
-    request->data = true;
-    auto future_and_id = client->async_send_request(std::move(request));
-    ASSERT_EQ(future_and_id.future.wait_for(5s), std::future_status::ready);
-  }
-  std::this_thread::sleep_for(500ms);
-  const size_t events_while_on = collected_events().size();
+  call_once(client, true, nullptr);
+  ASSERT_TRUE(wait_for_events(4)) << "one call must produce all four events";
+  const size_t events_while_on = event_count();
   ASSERT_EQ(events_while_on, 4u);
 
-  client->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_OFF);
-  service->configure_introspection(
-    node_->get_clock(), rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_OFF);
+  enable_introspection(client, service, RCL_SERVICE_INTROSPECTION_OFF);
 
-  {
-    auto request = client->borrow_loaned_request();
-    request->data = true;
-    auto future_and_id = client->async_send_request(std::move(request));
-    ASSERT_EQ(future_and_id.future.wait_for(5s), std::future_status::ready);
-  }
-  std::this_thread::sleep_for(500ms);
+  call_once(client, true, nullptr);
+  std::this_thread::sleep_for(k_quiescence);
 
-  EXPECT_EQ(collected_events().size(), events_while_on)
+  EXPECT_EQ(event_count(), events_while_on)
     << "no further events should be published after introspection is turned off";
+}
+
+TEST_F(ServiceIntrospectionTest, ConfigureIntrospectionRejectsNullClock)
+{
+  auto client = create_client();
+  auto service = create_service();
+
+  EXPECT_THROW(
+    client->configure_introspection(nullptr, rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_METADATA),
+    std::invalid_argument)
+    << "a null clock would silently drop every event, so it must be rejected up front";
+  EXPECT_THROW(
+    service->configure_introspection(nullptr, rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_METADATA),
+    std::invalid_argument);
+
+  // OFF needs no clock, so it must stay accepted.
+  EXPECT_NO_THROW(
+    client->configure_introspection(nullptr, rclcpp::QoS(1), RCL_SERVICE_INTROSPECTION_OFF));
 }
 
 #endif  // AGNOCAST_SERVICE_INTROSPECTION_SUPPORTED

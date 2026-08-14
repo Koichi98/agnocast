@@ -1,6 +1,9 @@
 #include "agnocast/internal/service_introspection.hpp"
 
+#include <array>
 #include <cstddef>
+#include <cstdint>
+#include <string>
 
 namespace agnocast
 {
@@ -28,7 +31,7 @@ uint64_t fnv1a_64(const std::string & value, uint64_t basis)
 
 std::string create_service_event_topic_name(const std::string & resolved_service_name)
 {
-  return resolved_service_name + "/_service_event";
+  return resolved_service_name + k_service_event_topic_postfix;
 }
 
 std::array<uint8_t, 16> make_service_client_gid(const std::string & node_fqn)
