@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <type_traits>
 
@@ -118,7 +119,6 @@ protected:
   topic_local_id_t id_{-1};
   const std::string topic_name_;
   int notify_eventfd_ = -1;  // publish-notification eventfd (-1 for callback-less subscriptions)
-  // Effective QoS after any qos_overriding_options are applied. Set by init_base().
   rclcpp::QoS actual_qos_{1};
   void initialize(
     const rclcpp::QoS & qos, const bool is_take_sub, const bool ignore_local_publications,
@@ -175,9 +175,15 @@ public:
 /**
  * @brief Agnocast subscription for a compile-time known message type.
  *
- * Delivers messages via a callback that is invoked each time a publisher
- * writes to the topic. Allocate instances with
- * `agnocast::create_subscription<MessageT>()` or construct directly.
+ * A subscription delivers messages in exactly one of two modes, fixed at construction:
+ *   - constructed **with** a callback: the callback is invoked by the executor each time a
+ *     publisher writes to the topic. Allocate with `agnocast::create_subscription<MessageT>()`
+ *     or construct directly.
+ *   - constructed **without** a callback: the caller polls with take(). See
+ *     PollingSubscriber<MessageT> for a higher-level wrapper.
+ *
+ * The modes are mutually exclusive: take() throws on a subscription that has a callback. See
+ * take() for why.
  *
  * @tparam MessageT  ROS message type.
  */
@@ -280,9 +286,7 @@ public:
       node, get_message_type_name(), qos, std::forward<Func>(callback), options, role);
   }
 
-  /// Construct without a callback. Messages are then retrieved by polling take(), and the
-  /// subscription registers no eventfd so publishers skip it when signalling. Mirrors the
-  /// rclcpp idiom of a subscription whose callback group is never spun.
+  /// Construct without a callback. Messages are retrieved by polling take().
   Subscription(
     rclcpp::Node * node, const std::string & topic_name, const rclcpp::QoS & qos,
     agnocast::SubscriptionOptions options = agnocast::SubscriptionOptions(),
@@ -324,21 +328,33 @@ public:
   }
 
   /**
-   * @brief Retrieve the latest message from the topic without going through the callback.
+   * @brief Retrieve the latest message from the topic by polling.
    *
-   * Mirrors `rclcpp::Subscription::take()` in that it is available on every subscription, not
-   * just callback-less ones. Note the same caveat as rclcpp: if this subscription also has a
-   * callback that is being spun by an executor, the callback and take() consume from the same
-   * per-subscriber cursor and will steal messages from each other. Use one or the other.
+   * Only usable on a subscription constructed without a callback. Unlike
+   * `rclcpp::Subscription::take()`, which copies the message into caller-provided storage and can
+   * therefore coexist with callback delivery, this hands out a reference-counted pointer into
+   * shared memory, and the kmod tracks at most one outstanding reference per
+   * (subscriber, message). Callback delivery and take() would each build their own
+   * `ipc_shared_ptr` on top of that single reference, so whichever is destroyed first would
+   * release it while the other still points at memory the publisher may reuse.
    *
    * @param allow_same_message  If true, may return the same message as the previous call
    *                            (useful for always having the latest value). If false, returns
    *                            only new messages since the last take.
    * @return Shared pointer to the message, or empty if unavailable.
+   * @throws std::runtime_error if the subscription was constructed with a callback.
    */
   AGNOCAST_PUBLIC
   agnocast::ipc_shared_ptr<const MessageT> take(bool allow_same_message = false)
   {
+    if (callback_info_id_.has_value()) {
+      throw std::runtime_error(
+        "take() was called on the subscription for topic '" + topic_name_ +
+        "', which was constructed with a callback. A subscription delivers messages either "
+        "through its callback or through take(), never both. Construct the subscription without "
+        "a callback to poll it with take().");
+    }
+
     publisher_shm_info pub_shm_infos[MAX_PUBLISHER_NUM]{};
 
     union ioctl_take_msg_args take_args;
@@ -403,8 +419,6 @@ public:
 
   ~Subscription()
   {
-    // Nothing to erase when constructed without a callback: no entry was ever registered and
-    // no eventfd was opened.
     if (!callback_info_id_.has_value()) {
       return;
     }
@@ -425,11 +439,10 @@ public:
 //   Subscription<MessageT>, making a void specialization the cleaner choice.
 
 /**
- * @brief Backwards-compatible spelling of a callback-less Subscription<MessageT>.
+ * @brief Deprecated spelling of a callback-less Subscription<MessageT>.
  *
- * Retained so existing call sites keep compiling. `Subscription<MessageT>` now supports both
- * callback delivery and take(), mirroring `rclcpp::Subscription`, so prefer constructing a
- * `Subscription<MessageT>` without a callback instead of using this class.
+ * Construct a `Subscription<MessageT>` without a callback instead. Scheduled for removal
+ * (autowarefoundation/agnocast#1532).
  *
  * @tparam MessageT  ROS message type.
  */
