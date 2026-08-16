@@ -37,8 +37,8 @@ rclcpp::CallbackGroup::SharedPtr get_default_callback_group_for_tracepoint(agnoc
 const void * get_node_base_address(Node * node);
 const void * get_node_base_address(rclcpp::Node * node);
 
-// rclcpp overload of the above, so callback-less subscription construction can be written once
-// for both node types. rclcpp::Node needs no out-of-line definition to break an include cycle.
+// Unlike the agnocast::Node overload, rclcpp::Node needs no out-of-line definition to break the
+// include cycle.
 inline rclcpp::CallbackGroup::SharedPtr get_default_callback_group_for_tracepoint(
   rclcpp::Node * node)
 {
@@ -181,8 +181,8 @@ AGNOCAST_PUBLIC
 template <typename MessageT>
 class Subscription : public SubscriptionBase
 {
-  // Empty when the subscription was constructed without a callback. That case is what the kmod
-  // calls a "take subscription": no eventfd is registered and publishers skip it when signalling.
+  // Empty is what the kmod calls a "take subscription": no eventfd is registered and publishers
+  // skip it when signalling.
   std::optional<uint32_t> callback_info_id_;
 
   // Cached pointer from the most recent take(allow_same_message=true) call.
@@ -191,8 +191,8 @@ class Subscription : public SubscriptionBase
   agnocast::ipc_shared_ptr<const MessageT> last_taken_ptr_;
   std::mutex last_taken_ptr_mtx_;
 
-  // Returns rosidl message name for MessageT, or empty string if MessageT is not a rosidl message
-  // type.
+  // Gated to message types — service types pulled in by BasicService<ServiceT> have no rosidl
+  // message name. The empty string signals "skip registry" to initialize().
   static std::string get_message_type_name()
   {
     if constexpr (rosidl_generator_traits::is_message<MessageT>::value) {
@@ -204,7 +204,7 @@ class Subscription : public SubscriptionBase
   template <typename NodeT>
   void constructor_impl_no_callback(
     NodeT * node, const std::string & type_name, const rclcpp::QoS & qos,
-    agnocast::SubscriptionOptions options, SubscriptionRole role)
+    const agnocast::SubscriptionOptions & options, SubscriptionRole role)
   {
     const rclcpp::QoS actual_qos = init_base(node, qos, type_name, true, options, role);
 
@@ -220,7 +220,7 @@ class Subscription : public SubscriptionBase
   template <typename NodeT, typename Func>
   void constructor_impl(
     NodeT * node, const std::string & type_name, const rclcpp::QoS & qos, Func && callback,
-    agnocast::SubscriptionOptions options, SubscriptionRole role)
+    const agnocast::SubscriptionOptions & options, SubscriptionRole role)
   {
     rclcpp::CallbackGroup::SharedPtr callback_group = get_valid_callback_group(node, options);
 
@@ -307,6 +307,21 @@ public:
   : SubscriptionBase(node, topic_name)
   {
     constructor_impl(node, type_name, qos, std::forward<Func>(callback), options, role);
+  }
+
+  ~Subscription()
+  {
+    if (!callback_info_id_.has_value()) {
+      return;
+    }
+
+    // Remove from callback info map to prevent stale references on re-subscription and to avoid
+    // fd reuse conflicts. ~SubscriptionBase() closes the eventfd once this body returns, after
+    // which the OS may reuse the same fd number for a new subscription. If the old entry remained
+    // in id2_callback_info, adding the new fd to epoll (EPOLL_CTL_ADD) could fail with EEXIST
+    // because epoll would still associate that fd number with the stale entry.
+    std::lock_guard<std::mutex> lock(id2_callback_info_mtx);
+    id2_callback_info.erase(*callback_info_id_);
   }
 
   /**
@@ -397,21 +412,6 @@ public:
 
     MessageT * ptr = reinterpret_cast<MessageT *>(take_args.ret_addr);
     return agnocast::ipc_shared_ptr<const MessageT>(ptr, topic_name_, id_, take_args.ret_entry_id);
-  }
-
-  ~Subscription()
-  {
-    if (!callback_info_id_.has_value()) {
-      return;
-    }
-
-    // Remove from callback info map to prevent stale references on re-subscription and to avoid
-    // fd reuse conflicts. ~SubscriptionBase() closes the eventfd once this body returns, after
-    // which the OS may reuse the same fd number for a new subscription. If the old entry remained
-    // in id2_callback_info, adding the new fd to epoll (EPOLL_CTL_ADD) could fail with EEXIST
-    // because epoll would still associate that fd number with the stale entry.
-    std::lock_guard<std::mutex> lock(id2_callback_info_mtx);
-    id2_callback_info.erase(*callback_info_id_);
   }
 };
 

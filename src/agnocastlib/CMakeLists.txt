@@ -278,9 +278,7 @@ if(BUILD_TESTING)
     LABELS "requires_kernel_module;requires_heaphook"
   )
 
-  # Subscription take() integration test (requires kernel module, no mock).
-  # Covers callback-less construction, the take() polling paths and the guard that keeps
-  # callback delivery and take() from sharing one kernel-side reference.
+  # Subscription take() integration test (requires kernel module, no mock)
   ament_add_gmock(test_integration_agnocast_subscription_take_${PROJECT_NAME}
     test/integration/test_agnocast_subscription_take.cpp)
   target_link_libraries(test_integration_agnocast_subscription_take_${PROJECT_NAME} agnocast)
