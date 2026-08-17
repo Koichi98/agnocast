@@ -16,6 +16,9 @@ typename TypeErasedPublisher::SharedPtr GenericService::get_or_create_publisher_
     std::lock_guard<std::mutex> lock(publishers_mtx_);
     auto it = publishers_.find(response_topic_name);
     if (it == publishers_.end()) {
+      detail::prune_departed_response_publishers(
+        publishers_, response_topic_name, pending_responses_,
+        detail::response_topic_has_subscriber);
       std::visit(
         [this, &pub, &response_topic_name](auto * node) {
           agnocast::PublisherOptions pub_options;
@@ -29,6 +32,21 @@ typename TypeErasedPublisher::SharedPtr GenericService::get_or_create_publisher_
     }
   }
   return pub;
+}
+
+void GenericService::pin_pending_response(const std::string & response_topic_name)
+{
+  std::lock_guard<std::mutex> lock(publishers_mtx_);
+  pending_responses_[response_topic_name]++;
+}
+
+void GenericService::unpin_pending_response(const std::string & response_topic_name)
+{
+  std::lock_guard<std::mutex> lock(publishers_mtx_);
+  auto it = pending_responses_.find(response_topic_name);
+  if (it != pending_responses_.end() && --it->second == 0) {
+    pending_responses_.erase(it);
+  }
 }
 
 void GenericService::load_typesupport_impl(const std::string & service_type)
@@ -66,6 +84,7 @@ void GenericService::send_response(
   publisher->publish(std::move(response), [this](void * p) {
     GenericResponseWrapper::free(p, this->response_members_);
   });
+  unpin_pending_response(req_wrapper.response_topic_name());
 }
 
 void GenericService::cancel_response(
@@ -76,12 +95,16 @@ void GenericService::cancel_response(
   publisher->cancel_message(std::move(response), [this](void * p) {
     GenericResponseWrapper::free(p, this->response_members_);
   });
+  unpin_pending_response(req_wrapper.response_topic_name());
 }
 
 ipc_shared_ptr<void> GenericService::borrow_loaned_response(const ipc_shared_ptr<void> & request)
 {
   auto req_wrapper = GenericRequestWrapper(this->request_members_, ipc_shared_ptr<void>(request));
   auto publisher = get_or_create_publisher_for(req_wrapper.response_topic_name());
+  // Pin before borrowing: from here until send_response() / cancel_response() the caller's
+  // publisher must stay the one the response was borrowed from, even if the caller disappears.
+  pin_pending_response(req_wrapper.response_topic_name());
 
   auto res_wrapper = GenericResponseWrapper::allocate(
     this->response_members_,

@@ -10,8 +10,10 @@
 #include "rclcpp/rclcpp.hpp"
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <type_traits>
+#include <unordered_map>
 #include <utility>
 #include <variant>
 
@@ -25,6 +27,48 @@ enum class ServiceRole : uint8_t {
   /// Not intended for direct use by application code.
   AgnocastOnly,
 };
+
+namespace detail
+{
+
+/// Erase the response publishers whose caller is gone, identified by their response topic having
+/// lost its subscriber. Without this, the map -- and the shared memory each publisher reserves,
+/// plus its kernel-side registration -- grows with every distinct caller the process ever serves,
+/// since a caller's publisher is created on its first request and nothing ever removes it.
+///
+/// `keep` (the caller being served right now) and any caller with a borrowed-but-not-yet-sent
+/// response are left alone: erasing those would make send_response() resolve to a different
+/// publisher than the response was borrowed from.
+///
+/// The caller runs this only when it is about to insert a new caller, which is the only way the
+/// map grows, so a steady set of callers costs nothing.
+///
+/// `has_subscriber` answers "is this response topic still being listened to"; it is a parameter so
+/// that the selection rules above can be tested without a kernel module, and so that this header
+/// template does not itself issue ioctls.
+template <typename PublisherMap, typename HasSubscriber>
+void prune_departed_response_publishers(
+  PublisherMap & publishers, const std::string & keep,
+  const std::unordered_map<std::string, uint32_t> & pending, HasSubscriber has_subscriber)
+{
+  for (auto it = publishers.begin(); it != publishers.end();) {
+    const bool in_use = it->first == keep || pending.count(it->first) > 0;
+    if (in_use || has_subscriber(it->first)) {
+      ++it;
+      continue;
+    }
+    it = publishers.erase(it);
+  }
+}
+
+/// The production predicate: a response topic with no subscriber in this domain or the bridged
+/// peer domain has lost its caller.
+inline bool response_topic_has_subscriber(const std::string & response_topic_name)
+{
+  return count_agnocast_subscribers_across_bridge(response_topic_name) > 0;
+}
+
+}  // namespace detail
 
 // Internal implementation - users should use agnocast::Service<ServiceT> instead.
 template <typename ServiceT>
@@ -56,6 +100,9 @@ private:
   const rclcpp::QoS qos_;
   std::mutex publishers_mtx_;
   std::unordered_map<std::string, typename ServiceResponsePublisher::SharedPtr> publishers_;
+  // Response topics with a borrowed-but-not-yet-sent response, by outstanding count. Guards them
+  // against pruning; see detail::prune_departed_response_publishers.
+  std::unordered_map<std::string, uint32_t> pending_responses_;
   typename ServiceRequestSubscriber::SharedPtr subscriber_;
 
   // One publisher per response topic, i.e. per caller. The topic name comes from the request:
@@ -68,6 +115,9 @@ private:
       std::lock_guard<std::mutex> lock(publishers_mtx_);
       auto it = publishers_.find(response_topic_name);
       if (it == publishers_.end()) {
+        detail::prune_departed_response_publishers(
+          publishers_, response_topic_name, pending_responses_,
+          detail::response_topic_has_subscriber);
         std::visit(
           [this, &pub, &response_topic_name](auto * node) {
             agnocast::PublisherOptions pub_options;
@@ -81,6 +131,21 @@ private:
       }
     }
     return pub;
+  }
+
+  void pin_pending_response(const std::string & response_topic_name)
+  {
+    std::lock_guard<std::mutex> lock(publishers_mtx_);
+    pending_responses_[response_topic_name]++;
+  }
+
+  void unpin_pending_response(const std::string & response_topic_name)
+  {
+    std::lock_guard<std::mutex> lock(publishers_mtx_);
+    auto it = pending_responses_.find(response_topic_name);
+    if (it != pending_responses_.end() && --it->second == 0) {
+      pending_responses_.erase(it);
+    }
   }
 
   template <typename Func>
@@ -198,6 +263,7 @@ public:
     auto internal_response = static_ipc_shared_ptr_cast<ResponseT>(std::move(response));
     auto publisher = get_or_create_publisher_for(internal_request->response_topic_name);
     publisher->publish(std::move(internal_response));
+    unpin_pending_response(internal_request->response_topic_name);
   }
 
   /**
@@ -216,6 +282,9 @@ public:
   {
     auto internal_request = static_ipc_shared_ptr_cast<RequestT>(request);
     auto publisher = get_or_create_publisher_for(internal_request->response_topic_name);
+    // Pin before borrowing: from here until send_response() the caller's publisher must stay the
+    // one the response was borrowed from, even if the caller disappears in the meantime.
+    pin_pending_response(internal_request->response_topic_name);
     ipc_shared_ptr<ResponseT> response = publisher->borrow_loaned_message();
     response->seqno = internal_request->seqno;
     return ipc_shared_ptr<typename ServiceT::Response>(std::move(response));
@@ -255,6 +324,9 @@ class GenericService : public std::enable_shared_from_this<GenericService>
   const rclcpp::QoS qos_;
   std::mutex publishers_mtx_;
   std::unordered_map<std::string, typename TypeErasedPublisher::SharedPtr> publishers_;
+  // Response topics with a borrowed-but-not-yet-sent response, by outstanding count. Guards them
+  // against pruning; see detail::prune_departed_response_publishers.
+  std::unordered_map<std::string, uint32_t> pending_responses_;
   typename Subscription<void>::SharedPtr subscriber_;
 
   std::shared_ptr<rcpputils::SharedLibrary> ts_lib_introspection_;
@@ -263,6 +335,8 @@ class GenericService : public std::enable_shared_from_this<GenericService>
 
   typename TypeErasedPublisher::SharedPtr get_or_create_publisher_for(
     const std::string & response_topic_name);
+  void pin_pending_response(const std::string & response_topic_name);
+  void unpin_pending_response(const std::string & response_topic_name);
 
   template <typename Func>
   auto wrap_basic_service_callback_for_subscriber(Func && callback)

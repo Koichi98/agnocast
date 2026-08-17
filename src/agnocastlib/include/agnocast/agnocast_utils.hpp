@@ -102,6 +102,13 @@ std::string create_service_response_topic_name(
 // because a rule may rename.
 std::optional<std::pair<uint32_t, std::string>> query_domain_rule(
   const std::string & topic_name, uint32_t domain_id);
+// Number of Agnocast subscribers on (topic_name, domain_id).
+uint32_t get_agnocast_sub_count(const std::string & topic_name, uint32_t domain_id);
+// Number of Agnocast subscribers on topic_name reachable from this process, counting the
+// bridged peer domain's as well. The kmod deliberately reports one domain at a time (it mirrors
+// ROS 2's get_subscription_count), so a caller that only asks about its own domain cannot see a
+// peer across a domain bridge at all.
+uint32_t count_agnocast_subscribers_across_bridge(const std::string & topic_name);
 uint64_t agnocast_get_timestamp();
 
 // Returns a pointer to the inner node handle that can be used for the TRACEPOINT macro.

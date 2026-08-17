@@ -4,10 +4,12 @@
 
 #include <sys/stat.h>
 
+#include <array>
 #include <cerrno>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <system_error>
 
 namespace agnocast
@@ -136,6 +138,38 @@ std::optional<std::pair<uint32_t, std::string>> query_domain_rule(
   if (!args.ret_found) return std::nullopt;
   return std::make_pair(
     args.ret_peer_domain, std::string(static_cast<const char *>(args.ret_peer_topic_name)));
+}
+
+uint32_t get_agnocast_sub_count(const std::string & topic_name, const uint32_t domain_id)
+{
+  auto topic_info_buffer = std::make_unique<std::array<topic_info_ret, MAX_TOPIC_INFO_RET_NUM>>();
+
+  ioctl_topic_info_args topic_info_args = {};
+  topic_info_args.topic_name = {topic_name.c_str(), topic_name.size()};
+  topic_info_args.topic_info_ret_buffer_addr =
+    reinterpret_cast<uint64_t>(topic_info_buffer->data());
+  topic_info_args.topic_info_ret_buffer_size = MAX_TOPIC_INFO_RET_NUM;
+  topic_info_args.domain_id = domain_id;
+  if (ioctl(agnocast_fd, AGNOCAST_GET_TOPIC_SUBSCRIBER_INFO_CMD, &topic_info_args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_GET_TOPIC_SUBSCRIBER_INFO_CMD failed: %s", strerror(errno));
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+
+  return topic_info_args.ret_topic_info_ret_num;
+}
+
+uint32_t count_agnocast_subscribers_across_bridge(const std::string & topic_name)
+{
+  const uint32_t own_domain = get_ros_domain_id();
+  uint32_t count = get_agnocast_sub_count(topic_name, own_domain);
+
+  const std::optional<std::pair<uint32_t, std::string>> peer =
+    query_domain_rule(topic_name, own_domain);
+  if (peer.has_value()) {
+    count += get_agnocast_sub_count(peer->second, peer->first);
+  }
+  return count;
 }
 
 uint64_t agnocast_get_timestamp()
