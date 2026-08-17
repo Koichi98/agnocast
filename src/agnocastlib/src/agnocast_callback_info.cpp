@@ -72,11 +72,11 @@ void receive_and_execute_message(
   // Process entries from oldest to newest (ioctl returns oldest first)
   for (const auto & entry : entries) {
     const auto & [entry_id, entry_addr] = entry;
-    const void * callback_addr = &entry;  // For CARET
+    [[maybe_unused]] const void * callback_addr = &entry;  // For CARET
 
     {
       constexpr uint8_t PID_SHIFT_BITS = 32;
-      uint64_t pid_callback_info_id =
+      [[maybe_unused]] uint64_t pid_callback_info_id =
         (static_cast<uint64_t>(my_pid) << PID_SHIFT_BITS) | callback_info_id;
       // NOTE: The agnocast_create_callable tracepoint was previously used to associate
       // pid_callback_info_id with callable_addr, as well as to associate callable with entry_addr

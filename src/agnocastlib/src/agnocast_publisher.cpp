@@ -238,7 +238,8 @@ TypeErasedPublisher::TypeErasedPublisher(
   rclcpp::Node * node, const std::string & topic_name, const std::string & topic_type,
   const rclcpp::QoS & qos, const agnocast::PublisherOptions & options, const PublisherRole role)
 {
-  const rclcpp::QoS actual_qos = this->init_base(node, topic_name, topic_type, qos, options, role);
+  [[maybe_unused]] const rclcpp::QoS actual_qos =
+    this->init_base(node, topic_name, topic_type, qos, options, role);
 
   TRACEPOINT(
     agnocast_publisher_init, static_cast<const void *>(this),
@@ -250,7 +251,8 @@ TypeErasedPublisher::TypeErasedPublisher(
   agnocast::Node * node, const std::string & topic_name, const std::string & topic_type,
   const rclcpp::QoS & qos, const agnocast::PublisherOptions & options, const PublisherRole role)
 {
-  const rclcpp::QoS actual_qos = this->init_base(node, topic_name, topic_type, qos, options, role);
+  [[maybe_unused]] const rclcpp::QoS actual_qos =
+    this->init_base(node, topic_name, topic_type, qos, options, role);
 
   TRACEPOINT(
     agnocast_publisher_init, static_cast<const void *>(this),
