@@ -8,6 +8,23 @@
 #include <cstdio>
 #include <cstring>
 
+namespace
+{
+// Open /dev/agnocast for the domain-bridge ioctls, or return -1 after printing why.
+int open_agnocast_device()
+{
+  int fd = open("/dev/agnocast", O_RDONLY);
+  if (fd < 0) {
+    if (errno == ENOENT) {
+      fprintf(stderr, "%s", AGNOCAST_DEVICE_NOT_FOUND_MSG);
+    } else {
+      perror("Failed to open /dev/agnocast");
+    }
+  }
+  return fd;
+}
+}  // namespace
+
 extern "C" {
 
 // Register a domain bridge rule with the kmod so it relays the topic from
@@ -25,15 +42,8 @@ int add_agnocast_domain_bridge_rule(
     return -1;
   }
 
-  int fd = open("/dev/agnocast", O_RDONLY);
-  if (fd < 0) {
-    if (errno == ENOENT) {
-      fprintf(stderr, "%s", AGNOCAST_DEVICE_NOT_FOUND_MSG);
-    } else {
-      perror("Failed to open /dev/agnocast");
-    }
-    return -1;
-  }
+  int fd = open_agnocast_device();
+  if (fd < 0) return -1;
 
   ioctl_add_domain_bridge_args args = {};
   args.topic_name_from = {topic_name_from, strlen(topic_name_from)};
@@ -43,6 +53,37 @@ int add_agnocast_domain_bridge_rule(
 
   if (ioctl(fd, AGNOCAST_ADD_DOMAIN_BRIDGE_CMD, &args) < 0) {
     perror("AGNOCAST_ADD_DOMAIN_BRIDGE_CMD failed");
+    close(fd);
+    return -1;
+  }
+
+  close(fd);
+  return 0;
+}
+
+// Register a prefix domain bridge rule: every topic whose name starts with
+// topic_name_prefix is relayed between from_domain and to_domain, paired with the
+// identical name in the other domain. For topic families whose full names only appear
+// at runtime, such as an Agnocast service's per-client response topics.
+// Returns 0 on success, -1 on failure.
+int add_agnocast_domain_bridge_prefix_rule(
+  const char * topic_name_prefix, uint32_t from_domain, uint32_t to_domain)
+{
+  if (topic_name_prefix == nullptr) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  int fd = open_agnocast_device();
+  if (fd < 0) return -1;
+
+  ioctl_add_domain_bridge_prefix_args args = {};
+  args.topic_name_prefix = {topic_name_prefix, strlen(topic_name_prefix)};
+  args.from_domain = from_domain;
+  args.to_domain = to_domain;
+
+  if (ioctl(fd, AGNOCAST_ADD_DOMAIN_BRIDGE_PREFIX_CMD, &args) < 0) {
+    perror("AGNOCAST_ADD_DOMAIN_BRIDGE_PREFIX_CMD failed");
     close(fd);
     return -1;
   }

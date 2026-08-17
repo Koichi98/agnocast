@@ -29,3 +29,33 @@ satisfies the same ordering works just as well.
 The tool is idempotent (the kmod folds duplicate rules) and exits non-zero if
 any rule is rejected, so a misordering — a node started first — fails loudly
 instead of silently leaving topics unbridged.
+
+## Services
+
+A `services:` entry has the same shape as a `topics:` one, with `from_domain`
+naming the side the **clients** are on and `to_domain` the side the **server** is
+on:
+
+```yaml
+from_domain: 2   # clients
+to_domain: 1     # server
+services:
+  "/srv/sum_int_array":
+    # remap: "/srv/renamed"   # optional; the name on the server's side
+```
+
+A service is not a kernel-module concept: Agnocast carries it over a request
+topic plus one response topic per client. One entry therefore registers **two**
+rules:
+
+| rule | name | direction |
+| --- | --- | --- |
+| request | `/AGNOCAST_SRV_REQUEST<svc>` | clients → server |
+| response | `/AGNOCAST_SRV_RESPONSE<svc>_SEP_` (a **prefix** rule) | server → clients |
+
+Each client appends its own node name and domain to the response topic, so those
+full names only exist at runtime and cannot be listed in the config; the prefix
+rule covers all of them with one entry, whatever clients turn up later. Under a
+`remap`, both response cells still use the **client-side** service name, because
+the client dictates the response topic name and the server publishes to whatever
+the request asked for.
