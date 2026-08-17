@@ -9,6 +9,8 @@
 #include <rmw/serialized_message.h>
 #include <sys/eventfd.h>
 
+#include <type_traits>
+
 namespace agnocast
 {
 
@@ -27,7 +29,8 @@ SubscriptionBase::SubscriptionBase(
 
 void SubscriptionBase::initialize(
   const rclcpp::QoS & qos, const bool is_take_sub, const bool ignore_local_publications,
-  SubscriptionRole role, const std::string & node_name, const std::string & type_name)
+  SubscriptionRole role, const std::string & node_name, const bool is_ros2_node,
+  const std::string & type_name)
 {
   // Announce to the per-IPC-namespace discovery agent before the kmod call so
   // the registry line is in place whenever a later snapshot sees the
@@ -58,6 +61,7 @@ void SubscriptionBase::initialize(
   add_subscriber_args.is_take_sub = is_take_sub;
   add_subscriber_args.ignore_local_publications = ignore_local_publications;
   add_subscriber_args.is_bridge = (role == SubscriptionRole::BridgeInternal);
+  add_subscriber_args.is_ros2_node = is_ros2_node;
   add_subscriber_args.eventfd = efd;
   if (ioctl(agnocast_fd, AGNOCAST_ADD_SUBSCRIBER_CMD, &add_subscriber_args) < 0) {
     RCLCPP_ERROR(logger, "AGNOCAST_ADD_SUBSCRIBER_CMD failed: %s", strerror(errno));
@@ -101,8 +105,11 @@ void SubscriptionBase::init_base(
   validate_subscription_qos(actual_qos_);
 
   const std::string node_name = node->get_fully_qualified_name();
+  // See the same constant in PublisherBase::init_base().
+  constexpr bool is_ros2_node = !std::is_same_v<NodeT, agnocast::Node>;
   initialize(
-    actual_qos_, is_take_sub, options.ignore_local_publications, role, node_name, type_name);
+    actual_qos_, is_take_sub, options.ignore_local_publications, role, node_name, is_ros2_node,
+    type_name);
 }
 
 template void SubscriptionBase::init_base<rclcpp::Node>(

@@ -1,4 +1,6 @@
 #include "agnocast/agnocast.hpp"
+#include "agnocast/agnocast_utils.hpp"
+#include "agnocast/internal/ros2_node_registry_reader.hpp"
 #include "agnocast/node/agnocast_node.hpp"
 #include "agnocast/node/node_interfaces/node_graph.hpp"
 
@@ -9,9 +11,13 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 
 using StringMsg = std_msgs::msg::String;
 
@@ -114,13 +120,14 @@ TEST_F(NodeGraphIntegrationTest, node_delegates_counting_to_the_node_graph_inter
 }
 
 // get_node_names() reports every node of this IPC namespace and ROS_DOMAIN_ID that owns an
-// agnocast endpoint, so the assertions below check for membership rather than for an exact list:
-// the kmod still holds the nodes registered by the tests that ran before this one.
+// agnocast endpoint, plus the caller itself, so the assertions below check for membership rather
+// than for an exact list: the kmod still holds the nodes registered by the tests that ran before
+// this one.
 TEST_F(NodeGraphIntegrationTest, get_node_names_includes_a_node_owning_a_publisher)
 {
   auto pub = node_->create_publisher<StringMsg>("/test_node_graph_names_pub", 1);
 
-  EXPECT_THAT(graph_->get_node_names(), ::testing::Contains("test_node_graph"));
+  EXPECT_THAT(graph_->get_node_names(), ::testing::Contains("/test_node_graph"));
 }
 
 TEST_F(NodeGraphIntegrationTest, get_node_names_includes_a_node_owning_only_a_subscription)
@@ -128,7 +135,7 @@ TEST_F(NodeGraphIntegrationTest, get_node_names_includes_a_node_owning_only_a_su
   auto sub = node_->create_subscription<StringMsg>(
     "/test_node_graph_names_sub", 1, [](const agnocast::ipc_shared_ptr<StringMsg> &) {});
 
-  EXPECT_THAT(graph_->get_node_names(), ::testing::Contains("test_node_graph"));
+  EXPECT_THAT(graph_->get_node_names(), ::testing::Contains("/test_node_graph"));
 }
 
 // A node is reported once even when it owns endpoints on several topics.
@@ -140,16 +147,100 @@ TEST_F(NodeGraphIntegrationTest, get_node_names_reports_a_node_once)
     "/test_node_graph_dedup_c", 1, [](const agnocast::ipc_shared_ptr<StringMsg> &) {});
 
   const auto names = graph_->get_node_names();
-  EXPECT_EQ(std::count(names.begin(), names.end(), "test_node_graph"), 1);
+  EXPECT_EQ(std::count(names.begin(), names.end(), "/test_node_graph"), 1);
 }
 
-// Only nodes owning an endpoint are visible; constructing a node registers nothing by itself.
-TEST_F(NodeGraphIntegrationTest, get_node_names_excludes_a_node_without_endpoints)
+// Another node that owns no endpoint is invisible: constructing one registers nothing anywhere.
+TEST_F(NodeGraphIntegrationTest, get_node_names_excludes_another_node_without_endpoints)
 {
   auto bare_node = std::make_shared<agnocast::Node>("test_node_graph_bare");
 
   EXPECT_THAT(
-    graph_->get_node_names(), ::testing::Not(::testing::Contains("test_node_graph_bare")));
+    graph_->get_node_names(), ::testing::Not(::testing::Contains("/test_node_graph_bare")));
+}
+
+// The caller is the exception to the rule above: rclcpp reports the node asking the question, so
+// the merge layer adds it whether or not the kmod has heard of it yet.
+TEST_F(NodeGraphIntegrationTest, get_node_names_includes_the_calling_node_without_endpoints)
+{
+  auto node = std::make_shared<agnocast::Node>("test_node_graph_caller", "/test_ns");
+  auto graph = node->get_node_graph_interface();
+
+  EXPECT_THAT(graph->get_node_names(), ::testing::Contains("/test_ns/test_node_graph_caller"));
+}
+
+// The DDS half of the graph comes from the discovery agent's tmpfs list, which the fixture writes
+// here in the agent's place: a real agent would need a DDS participant, which this process has no
+// reason to create.
+class NodeGraphRos2NodesTest : public NodeGraphIntegrationTest
+{
+protected:
+  void SetUp() override
+  {
+    NodeGraphIntegrationTest::SetUp();
+
+    char tmpl[] = "/tmp/agnocast_node_graph_test_XXXXXX";
+    const char * created = mkdtemp(tmpl);
+    ASSERT_NE(created, nullptr);
+    base_dir_ = created;
+    agnocast::internal::set_ros2_node_registry_base_dir_for_test(base_dir_);
+
+    // The reader looks the file up by the caller's own namespace and domain.
+    ns_dir_ = base_dir_ + "/" + std::to_string(agnocast::get_self_ipc_ns_inode());
+    std::filesystem::create_directories(ns_dir_);
+    path_ = ns_dir_ + "/" + std::to_string(agnocast::get_ros_domain_id());
+  }
+
+  void TearDown() override
+  {
+    std::error_code ec;
+    std::filesystem::remove_all(base_dir_, ec);
+    agnocast::internal::reset_ros2_node_registry_base_dir_for_test();
+    NodeGraphIntegrationTest::TearDown();
+  }
+
+  void write_ros2_node_list(const std::string & content) const
+  {
+    std::ofstream out(path_, std::ios::trunc);
+    ASSERT_TRUE(out.good());
+    out << content;
+  }
+
+  std::string base_dir_;
+  std::string ns_dir_;
+  std::string path_;
+};
+
+TEST_F(NodeGraphRos2NodesTest, get_node_names_includes_the_ros2_nodes_the_agent_reports)
+{
+  auto pub = node_->create_publisher<StringMsg>("/test_node_graph_with_ros2", 1);
+  write_ros2_node_list("/\ttest_node_graph_ros2_talker\n");
+
+  const auto names = graph_->get_node_names();
+
+  EXPECT_THAT(names, ::testing::Contains("/test_node_graph"));
+  EXPECT_THAT(names, ::testing::Contains("/test_node_graph_ros2_talker"));
+}
+
+// The point of splitting the graph by source: names that genuinely repeat are reported once per
+// node, the way rclcpp does it, instead of collapsing into a single entry.
+TEST_F(NodeGraphRos2NodesTest, get_node_names_keeps_duplicate_ros2_node_names)
+{
+  write_ros2_node_list("/\ttest_node_graph_ros2_twin\n/\ttest_node_graph_ros2_twin\n");
+
+  const auto names = graph_->get_node_names();
+
+  EXPECT_EQ(std::count(names.begin(), names.end(), "/test_node_graph_ros2_twin"), 2);
+}
+
+// An agnocast::Node has no participant, so the agent never reports it; it must not be dropped from
+// the kmod's side of the graph when an agent is present.
+TEST_F(NodeGraphRos2NodesTest, get_node_names_still_includes_agnocast_only_nodes)
+{
+  auto pub = node_->create_publisher<StringMsg>("/test_node_graph_agnocast_only", 1);
+  write_ros2_node_list("");
+
+  EXPECT_THAT(graph_->get_node_names(), ::testing::Contains("/test_node_graph"));
 }
 
 // agnocast has no graph events, but rclcpp calls these unconditionally, so they must not throw.

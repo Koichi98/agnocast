@@ -36,13 +36,14 @@ static int add_pubsub_pair(
   union ioctl_add_publisher_args add_publisher_args;
   int ret = agnocast_ioctl_add_publisher(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, pub_pid, qos_depth, QOS_IS_TRANSIENT_LOCAL,
-    IS_BRIDGE, &add_publisher_args);
+    IS_BRIDGE, false, &add_publisher_args);
   if (ret < 0) return ret;
 
   union ioctl_add_subscriber_args add_subscriber_args;
   return agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, sub_pid, qos_depth, QOS_IS_TRANSIENT_LOCAL,
-    QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, -1, &add_subscriber_args);
+    QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, false, -1,
+    &add_subscriber_args);
 }
 
 // A publisher and subscriber with the same topic name but different ROS_DOMAIN_ID
@@ -87,8 +88,8 @@ void test_case_add_subscriber_normal(struct kunit * test)
   // Act
   int ret = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
-    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, -1,
-    &add_subscriber_args);
+    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
+    false, -1, &add_subscriber_args);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -120,7 +121,7 @@ void test_case_add_subscriber_acquires_notify_context(struct kunit * test)
   int ret = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
     QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
-    eventfd, &add_subscriber_args);
+    false, eventfd, &add_subscriber_args);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -146,7 +147,7 @@ void test_case_add_subscriber_take_sub_acquires_no_notify_context(struct kunit *
   int ret = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
     QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, true /* is_take_sub */, IGNORE_LOCAL_PUBLICATIONS,
-    IS_BRIDGE, eventfd, &add_subscriber_args);
+    IS_BRIDGE, false, eventfd, &add_subscriber_args);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -170,7 +171,7 @@ void test_case_add_subscriber_invalid_eventfd(struct kunit * test)
   int ret = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
     QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
-    AGNOCAST_KUNIT_EVENTFD_BAD_FD, &add_subscriber_args);
+    false, AGNOCAST_KUNIT_EVENTFD_BAD_FD, &add_subscriber_args);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -EINVAL);
@@ -192,7 +193,7 @@ void test_case_add_subscriber_releases_notify_context_on_failure(struct kunit * 
     agnocast_ioctl_add_subscriber(
       TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
       QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
-      -1, &filler_args);
+      false, -1, &filler_args);
   }
   KUNIT_ASSERT_EQ(test, agnocast_kunit_eventfd_outstanding(), (int64_t)0);
 
@@ -202,7 +203,7 @@ void test_case_add_subscriber_releases_notify_context_on_failure(struct kunit * 
   int ret = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
     QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
-    eventfd, &add_subscriber_args);
+    false, eventfd, &add_subscriber_args);
 
   // Assert: the context was taken on the way in and released on the way out.
   KUNIT_EXPECT_EQ(test, ret, -ENOBUFS);
@@ -225,14 +226,14 @@ void test_case_add_subscriber_too_many_subscribers(struct kunit * test)
     agnocast_ioctl_add_subscriber(
       TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
       QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
-      -1, &add_subscriber_args);
+      false, -1, &add_subscriber_args);
   }
 
   // Act
   int ret = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
-    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, -1,
-    &add_subscriber_args);
+    QOS_IS_TRANSIENT_LOCAL, QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE,
+    false, -1, &add_subscriber_args);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -ENOBUFS);

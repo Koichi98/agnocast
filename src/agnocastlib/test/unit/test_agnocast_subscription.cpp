@@ -18,7 +18,7 @@ namespace agnocast
 // resolves the QoS, still runs for real and calls this with its result. id_ is left at -1 so
 // ~SubscriptionBase() issues no ioctl either.
 void SubscriptionBase::initialize(
-  const rclcpp::QoS &, const bool, const bool, SubscriptionRole, const std::string &,
+  const rclcpp::QoS &, const bool, const bool, SubscriptionRole, const std::string &, const bool,
   const std::string &)
 {
 }

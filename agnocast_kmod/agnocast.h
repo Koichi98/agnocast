@@ -43,6 +43,12 @@ union ioctl_get_node_names_args {
     uint64_t node_name_buffer_addr;
     // Capacity of the buffer above, in bytes.
     uint32_t node_name_buffer_size;
+    // Skip the nodes that DDS also announces (see ioctl_add_subscriber_args::is_ros2_node), so the
+    // caller can concatenate this result with the discovery agent's DDS-side list without having
+    // to deduplicate the overlap by name -- which would also collapse the nodes that genuinely
+    // share a name. Pass false to get every Agnocast node instead, which is what a caller without
+    // a DDS-side list wants.
+    bool exclude_ros2_nodes;
   };
   uint32_t ret_node_num;
 };
@@ -74,6 +80,11 @@ union ioctl_add_subscriber_args {
     bool is_take_sub;
     bool ignore_local_publications;
     bool is_bridge;
+    // True when the owning node is an rclcpp::Node, i.e. it is announced in the DDS graph as well.
+    // False for a standalone agnocast::Node, which no DDS participant ever sees. get_node_names
+    // uses this to split the graph between its two sources: the DDS-visible nodes come from the
+    // discovery agent, the rest from here.
+    bool is_ros2_node;
     int32_t eventfd;  // eventfd created by userspace, passed to the kernel for publish notification
   };
   struct
@@ -90,6 +101,8 @@ union ioctl_add_publisher_args {
     uint32_t qos_depth;
     bool qos_is_transient_local;
     bool is_bridge;
+    // See ioctl_add_subscriber_args::is_ros2_node.
+    bool is_ros2_node;
   };
   struct
   {
@@ -429,12 +442,13 @@ int agnocast_ioctl_add_subscriber(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const char * node_name,
   const pid_t subscriber_pid, const uint32_t qos_depth, const bool qos_is_transient_local,
   const bool qos_is_reliable, const bool is_take_sub, const bool ignore_local_publications,
-  const bool is_bridge, const int32_t eventfd, union ioctl_add_subscriber_args * ioctl_ret);
+  const bool is_bridge, const bool is_ros2_node, const int32_t eventfd,
+  union ioctl_add_subscriber_args * ioctl_ret);
 
 int agnocast_ioctl_add_publisher(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const char * node_name,
   const pid_t publisher_pid, const uint32_t qos_depth, const bool qos_is_transient_local,
-  const bool is_bridge, union ioctl_add_publisher_args * ioctl_ret);
+  const bool is_bridge, const bool is_ros2_node, union ioctl_add_publisher_args * ioctl_ret);
 
 int agnocast_ioctl_release_message_entry_reference(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const topic_local_id_t pubsub_id,
@@ -475,8 +489,8 @@ int agnocast_ioctl_get_topic_list(
 // `ret_used` receives the number of bytes written and `ret_node_num` the number of names.
 // Returns -ENOBUFS if the names do not fit in `buf` or exceed MAX_NODE_NUM.
 int agnocast_ioctl_get_node_names(
-  const struct ipc_namespace * ipc_ns, const uint32_t domain_id, char * buf, const size_t buf_size,
-  size_t * ret_used, uint32_t * ret_node_num);
+  const struct ipc_namespace * ipc_ns, const uint32_t domain_id, const bool exclude_ros2_nodes,
+  char * buf, const size_t buf_size, size_t * ret_used, uint32_t * ret_node_num);
 
 int agnocast_ioctl_get_subscriber_qos(
   const char * topic_name, const struct ipc_namespace * ipc_ns,

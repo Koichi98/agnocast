@@ -36,7 +36,7 @@ void test_case_get_topic_pub_info_one_publisher(struct kunit * test)
   setup_process(test, PID);
 
   ret = agnocast_ioctl_add_publisher(
-    TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, PID, QOS_DEPTH, false, IS_BRIDGE,
+    TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, PID, QOS_DEPTH, false, IS_BRIDGE, false,
     &add_pub_args);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
@@ -60,7 +60,7 @@ void test_case_get_topic_pub_info_no_publishers(struct kunit * test)
 
   ret = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, PID, QOS_DEPTH, false, false, false, false,
-    IS_BRIDGE, -1, &add_sub_args);
+    IS_BRIDGE, false, -1, &add_sub_args);
   KUNIT_ASSERT_EQ(test, ret, 0);
 
   topic_info_args.topic_info_ret_buffer_size = MAX_PUBLISHER_NUM;
@@ -92,7 +92,7 @@ void test_case_get_topic_pub_info_selects_by_domain(struct kunit * test)
 
   setup_process_domain(test, pid_d1, 1);
   ret = agnocast_ioctl_add_publisher(
-    TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, pid_d1, QOS_DEPTH, false, IS_BRIDGE,
+    TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, pid_d1, QOS_DEPTH, false, IS_BRIDGE, false,
     &add_pub_args);
   KUNIT_ASSERT_EQ(test, ret, 0);
 

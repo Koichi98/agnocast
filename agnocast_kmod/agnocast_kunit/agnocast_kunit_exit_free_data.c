@@ -29,7 +29,7 @@ static void setup_one_subscriber(struct kunit * test, const pid_t pid, const int
   union ioctl_add_subscriber_args add_subscriber_args;
   int ret = agnocast_ioctl_add_subscriber(
     TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, pid, QOS_DEPTH, QOS_IS_TRANSIENT_LOCAL,
-    QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, eventfd,
+    QOS_IS_RELIABLE, IS_TAKE_SUB, IGNORE_LOCAL_PUBLICATIONS, IS_BRIDGE, false, eventfd,
     &add_subscriber_args);
 
   KUNIT_ASSERT_EQ(test, ret, 0);

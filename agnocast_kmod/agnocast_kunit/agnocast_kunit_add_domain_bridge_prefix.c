@@ -24,7 +24,7 @@ static void add_publisher_named(struct kunit * test, const pid_t pid, const char
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_publisher(
-      topic_name, current->nsproxy->ipc_ns, "/kunit_node", pid, 1, false, false, &args),
+      topic_name, current->nsproxy->ipc_ns, "/kunit_node", pid, 1, false, false, false, &args),
     0);
 }
 

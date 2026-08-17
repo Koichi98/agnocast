@@ -31,7 +31,7 @@ static topic_local_id_t add_subscriber_with_eventfd(
     test,
     agnocast_ioctl_add_subscriber(
       topic_name, current->nsproxy->ipc_ns, node_name, pid, qos_depth, qos_is_transient_local,
-      qos_is_reliable, is_take_sub, ignore_local_publications, sub_is_bridge, eventfd,
+      qos_is_reliable, is_take_sub, ignore_local_publications, sub_is_bridge, false, eventfd,
       &add_subscriber_args),
     0);
   return add_subscriber_args.ret_id;
@@ -84,7 +84,7 @@ static void setup_publisher_in_domain(
     test,
     agnocast_ioctl_add_publisher(
       topic_name, current->nsproxy->ipc_ns, node_name, pid, qos_depth, qos_is_transient_local,
-      pub_is_bridge, &add_publisher_args),
+      pub_is_bridge, false, &add_publisher_args),
     0);
   *publisher_id = add_publisher_args.ret_id;
 }
@@ -452,7 +452,7 @@ void test_case_publish_msg_does_not_signal_take_sub(struct kunit * test)
     test,
     agnocast_ioctl_add_subscriber(
       topic_name, current->nsproxy->ipc_ns, node_name, subscriber_pid, qos_depth,
-      qos_is_transient_local, qos_is_reliable, true /* is_take_sub */, false, is_bridge,
+      qos_is_transient_local, qos_is_reliable, true /* is_take_sub */, false, is_bridge, false,
       take_eventfd, &take_sub_args),
     0);
   add_subscriber_with_eventfd(test, subscriber_pid, notify_eventfd, false, is_bridge);

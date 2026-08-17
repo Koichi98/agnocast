@@ -323,7 +323,7 @@ static int insert_subscriber_info(
   struct topic_wrapper * wrapper, const char * node_name, const pid_t subscriber_pid,
   const uint32_t qos_depth, const bool qos_is_transient_local, const bool qos_is_reliable,
   const bool is_take_sub, bool ignore_local_publications, const bool is_bridge,
-  struct eventfd_ctx * notify_ctx, struct subscriber_info ** new_info)
+  const bool is_ros2_node, struct eventfd_ctx * notify_ctx, struct subscriber_info ** new_info)
 {
   // rebuild_notify_list() skips take subs by testing notify_ctx alone, so the two must agree.
   WARN_ON_ONCE(is_take_sub != (notify_ctx == NULL));
@@ -391,6 +391,7 @@ static int insert_subscriber_info(
   (*new_info)->ignore_local_publications = ignore_local_publications;
   (*new_info)->need_mmap_update = true;
   (*new_info)->is_bridge = is_bridge;
+  (*new_info)->is_ros2_node = is_ros2_node;
   (*new_info)->notify_ctx = notify_ctx;
   INIT_HLIST_NODE(&(*new_info)->node);
   uint32_t hash_val = hash_min(new_id, SUB_INFO_HASH_BITS);
@@ -444,7 +445,7 @@ static struct publisher_info * find_publisher_info(
 static int insert_publisher_info(
   struct topic_wrapper * wrapper, const char * node_name, const pid_t publisher_pid,
   const uint32_t qos_depth, const bool qos_is_transient_local, const bool is_bridge,
-  struct publisher_info ** new_info)
+  const bool is_ros2_node, struct publisher_info ** new_info)
 {
   int count = agnocast_get_size_pub_info_htable(wrapper);
   if (count == MAX_PUBLISHER_NUM) {
@@ -489,6 +490,7 @@ static int insert_publisher_info(
   (*new_info)->qos_is_transient_local = qos_is_transient_local;
   (*new_info)->entries_num = 0;
   (*new_info)->is_bridge = is_bridge;
+  (*new_info)->is_ros2_node = is_ros2_node;
   (*new_info)->notify_ctxs = NULL;
   (*new_info)->notify_num = 0;
   (*new_info)->notify_capacity = 0;
@@ -863,7 +865,8 @@ int agnocast_ioctl_add_subscriber(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const char * node_name,
   const pid_t subscriber_pid, const uint32_t qos_depth, const bool qos_is_transient_local,
   const bool qos_is_reliable, const bool is_take_sub, const bool ignore_local_publications,
-  const bool is_bridge, const int32_t eventfd, union ioctl_add_subscriber_args * ioctl_ret)
+  const bool is_bridge, const bool is_ros2_node, const int32_t eventfd,
+  union ioctl_add_subscriber_args * ioctl_ret)
 {
   int ret;
   struct eventfd_ctx * notify_ctx = NULL;
@@ -887,7 +890,7 @@ int agnocast_ioctl_add_subscriber(
   struct subscriber_info * sub_info;
   ret = insert_subscriber_info(
     wrapper, node_name, subscriber_pid, qos_depth, qos_is_transient_local, qos_is_reliable,
-    is_take_sub, ignore_local_publications, is_bridge, notify_ctx, &sub_info);
+    is_take_sub, ignore_local_publications, is_bridge, is_ros2_node, notify_ctx, &sub_info);
   if (ret < 0) {
     goto unlock;
   }
@@ -905,7 +908,7 @@ unlock:
 int agnocast_ioctl_add_publisher(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const char * node_name,
   const pid_t publisher_pid, const uint32_t qos_depth, const bool qos_is_transient_local,
-  const bool is_bridge, union ioctl_add_publisher_args * ioctl_ret)
+  const bool is_bridge, const bool is_ros2_node, union ioctl_add_publisher_args * ioctl_ret)
 {
   int ret;
 
@@ -919,7 +922,8 @@ int agnocast_ioctl_add_publisher(
 
   struct publisher_info * pub_info;
   ret = insert_publisher_info(
-    wrapper, node_name, publisher_pid, qos_depth, qos_is_transient_local, is_bridge, &pub_info);
+    wrapper, node_name, publisher_pid, qos_depth, qos_is_transient_local, is_bridge, is_ros2_node,
+    &pub_info);
   if (ret < 0) {
     goto unlock;
   }
@@ -1676,41 +1680,70 @@ unlock:
   return ret;
 }
 
-// Open-addressing set used to deduplicate node names while the read lock is held.
-// Slots hold `offset + 1` into the packed name buffer, so 0 means empty. Sized well above
-// MAX_NODE_NUM so that probing always terminates on a free slot.
+// Open-addressing set used to deduplicate the collected nodes while the read lock is held.
+// Slots hold `entry index + 1` into `entries`, so 0 means empty. Sized well above MAX_NODE_NUM so
+// that probing always terminates on a free slot.
 #define NODE_NAME_SLOT_BITS 11
 #define NODE_NAME_SLOT_NUM (1u << NODE_NAME_SLOT_BITS)
 
-// Appends `name` to the packed buffer unless it is already there. Performs no allocation and
-// nothing that can sleep, because it runs under global_htables_rwsem.
-static int add_unique_name(
-  const char * name, uint32_t * slots, char * buf, const size_t buf_size, size_t * used,
-  uint32_t * num)
+// One collected node: where its name sits in the packed buffer, plus the pid that owns it.
+struct collected_node
+{
+  uint32_t name_offset;
+  pid_t pid;
+};
+
+// Scratch space for one get_node_names call. Allocated before the lock is taken, because
+// allocation can sleep.
+struct node_name_collector
+{
+  uint32_t * slots;
+  struct collected_node * entries;
+  char * buf;
+  size_t buf_size;
+  size_t used;
+  uint32_t num;
+};
+
+// Appends `name` to the packed buffer unless (pid, name) was already collected. Performs no
+// allocation and nothing that can sleep, because it runs under global_htables_rwsem.
+//
+// The dedup key is (pid, name) rather than the name alone: one node registers the same name once
+// per endpoint it owns, which must collapse, while two same-named nodes in different processes are
+// distinct nodes that rclcpp would report twice. Two same-named nodes inside one process still
+// collapse -- ROS 2 cannot tell those apart either, since a node carries no identity of its own
+// beyond its participant (see docs/agnocast_node_interface_comparison.md).
+static int add_unique_node(struct node_name_collector * col, const char * name, const pid_t pid)
 {
   const size_t len = strlen(name) + 1;
   uint32_t idx = full_name_hash(NULL, name, len - 1) & (NODE_NAME_SLOT_NUM - 1);
 
-  while (slots[idx] != 0) {
-    if (strcmp(&buf[slots[idx] - 1], name) == 0) return 0;  // already collected
+  while (col->slots[idx] != 0) {
+    const struct collected_node * entry = &col->entries[col->slots[idx] - 1];
+    if (entry->pid == pid && strcmp(&col->buf[entry->name_offset], name) == 0) {
+      return 0;  // already collected
+    }
     idx = (idx + 1) & (NODE_NAME_SLOT_NUM - 1);
   }
 
-  if (*num >= MAX_NODE_NUM) {
+  if (col->num >= MAX_NODE_NUM) {
     dev_warn(agnocast_device, "Node count exceeds limit: MAX_NODE_NUM=%d\n", MAX_NODE_NUM);
     return -ENOBUFS;
   }
 
-  if (*used + len > buf_size) {
+  if (col->used + len > col->buf_size) {
     dev_warn(
-      agnocast_device, "Node names exceed the given buffer: node_name_buffer_size=%zu\n", buf_size);
+      agnocast_device, "Node names exceed the given buffer: node_name_buffer_size=%zu\n",
+      col->buf_size);
     return -ENOBUFS;
   }
 
-  memcpy(buf + *used, name, len);
-  slots[idx] = (uint32_t)(*used + 1);
-  *used += len;
-  (*num)++;
+  memcpy(col->buf + col->used, name, len);
+  col->entries[col->num].name_offset = (uint32_t)col->used;
+  col->entries[col->num].pid = pid;
+  col->slots[idx] = col->num + 1;
+  col->used += len;
+  col->num++;
   return 0;
 }
 
@@ -1719,10 +1752,10 @@ static int add_unique_name(
 // waiting add/remove endpoint. Names are packed into a kernel buffer here and handed to
 // user-space by the caller after the lock is dropped.
 
-// Collects the node names owned by one topic. Caller holds global_htables_rwsem.
+// Collects the nodes owning an endpoint of one topic. Caller holds global_htables_rwsem.
 static int collect_node_names_of_topic(
-  struct topic_wrapper * wrapper, const uint32_t domain_id, uint32_t * slots, char * buf,
-  const size_t buf_size, size_t * used, uint32_t * num)
+  struct topic_wrapper * wrapper, const uint32_t domain_id, const bool exclude_ros2_nodes,
+  struct node_name_collector * col)
 {
   int ret = 0;
 
@@ -1733,8 +1766,9 @@ static int collect_node_names_of_topic(
   hash_for_each(wrapper->topic->pub_info_htable, bkt_pub_info, pub_info, node)
   {
     if (pub_info->domain_id != domain_id || pub_info->is_bridge) continue;
+    if (exclude_ros2_nodes && pub_info->is_ros2_node) continue;
 
-    ret = add_unique_name(pub_info->node_name, slots, buf, buf_size, used, num);
+    ret = add_unique_node(col, pub_info->node_name, pub_info->pid);
     if (ret) goto unlock;
   }
 
@@ -1743,8 +1777,9 @@ static int collect_node_names_of_topic(
   hash_for_each(wrapper->topic->sub_info_htable, bkt_sub_info, sub_info, node)
   {
     if (sub_info->domain_id != domain_id || sub_info->is_bridge) continue;
+    if (exclude_ros2_nodes && sub_info->is_ros2_node) continue;
 
-    ret = add_unique_name(sub_info->node_name, slots, buf, buf_size, used, num);
+    ret = add_unique_node(col, sub_info->node_name, sub_info->pid);
     if (ret) goto unlock;
   }
 
@@ -1754,15 +1789,19 @@ unlock:
 }
 
 int agnocast_ioctl_get_node_names(
-  const struct ipc_namespace * ipc_ns, const uint32_t domain_id, char * buf, const size_t buf_size,
-  size_t * ret_used, uint32_t * ret_node_num)
+  const struct ipc_namespace * ipc_ns, const uint32_t domain_id, const bool exclude_ros2_nodes,
+  char * buf, const size_t buf_size, size_t * ret_used, uint32_t * ret_node_num)
 {
   int ret = 0;
-  size_t used = 0;
-  uint32_t num = 0;
+  struct node_name_collector col = {.buf = buf, .buf_size = buf_size};
 
-  uint32_t * slots = kvcalloc(NODE_NAME_SLOT_NUM, sizeof(*slots), GFP_KERNEL);
-  if (!slots) return -ENOMEM;
+  col.slots = kvcalloc(NODE_NAME_SLOT_NUM, sizeof(*col.slots), GFP_KERNEL);
+  if (!col.slots) return -ENOMEM;
+  col.entries = kvcalloc(MAX_NODE_NUM, sizeof(*col.entries), GFP_KERNEL);
+  if (!col.entries) {
+    kvfree(col.slots);
+    return -ENOMEM;
+  }
 
   down_read(&global_htables_rwsem);
 
@@ -1776,16 +1815,17 @@ int agnocast_ioctl_get_node_names(
       continue;
     }
 
-    ret = collect_node_names_of_topic(wrapper, domain_id, slots, buf, buf_size, &used, &num);
+    ret = collect_node_names_of_topic(wrapper, domain_id, exclude_ros2_nodes, &col);
     if (ret) goto unlock;
   }
 
-  *ret_used = used;
-  *ret_node_num = num;
+  *ret_used = col.used;
+  *ret_node_num = col.num;
 
 unlock:
   up_read(&global_htables_rwsem);
-  kvfree(slots);
+  kvfree(col.entries);
+  kvfree(col.slots);
   return ret;
 }
 
@@ -2961,7 +3001,7 @@ static long add_subscriber_cmd(union ioctl_add_subscriber_args __user * arg)
   ret = agnocast_ioctl_add_subscriber(
     topic_name_buf, ipc_ns, node_name_buf, pid, sub_args.qos_depth, sub_args.qos_is_transient_local,
     sub_args.qos_is_reliable, sub_args.is_take_sub, sub_args.ignore_local_publications,
-    sub_args.is_bridge, sub_args.eventfd, &sub_args);
+    sub_args.is_bridge, sub_args.is_ros2_node, sub_args.eventfd, &sub_args);
   if (ret == 0) {
     if (copy_to_user(arg, &sub_args, sizeof(sub_args))) return -EFAULT;
   }
@@ -2987,7 +3027,7 @@ static long add_publisher_cmd(union ioctl_add_publisher_args __user * arg)
 
   ret = agnocast_ioctl_add_publisher(
     topic_name_buf, ipc_ns, node_name_buf, pid, pub_args.qos_depth, pub_args.qos_is_transient_local,
-    pub_args.is_bridge, &pub_args);
+    pub_args.is_bridge, pub_args.is_ros2_node, &pub_args);
   if (ret == 0) {
     if (copy_to_user(arg, &pub_args, sizeof(pub_args))) return -EFAULT;
   }
@@ -3215,6 +3255,8 @@ static long get_node_names_cmd(union ioctl_get_node_names_args __user * arg)
     (size_t)MAX_NODE_NUM * NODE_NAME_BUFFER_SIZE);
   char __user * user_buf =
     (char __user *)u64_to_user_ptr(get_node_names_args.node_name_buffer_addr);
+  // Read before ret_node_num is written below: the input and output structs share storage.
+  const bool exclude_ros2_nodes = get_node_names_args.exclude_ros2_nodes;
 
   // Staged in kernel memory so that the node names can be collected without doing copy_to_user
   // while holding global_htables_rwsem.
@@ -3223,8 +3265,8 @@ static long get_node_names_cmd(union ioctl_get_node_names_args __user * arg)
 
   size_t used = 0;
   uint32_t node_num = 0;
-  long ret =
-    agnocast_ioctl_get_node_names(ipc_ns, get_current_domain_id(), buf, buf_size, &used, &node_num);
+  long ret = agnocast_ioctl_get_node_names(
+    ipc_ns, get_current_domain_id(), exclude_ros2_nodes, buf, buf_size, &used, &node_num);
   if (ret == 0) {
     if (copy_to_user(user_buf, buf, used)) {
       ret = -EFAULT;

@@ -108,6 +108,8 @@ struct publisher_info
   bool qos_is_transient_local;
   uint32_t entries_num;
   bool is_bridge;
+  // See ioctl_add_subscriber_args::is_ros2_node.
+  bool is_ros2_node;
   // The eventfd contexts PUBLISH signals, in no particular order. Membership depends only on the
   // endpoints, never on the message, so the list is built as endpoints register and publish only
   // reads it.
@@ -141,6 +143,8 @@ struct subscriber_info
   bool ignore_local_publications;
   bool need_mmap_update;
   bool is_bridge;
+  // See ioctl_add_subscriber_args::is_ros2_node.
+  bool is_ros2_node;
   struct eventfd_ctx * notify_ctx;  // eventfd for publish notifications (NULL for take_sub)
   struct hlist_node node;
 };

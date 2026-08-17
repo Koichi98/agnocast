@@ -41,6 +41,7 @@ from ros2agnocast_discovery_msgs.msg import (
 )
 
 from . import bridge_decider
+from .ros2_node_registry import Ros2NodeRegistryWriter
 from .type_registry import TypeRegistryReader
 
 
@@ -352,6 +353,10 @@ class DiscoveryAgent(Node):
         self._clock = Clock(clock_type=ClockType.SYSTEM_TIME)
         self._registry = registry if registry is not None else TypeRegistryReader(
             self._ipc_ns_inode, logger=self.get_logger())
+        # Publishes what DDS knows to the Agnocast-only processes, which have no participant of
+        # their own to ask (see ros2_node_registry).
+        self._ros2_node_registry = Ros2NodeRegistryWriter(
+            self._ipc_ns_inode, self._domain_id, logger=self.get_logger())
 
         qos = _gossip_qos()
         self._pub = self.create_publisher(AgnocastDaemonState, GOSSIP_TOPIC, qos)
@@ -375,11 +380,21 @@ class DiscoveryAgent(Node):
     def _on_tick(self) -> None:
         self._registry.rebuild()
         self._registry.cleanup_dead_pids()
+        self._publish_ros2_node_names()
         self._prune_stale_remote_states()
         snapshot = self.publish_snapshot()
         self._dispatch_bridge_requests(snapshot)
         if self._exit_when_idle:
             self._maybe_exit_when_idle()
+
+    def _publish_ros2_node_names(self) -> None:
+        """Write the DDS node list this participant sees to tmpfs.
+
+        ``get_node_names_and_namespaces()`` includes this agent's own node, matching what
+        ``ros2 node list`` shows; ``NodeGraph::get_node_names()`` is documented to mirror rclcpp,
+        which does not hide it either.
+        """
+        self._ros2_node_registry.write(self.get_node_names_and_namespaces())
 
     def _maybe_exit_when_idle(self) -> None:
         """Exit once this (IPC NS, domain) has had no Agnocast node for the grace period.
@@ -451,6 +466,10 @@ class DiscoveryAgent(Node):
         received_at = self._clock.now().nanoseconds / 1e9
         self._remote_states[(msg.host_uuid, msg.ipc_ns_inode)] = (msg, received_at)
 
+    def cleanup_ros2_node_registry(self) -> None:
+        """Drop this agent's DDS node list on shutdown."""
+        self._ros2_node_registry.cleanup()
+
     @property
     def remote_states(self) -> dict:
         """Map of ``(host_uuid, ipc_ns_inode)`` to ``(msg, received_at_sec)``."""
@@ -498,6 +517,8 @@ def main(argv=None) -> int:
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        # Before destroy_node(), so the list never outlives the participant that vouched for it.
+        node.cleanup_ros2_node_registry()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

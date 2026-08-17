@@ -14,6 +14,7 @@
 #include <sys/types.h>
 
 #include <new>
+#include <type_traits>
 
 namespace agnocast
 {
@@ -52,7 +53,7 @@ void decrement_borrowed_publisher_num()
 
 topic_local_id_t initialize_publisher(
   const std::string & topic_name, const std::string & node_name, const rclcpp::QoS & qos,
-  const bool is_bridge, const std::string & type_name)
+  const bool is_bridge, const bool is_ros2_node, const std::string & type_name)
 {
   validate_ld_preload();
 
@@ -69,6 +70,7 @@ topic_local_id_t initialize_publisher(
   pub_args.qos_depth = qos.depth();
   pub_args.qos_is_transient_local = qos.durability() == rclcpp::DurabilityPolicy::TransientLocal;
   pub_args.is_bridge = is_bridge;
+  pub_args.is_ros2_node = is_ros2_node;
   if (ioctl(agnocast_fd, AGNOCAST_ADD_PUBLISHER_CMD, &pub_args) < 0) {
     RCLCPP_ERROR(logger, "AGNOCAST_ADD_PUBLISHER_CMD failed: %s", strerror(errno));
     close(agnocast_fd);
@@ -161,7 +163,12 @@ void PublisherBase::init_base(
 
   const bool is_bridge = (role == PublisherRole::BridgeInternal);
   const std::string node_name = node->get_fully_qualified_name();
-  id_ = initialize_publisher(topic_name_, node_name, actual_qos_, is_bridge, type_name);
+  // An agnocast::Node exists only inside this process, so nothing announces it to DDS; every other
+  // node type is an rclcpp::Node, which always creates a participant. NodeGraph::get_node_names()
+  // relies on this to tell which half of the graph a node belongs to.
+  constexpr bool is_ros2_node = !std::is_same_v<NodeT, agnocast::Node>;
+  id_ =
+    initialize_publisher(topic_name_, node_name, actual_qos_, is_bridge, is_ros2_node, type_name);
   generate_gid();
 
   if (role == PublisherRole::Default) {

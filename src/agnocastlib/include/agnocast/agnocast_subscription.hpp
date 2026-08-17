@@ -105,7 +105,8 @@ protected:
   rclcpp::QoS actual_qos_{1};
   void initialize(
     const rclcpp::QoS & qos, const bool is_take_sub, const bool ignore_local_publications,
-    SubscriptionRole role, const std::string & node_name, const std::string & type_name);
+    SubscriptionRole role, const std::string & node_name, const bool is_ros2_node,
+    const std::string & type_name);
 
   template <typename NodeT>
   void init_base(

@@ -24,8 +24,8 @@ static void setup_one_subscriber(struct kunit * test, char * topic_name)
   union ioctl_add_subscriber_args add_subscriber_args;
   int ret2 = agnocast_ioctl_add_subscriber(
     topic_name, current->nsproxy->ipc_ns, node_name, subscriber_pid, qos_depth,
-    qos_is_transient_local, qos_is_reliable, is_take_sub, ignore_local_publications, is_bridge, -1,
-    &add_subscriber_args);
+    qos_is_transient_local, qos_is_reliable, is_take_sub, ignore_local_publications, is_bridge,
+    false, -1, &add_subscriber_args);
 
   KUNIT_ASSERT_EQ(test, ret1, 0);
   KUNIT_ASSERT_EQ(test, ret2, 0);
@@ -42,7 +42,7 @@ static void setup_one_publisher(struct kunit * test, char * topic_name)
   union ioctl_add_publisher_args add_publisher_args;
   int ret2 = agnocast_ioctl_add_publisher(
     topic_name, current->nsproxy->ipc_ns, node_name, publisher_pid, qos_depth,
-    qos_is_transient_local, is_bridge, &add_publisher_args);
+    qos_is_transient_local, is_bridge, false, &add_publisher_args);
 
   KUNIT_ASSERT_EQ(test, ret1, 0);
   KUNIT_ASSERT_EQ(test, ret2, 0);
@@ -59,7 +59,7 @@ static void setup_one_publisher_with_bridge(struct kunit * test, char * topic_na
   union ioctl_add_publisher_args add_publisher_args;
   int ret2 = agnocast_ioctl_add_publisher(
     topic_name, current->nsproxy->ipc_ns, node_name, publisher_pid, qos_depth,
-    qos_is_transient_local, true, &add_publisher_args);
+    qos_is_transient_local, true, false, &add_publisher_args);
 
   KUNIT_ASSERT_EQ(test, ret1, 0);
   KUNIT_ASSERT_EQ(test, ret2, 0);
@@ -190,8 +190,8 @@ void test_case_get_publisher_num_a2r_bridge_exist(struct kunit * test)
   union ioctl_add_subscriber_args add_subscriber_args;
   int ret2 = agnocast_ioctl_add_subscriber(
     topic_name, current->nsproxy->ipc_ns, node_name, subscriber_pid, qos_depth,
-    qos_is_transient_local, qos_is_reliable, is_take_sub, ignore_local_publications, true, -1,
-    &add_subscriber_args);
+    qos_is_transient_local, qos_is_reliable, is_take_sub, ignore_local_publications, true, false,
+    -1, &add_subscriber_args);
   KUNIT_ASSERT_EQ(test, ret2, 0);
 
   union ioctl_get_publisher_num_args publisher_num_args;

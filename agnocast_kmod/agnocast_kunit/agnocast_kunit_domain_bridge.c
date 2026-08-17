@@ -40,7 +40,7 @@ static topic_local_id_t add_publisher_named(
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_publisher(
-      topic_name, current->nsproxy->ipc_ns, "/kunit_node", pid, 1, false, false, &args),
+      topic_name, current->nsproxy->ipc_ns, "/kunit_node", pid, 1, false, false, false, &args),
     0);
   return args.ret_id;
 }
@@ -58,7 +58,7 @@ static topic_local_id_t add_subscriber_named(
     test,
     agnocast_ioctl_add_subscriber(
       topic_name, current->nsproxy->ipc_ns, "/kunit_node", pid, 1, false, true, false, false, false,
-      -1, &args),
+      false, -1, &args),
     0);
   return args.ret_id;
 }
@@ -79,7 +79,7 @@ static topic_local_id_t add_subscriber_named_with_eventfd(
     test,
     agnocast_ioctl_add_subscriber(
       topic_name, current->nsproxy->ipc_ns, "/kunit_node", pid, 1, false, true, false, false, false,
-      eventfd, &args),
+      false, eventfd, &args),
     0);
   return args.ret_id;
 }
