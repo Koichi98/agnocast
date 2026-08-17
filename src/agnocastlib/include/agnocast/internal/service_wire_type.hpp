@@ -1,10 +1,10 @@
 // On-the-wire layout of Agnocast service request/response messages.
 //
-// ┌───────────┬────────────────────────┐
-// │           │  correlation metadata  │
-// │  payload  ├─────────┬──────────────┤
-// │           │  seqno  │  node_name   │
-// └───────────┼─────────┴──────────────┘
+// ┌───────────┬───────────────────────────────┐
+// │           │     correlation metadata      │
+// │  payload  ├─────────┬─────────────────────┤
+// │           │  seqno  │ response_topic_name │
+// └───────────┼─────────┴─────────────────────┘
 //             └ 16-byte aligned
 //
 // payload: request/response payload (ServiceT::Request or ServiceT::Response).
@@ -12,7 +12,11 @@
 // seqno: A sequence number to identify each service call (int64_t). To avoid nastiness that may be
 // caused by compiler-inserted padding, this field is conservatively aligned to 16 bytes.
 //
-// node_name: The node name of the caller (std::string). This field only exists in the request.
+// response_topic_name: The topic the caller listens for its response on (std::string). This field
+// only exists in the request. The caller dictates the whole name rather than the server deriving
+// it, so the two never have to agree on a naming rule -- the client, the server and the
+// separately built bridge plugins can be versioned independently, and a domain-bridged service
+// works even when the two sides know it under different (remapped) service names.
 
 #pragma once
 
@@ -44,7 +48,7 @@ template <typename ServiceT>
 struct ServiceRequestWrapper : public ServiceT::Request
 {
   alignas(16) int64_t seqno;
-  std::string node_name;
+  std::string response_topic_name;
 };
 
 template <typename ServiceT>
@@ -58,7 +62,7 @@ class GenericRequestWrapper
   struct Meta
   {
     alignas(16) int64_t seqno;
-    std::string node_name;
+    std::string response_topic_name;
   };
 
   static constexpr size_t get_wire_size(
@@ -87,15 +91,15 @@ public:
   }
 
   int64_t & seqno() { return meta_ptr_->seqno; }
-  std::string & node_name() { return meta_ptr_->node_name; }
+  std::string & response_topic_name() { return meta_ptr_->response_topic_name; }
 
   ipc_shared_ptr<void> && take_request() && { return std::move(request_); }
 
   /// @brief Allocate a wire-format request buffer in shared memory.
   ///
   /// The payload buffer is initialized via the introspection init function with
-  /// MessageInitialization::SKIP. The seqno number is uninitialized (garbage), and the node_name
-  /// string is default-constructed via placement new.
+  /// MessageInitialization::SKIP. The seqno number is uninitialized (garbage), and the
+  /// response_topic_name string is default-constructed via placement new.
   ///
   /// @param request_members The introspection message members for the request type.
   /// @param borrow_loaned_message A callable that allocates a buffer of the given size in shared
@@ -111,9 +115,9 @@ public:
     request_members->init_function(
       wrapper.request_.get(), rosidl_runtime_cpp::MessageInitialization::SKIP);
 
-    // Use placement new to construct node_name.
-    auto * node_name_ptr = &wrapper.node_name();
-    new (node_name_ptr) std::string{};
+    // Use placement new to construct response_topic_name.
+    auto * name_ptr = &wrapper.response_topic_name();
+    new (name_ptr) std::string{};
 
     return wrapper;
   }
@@ -126,10 +130,10 @@ public:
   {
     request_members->fini_function(ptr);
 
-    // Destroy node_name by calling std::destroy_at().
+    // Destroy response_topic_name by calling std::destroy_at().
     Meta * meta_ptr = get_meta_ptr(request_members, ptr);
-    auto * node_name_ptr = &meta_ptr->node_name;
-    std::destroy_at(node_name_ptr);
+    auto * name_ptr = &meta_ptr->response_topic_name;
+    std::destroy_at(name_ptr);
 
     ::operator delete(ptr);
   }

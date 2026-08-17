@@ -235,3 +235,23 @@ TEST(AgnocastUtilsTest, validate_subscription_qos_liveliness_lease_duration_warn
   EXPECT_EQ(captured_warn_count, 1);
   EXPECT_NE(captured_log.find("liveliness_lease_duration"), std::string::npos) << captured_log;
 }
+
+TEST(AgnocastUtilsTest, service_response_topic_name_includes_the_client_domain)
+{
+  // The head up to and including "_SEP_" is what register_domain_bridge registers as a prefix
+  // rule, and the trailing domain keeps two same-named client nodes in the two bridged domains
+  // on separate topics.
+  EXPECT_EQ(
+    agnocast::create_service_response_topic_name("/add_two_ints", "/client_node", 2),
+    "/AGNOCAST_SRV_RESPONSE/add_two_ints_SEP_/client_node_D2");
+  EXPECT_EQ(
+    agnocast::create_service_response_topic_name("/add_two_ints", "/client_node", 1),
+    "/AGNOCAST_SRV_RESPONSE/add_two_ints_SEP_/client_node_D1");
+}
+
+TEST(AgnocastUtilsTest, service_request_topic_name_is_the_service_name_prefixed)
+{
+  EXPECT_EQ(
+    agnocast::create_service_request_topic_name("/add_two_ints"),
+    "/AGNOCAST_SRV_REQUEST/add_two_ints");
+}

@@ -72,6 +72,9 @@ protected:
   std::atomic<int64_t> next_sequence_number_{0};
   std::string node_name_;
   std::string service_name_;
+  // The topic this client listens for its responses on. Sent with every request so the server
+  // publishes to it without having to derive it; see internal/service_wire_type.hpp.
+  std::string response_topic_name_;
   std::function<bool()> check_context_ok_;
 
   template <typename NodeT>
@@ -79,6 +82,8 @@ protected:
   {
     node_name_ = node->get_fully_qualified_name();
     service_name_ = node->get_node_services_interface()->resolve_service_name(service_name);
+    response_topic_name_ =
+      create_service_response_topic_name(service_name_, node_name_, get_ros_domain_id());
 
     check_context_ok_ = [context = node->get_node_base_interface()->get_context()]() {
       if constexpr (std::is_same_v<agnocast::Node, NodeT>) {
@@ -205,9 +210,8 @@ private:
     };
 
     SubscriptionOptions options{group};
-    std::string topic_name = create_service_response_topic_name(service_name_, node_name_);
     subscriber_ = std::make_shared<ServiceResponseSubscriber>(
-      node, topic_name, qos, std::move(subscriber_callback), options,
+      node, response_topic_name_, qos, std::move(subscriber_callback), options,
       SubscriptionRole::AgnocastOnly);
 
     if (role == ClientRole::Default) {
@@ -238,7 +242,7 @@ public:
   ipc_shared_ptr<typename ServiceT::Request> borrow_loaned_request()
   {
     auto request = publisher_->borrow_loaned_message();
-    request->node_name = node_name_;
+    request->response_topic_name = response_topic_name_;
     request->seqno = next_sequence_number_.fetch_add(1);
     return ipc_shared_ptr<typename ServiceT::Request>(std::move(request));
   }
@@ -375,9 +379,8 @@ private:
     };
 
     SubscriptionOptions sub_options{group};
-    std::string res_topic_name = create_service_response_topic_name(service_name_, node_name_);
     subscriber_ = std::make_shared<Subscription<void>>(
-      node, res_topic_name, "", qos, std::move(subscriber_callback), sub_options,
+      node, response_topic_name_, "", qos, std::move(subscriber_callback), sub_options,
       SubscriptionRole::AgnocastOnly);
 
     if (role == ClientRole::Default) {

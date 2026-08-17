@@ -6,21 +6,22 @@
 namespace agnocast
 {
 
+// One publisher per response topic, i.e. per caller. The topic name comes from the request:
+// the caller owns it, so the server never derives it. See internal/service_wire_type.hpp.
 typename TypeErasedPublisher::SharedPtr GenericService::get_or_create_publisher_for(
-  const std::string & node_name)
+  const std::string & response_topic_name)
 {
   typename TypeErasedPublisher::SharedPtr pub;
   {
     std::lock_guard<std::mutex> lock(publishers_mtx_);
-    auto it = publishers_.find(node_name);
+    auto it = publishers_.find(response_topic_name);
     if (it == publishers_.end()) {
       std::visit(
-        [this, &pub, &node_name](auto * node) {
-          std::string topic_name = create_service_response_topic_name(service_name_, node_name);
+        [this, &pub, &response_topic_name](auto * node) {
           agnocast::PublisherOptions pub_options;
           pub = std::make_shared<TypeErasedPublisher>(
-            node, topic_name, "", qos_, pub_options, PublisherRole::AgnocastOnly);
-          publishers_[node_name] = pub;
+            node, response_topic_name, "", qos_, pub_options, PublisherRole::AgnocastOnly);
+          publishers_[response_topic_name] = pub;
         },
         node_);
     } else {
@@ -61,7 +62,7 @@ void GenericService::send_response(
   ipc_shared_ptr<void> && request, ipc_shared_ptr<void> && response)
 {
   auto req_wrapper = GenericRequestWrapper(this->request_members_, std::move(request));
-  auto publisher = get_or_create_publisher_for(req_wrapper.node_name());
+  auto publisher = get_or_create_publisher_for(req_wrapper.response_topic_name());
   publisher->publish(std::move(response), [this](void * p) {
     GenericResponseWrapper::free(p, this->response_members_);
   });
@@ -71,7 +72,7 @@ void GenericService::cancel_response(
   ipc_shared_ptr<void> && request, ipc_shared_ptr<void> && response)
 {
   auto req_wrapper = GenericRequestWrapper(this->request_members_, std::move(request));
-  auto publisher = get_or_create_publisher_for(req_wrapper.node_name());
+  auto publisher = get_or_create_publisher_for(req_wrapper.response_topic_name());
   publisher->cancel_message(std::move(response), [this](void * p) {
     GenericResponseWrapper::free(p, this->response_members_);
   });
@@ -80,7 +81,7 @@ void GenericService::cancel_response(
 ipc_shared_ptr<void> GenericService::borrow_loaned_response(const ipc_shared_ptr<void> & request)
 {
   auto req_wrapper = GenericRequestWrapper(this->request_members_, ipc_shared_ptr<void>(request));
-  auto publisher = get_or_create_publisher_for(req_wrapper.node_name());
+  auto publisher = get_or_create_publisher_for(req_wrapper.response_topic_name());
 
   auto res_wrapper = GenericResponseWrapper::allocate(
     this->response_members_,

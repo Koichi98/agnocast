@@ -114,9 +114,28 @@ std::string create_service_request_topic_name(const std::string & service_name)
 }
 
 std::string create_service_response_topic_name(
-  const std::string & service_name, const std::string & client_node_name)
+  const std::string & service_name, const std::string & client_node_name, const uint32_t domain_id)
 {
-  return "/AGNOCAST_SRV_RESPONSE" + service_name + "_SEP_" + client_node_name;
+  // Keep the "/AGNOCAST_SRV_RESPONSE<service>_SEP_" head in sync with the prefix that
+  // register_domain_bridge registers as a domain bridge rule for a bridged service.
+  return "/AGNOCAST_SRV_RESPONSE" + service_name + "_SEP_" + client_node_name + "_D" +
+         std::to_string(domain_id);
+}
+
+std::optional<std::pair<uint32_t, std::string>> query_domain_rule(
+  const std::string & topic_name, const uint32_t domain_id)
+{
+  ioctl_get_domain_rule_args args = {};
+  args.topic_name = {topic_name.c_str(), topic_name.size()};
+  args.domain_id = domain_id;
+  if (ioctl(agnocast_fd, AGNOCAST_GET_DOMAIN_RULE_CMD, &args) < 0) {
+    RCLCPP_ERROR(logger, "AGNOCAST_GET_DOMAIN_RULE_CMD failed: %s", strerror(errno));
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
+  if (!args.ret_found) return std::nullopt;
+  return std::make_pair(
+    args.ret_peer_domain, std::string(static_cast<const char *>(args.ret_peer_topic_name)));
 }
 
 uint64_t agnocast_get_timestamp()

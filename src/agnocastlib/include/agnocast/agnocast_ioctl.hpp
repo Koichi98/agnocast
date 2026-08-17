@@ -339,6 +339,18 @@ struct ioctl_add_discovery_agent_args
   bool ret_owned_by_caller;
 };
 
+// Read-only query: which domain, if any, is (topic_name, domain_id) domain-bridged to, and
+// under what name there. A renaming rule gives the two cells different names, so the peer
+// name has to come from the rule rather than being assumed equal to the caller's.
+struct ioctl_get_domain_rule_args
+{
+  struct name_info topic_name;
+  uint32_t domain_id;
+  bool ret_found;
+  uint32_t ret_peer_domain;
+  char ret_peer_topic_name[TOPIC_NAME_BUFFER_SIZE];
+};
+
 #define AGNOCAST_GET_VERSION_CMD _IOR(0xA6, 1, struct ioctl_get_version_args)
 #define AGNOCAST_ADD_PROCESS_CMD _IOWR(0xA6, 2, union ioctl_add_process_args)
 #define AGNOCAST_ADD_SUBSCRIBER_CMD _IOWR(0xA6, 3, union ioctl_add_subscriber_args)
@@ -364,5 +376,6 @@ struct ioctl_add_discovery_agent_args
 #define AGNOCAST_SET_ROS2_PUBLISHER_NUM_CMD _IOW(0xA6, 26, struct ioctl_set_ros2_publisher_num_args)
 #define AGNOCAST_NOTIFY_BRIDGE_SHUTDOWN_CMD _IO(0xA6, 27)
 #define AGNOCAST_ADD_DISCOVERY_AGENT_CMD _IOWR(0xA6, 30, struct ioctl_add_discovery_agent_args)
+#define AGNOCAST_GET_DOMAIN_RULE_CMD _IOWR(0xA6, 33, struct ioctl_get_domain_rule_args)
 
 }  // namespace agnocast

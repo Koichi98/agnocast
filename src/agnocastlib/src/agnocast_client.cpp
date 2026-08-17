@@ -14,7 +14,7 @@ using namespace std::chrono_literals;
 namespace agnocast
 {
 
-uint32_t get_agnocast_sub_count(const std::string & topic_name)
+uint32_t get_agnocast_sub_count(const std::string & topic_name, const uint32_t domain_id)
 {
   auto topic_info_buffer = std::make_unique<std::array<topic_info_ret, MAX_TOPIC_INFO_RET_NUM>>();
 
@@ -23,7 +23,7 @@ uint32_t get_agnocast_sub_count(const std::string & topic_name)
   topic_info_args.topic_info_ret_buffer_addr =
     reinterpret_cast<uint64_t>(topic_info_buffer->data());
   topic_info_args.topic_info_ret_buffer_size = MAX_TOPIC_INFO_RET_NUM;
-  topic_info_args.domain_id = get_ros_domain_id();
+  topic_info_args.domain_id = domain_id;
   if (ioctl(agnocast_fd, AGNOCAST_GET_TOPIC_SUBSCRIBER_INFO_CMD, &topic_info_args) < 0) {
     RCLCPP_ERROR(logger, "AGNOCAST_GET_TOPIC_SUBSCRIBER_INFO_CMD failed: %s", strerror(errno));
     close(agnocast_fd);
@@ -35,7 +35,18 @@ uint32_t get_agnocast_sub_count(const std::string & topic_name)
 
 bool service_is_ready_core(const std::string & service_name)
 {
-  uint32_t sub_count = get_agnocast_sub_count(create_service_request_topic_name(service_name));
+  const std::string request_topic = create_service_request_topic_name(service_name);
+  const uint32_t own_domain = get_ros_domain_id();
+  uint32_t sub_count = get_agnocast_sub_count(request_topic, own_domain);
+
+  // The kmod reports only the queried domain's endpoints, so a server reached over a domain
+  // bridge is invisible here; without asking the peer cell too, wait_for_service() would never
+  // return for a cross-domain service.
+  const std::optional<std::pair<uint32_t, std::string>> peer =
+    query_domain_rule(request_topic, own_domain);
+  if (peer.has_value()) {
+    sub_count += get_agnocast_sub_count(peer->second, peer->first);
+  }
 
   if (sub_count == 0) {
     return false;
@@ -126,7 +137,7 @@ ipc_shared_ptr<void> GenericClient::borrow_loaned_request()
   auto generic_request_wrapper = GenericRequestWrapper::allocate(
     request_members_, [this](size_t size) { return publisher_->borrow_loaned_message(size); });
 
-  generic_request_wrapper.node_name() = node_name_;
+  generic_request_wrapper.response_topic_name() = response_topic_name_;
   generic_request_wrapper.seqno() = next_sequence_number_.fetch_add(1);
 
   return std::move(generic_request_wrapper).take_request();
