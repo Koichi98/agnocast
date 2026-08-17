@@ -243,6 +243,13 @@ struct domain_bridge_rule
   uint32_t domain_b;
   bool a_to_b;  // deliver domain_a's publications to domain_b's subscribers
   bool b_to_a;
+  // When set, topic_name_a is a prefix rather than a whole name, and it pairs every
+  // topic whose name starts with it against the *same* name in the other domain (so
+  // topic_name_b equals topic_name_a and a prefix rule never renames). One rule then
+  // covers a family of topics whose full names are only known at runtime -- an
+  // Agnocast service's per-client response topics, which cannot be enumerated in a
+  // config. An exact rule for a name covered by a prefix takes precedence.
+  bool is_prefix;
   struct hlist_node node;
 };
 

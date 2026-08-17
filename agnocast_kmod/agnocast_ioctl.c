@@ -80,7 +80,8 @@ static struct domain_bridge_rule * find_domain_rule(
 // If a domain bridge rule pairs this cell (topic_name, domain_id) with another
 // whose wrapper already exists, return that partner's topic_struct so the new
 // wrapper can share it. The partner may use a different name (rename), so look it
-// up by the rule's name for the partner domain.
+// up by the rule's name for the partner domain; under a prefix rule the partner
+// uses this very name.
 static struct topic_struct * find_grouped_topic_struct(
   const char * topic_name, const struct ipc_namespace * ipc_ns, uint32_t domain_id)
 {
@@ -98,6 +99,9 @@ static struct topic_struct * find_grouped_topic_struct(
   } else {
     return NULL;
   }
+  // A prefix rule's stored names are the prefix, not a topic name; it pairs this
+  // cell with the identical name in the partner domain.
+  if (rule->is_prefix) partner_name = topic_name;
 
   struct topic_wrapper * partner = find_topic(partner_name, ipc_ns, partner_domain);
   return partner ? partner->topic : NULL;
@@ -2268,30 +2272,180 @@ unlock:
 
 // A rule is keyed by cell = (name, domain). Rules are few (one per bridged topic
 // pair), so a full scan is cheaper than maintaining a dual-name hash.
+// A prefix rule covers a whole family of names, so an exact rule for one of those
+// names has to win: a prefix hit is remembered but the scan runs to completion.
 static struct domain_bridge_rule * find_domain_rule(
   const char * topic_name, const struct ipc_namespace * ipc_ns, uint32_t domain_id)
 {
   struct domain_bridge_rule * rule;
+  struct domain_bridge_rule * prefix_hit = NULL;
   int bkt;
   hash_for_each(domain_rule_htable, bkt, rule, node)
   {
     if (ipc_ns != rule->ipc_ns) continue;
+    if (domain_id != rule->domain_a && domain_id != rule->domain_b) continue;
+    if (rule->is_prefix) {
+      // Both names equal the prefix, so which domain matched does not matter.
+      if (strncmp(rule->topic_name_a, topic_name, strlen(rule->topic_name_a)) == 0)
+        prefix_hit = rule;
+      continue;
+    }
     if (
       (domain_id == rule->domain_a && strcmp(rule->topic_name_a, topic_name) == 0) ||
       (domain_id == rule->domain_b && strcmp(rule->topic_name_b, topic_name) == 0)) {
       return rule;
     }
   }
-  return NULL;
+  return prefix_hit;
 }
 
-int agnocast_ioctl_add_domain_bridge(
-  const char * topic_name_from, const char * topic_name_to, const uint32_t from_domain,
-  const uint32_t to_domain, const struct ipc_namespace * ipc_ns)
+// Allocates and registers one rule. The caller holds global_htables_rwsem for write and has
+// already validated that the cells are free to pair.
+static int insert_domain_rule(
+  const char * name_a, const char * name_b, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_a, const uint32_t domain_b, const bool from_is_a, const bool is_prefix)
 {
-  int ret = 0;
+  struct domain_bridge_rule * rule = kmalloc(sizeof(*rule), GFP_KERNEL);
+  if (!rule) return -ENOMEM;
 
+  rule->topic_name_a = kstrdup(name_a, GFP_KERNEL);
+  rule->topic_name_b = kstrdup(name_b, GFP_KERNEL);
+  if (!rule->topic_name_a || !rule->topic_name_b) {
+    kfree(rule->topic_name_a);
+    kfree(rule->topic_name_b);
+    kfree(rule);
+    return -ENOMEM;
+  }
+  rule->ipc_ns = ipc_ns;
+  rule->domain_a = domain_a;
+  rule->domain_b = domain_b;
+  rule->a_to_b = from_is_a;
+  rule->b_to_a = !from_is_a;
+  rule->is_prefix = is_prefix;
+  INIT_HLIST_NODE(&rule->node);
+  // find_domain_rule scans every bucket, so the hash key is only for even distribution.
+  hash_add(domain_rule_htable, &rule->node, full_name_hash(NULL, name_a, strlen(name_a)));
+  return 0;
+}
+
+// Whether either bridged domain already holds a topic covered by prefix. A prefix rule groups
+// every such cell, and grouping merges id spaces, so it must be declared before they exist.
+static bool any_topic_under_prefix(
+  const char * prefix, const struct ipc_namespace * ipc_ns, const uint32_t domain_a,
+  const uint32_t domain_b)
+{
+  const size_t prefix_len = strlen(prefix);
+  struct topic_wrapper * wrapper;
+  int bkt;
+  hash_for_each(topic_hashtable, bkt, wrapper, node)
+  {
+    if (!ipc_eq(wrapper->ipc_ns, ipc_ns)) continue;
+    if (wrapper->domain_id != domain_a && wrapper->domain_id != domain_b) continue;
+    if (strncmp(wrapper->key, prefix, prefix_len) == 0) return true;
+  }
+  return false;
+}
+
+// Registers a prefix rule, or folds a re-declaration into the identical existing one. Every
+// other overlap is rejected so find_domain_rule never has to choose between two candidates.
+// The caller holds global_htables_rwsem for write.
+static int add_prefix_domain_rule(
+  const char * prefix, const struct ipc_namespace * ipc_ns, const uint32_t domain_a,
+  const uint32_t domain_b, const bool from_is_a)
+{
+  const size_t prefix_len = strlen(prefix);
+  struct domain_bridge_rule * same = NULL;
+  struct domain_bridge_rule * rule;
+  int bkt;
+
+  hash_for_each(domain_rule_htable, bkt, rule, node)
+  {
+    if (ipc_ns != rule->ipc_ns) continue;
+
+    if (rule->is_prefix) {
+      const size_t len = strlen(rule->topic_name_a);
+      const bool nests = (len <= prefix_len) ? strncmp(rule->topic_name_a, prefix, len) == 0
+                                             : strncmp(prefix, rule->topic_name_a, prefix_len) == 0;
+      if (!nests) continue;
+      if (len != prefix_len || rule->domain_a != domain_a || rule->domain_b != domain_b)
+        return -EBUSY;
+      same = rule;
+      continue;
+    }
+
+    // An exact rule for a covered name would shadow the prefix, so keep the two disjoint.
+    if (
+      ((rule->domain_a == domain_a || rule->domain_a == domain_b) &&
+       strncmp(prefix, rule->topic_name_a, prefix_len) == 0) ||
+      ((rule->domain_b == domain_a || rule->domain_b == domain_b) &&
+       strncmp(prefix, rule->topic_name_b, prefix_len) == 0))
+      return -EBUSY;
+  }
+
+  if (same) {
+    // Re-running the registration tool with an unchanged config must succeed even after nodes
+    // started, so only a declaration that actually enables a new direction needs the
+    // no-endpoint-yet guarantee -- existing endpoints built their notify lists and shm
+    // mappings while that direction was denied, and that cannot be fixed up here.
+    if ((from_is_a && !same->a_to_b) || (!from_is_a && !same->b_to_a)) {
+      if (any_topic_under_prefix(prefix, ipc_ns, domain_a, domain_b)) return -EBUSY;
+      same->a_to_b |= from_is_a;
+      same->b_to_a |= !from_is_a;
+    }
+    return 0;
+  }
+
+  if (any_topic_under_prefix(prefix, ipc_ns, domain_a, domain_b)) return -EBUSY;
+
+  return insert_domain_rule(prefix, prefix, ipc_ns, domain_a, domain_b, from_is_a, true);
+}
+
+// Registers an exact rule, or folds a re-declaration into the existing one.
+// The caller holds global_htables_rwsem for write.
+static int add_exact_domain_rule(
+  const char * name_a, const char * name_b, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_a, const uint32_t domain_b, const bool from_is_a)
+{
+  // Invariant: each cell (name, domain) belongs to at most one rule, and a rule pairs
+  // exactly two cells. r_a == r_b (non-NULL) means an existing rule already pairs exactly
+  // these two cells -- a re-declaration or the reverse direction, so just OR in the
+  // direction. Any other overlap (a cell already paired with a different cell, or covered by
+  // a prefix rule) is a fan-out and is rejected. This is the one place that enforces one
+  // pair per cell.
+  // TODO: support >2 domains per topic by storing a domain group instead of a fixed pair.
+  struct domain_bridge_rule * r_a = find_domain_rule(name_a, ipc_ns, domain_a);
+  struct domain_bridge_rule * r_b = find_domain_rule(name_b, ipc_ns, domain_b);
+  if (r_a || r_b) {
+    if (r_a != r_b || r_a->is_prefix) return -EBUSY;
+
+    r_a->a_to_b |= from_is_a;
+    r_a->b_to_a |= !from_is_a;
+
+    // Unlike the paths below, this one runs after endpoints may have registered, and the
+    // direction just enabled was denied when their notify lists were built. Both cells share one
+    // topic_struct once grouped, so either wrapper reaches every publisher.
+    struct topic_wrapper * wrapper = find_topic(name_a, ipc_ns, domain_a);
+    if (!wrapper) wrapper = find_topic(name_b, ipc_ns, domain_b);
+    if (wrapper) rebuild_all_notify_lists(wrapper);
+    return 0;
+  }
+
+  // Grouping merges the two domains' id and entry_id spaces, which is only safe
+  // before either side has allocated any; reject if an endpoint already joined.
+  if (find_topic(name_a, ipc_ns, domain_a) || find_topic(name_b, ipc_ns, domain_b)) return -EBUSY;
+
+  return insert_domain_rule(name_a, name_b, ipc_ns, domain_a, domain_b, from_is_a, false);
+}
+
+static int add_domain_bridge_rule(
+  const char * topic_name_from, const char * topic_name_to, const uint32_t from_domain,
+  const uint32_t to_domain, const bool is_prefix, const struct ipc_namespace * ipc_ns)
+{
   if (from_domain == to_domain) return -EINVAL;
+  // A prefix rule pairs each covered name with the identical name in the other domain, so it
+  // cannot rename; an empty prefix would swallow every topic.
+  if (is_prefix && (topic_name_from[0] == '\0' || strcmp(topic_name_from, topic_name_to) != 0))
+    return -EINVAL;
 
   // Store the pair canonically (domain_a < domain_b), each domain keeping its own name
   // (they differ on rename). Direction lives only in the a_to_b / b_to_a flags; grouping
@@ -2305,68 +2459,62 @@ int agnocast_ioctl_add_domain_bridge(
 
   down_write(&global_htables_rwsem);
 
-  // Invariant: each cell (name, domain) belongs to at most one rule, and a rule pairs
-  // exactly two cells. r_a == r_b (non-NULL) means an existing rule already pairs exactly
-  // these two cells -- a re-declaration or the reverse direction, so just OR in the
-  // direction. Any other overlap (a cell already paired with a different cell) is a
-  // fan-out and is rejected. This is the one place that enforces one pair per cell.
-  // TODO: support >2 domains per topic by storing a domain group instead of a fixed pair.
-  struct domain_bridge_rule * r_a = find_domain_rule(name_a, ipc_ns, domain_a);
-  struct domain_bridge_rule * r_b = find_domain_rule(name_b, ipc_ns, domain_b);
-  if (r_a || r_b) {
-    if (r_a == r_b) {
-      r_a->a_to_b |= from_is_a;
-      r_a->b_to_a |= !from_is_a;
-
-      // Unlike the paths below, this one runs after endpoints may have registered, and the
-      // direction just enabled was denied when their notify lists were built. Both cells share one
-      // topic_struct once grouped, so either wrapper reaches every publisher.
-      struct topic_wrapper * wrapper = find_topic(name_a, ipc_ns, domain_a);
-      if (!wrapper) wrapper = find_topic(name_b, ipc_ns, domain_b);
-      if (wrapper) rebuild_all_notify_lists(wrapper);
-    } else {
-      ret = -EBUSY;
-    }
-    goto unlock;
+  const int ret = is_prefix
+                    ? add_prefix_domain_rule(name_a, ipc_ns, domain_a, domain_b, from_is_a)
+                    : add_exact_domain_rule(name_a, name_b, ipc_ns, domain_a, domain_b, from_is_a);
+  if (ret == 0) {
+    dev_info(
+      agnocast_device, "Domain bridge %srule added (%s@%u -> %s@%u).\n", is_prefix ? "prefix " : "",
+      topic_name_from, from_domain, topic_name_to, to_domain);
   }
 
-  // Grouping merges the two domains' id and entry_id spaces, which is only safe
-  // before either side has allocated any; reject if an endpoint already joined.
-  if (find_topic(name_a, ipc_ns, domain_a) || find_topic(name_b, ipc_ns, domain_b)) {
-    ret = -EBUSY;
-    goto unlock;
-  }
-
-  struct domain_bridge_rule * rule = kmalloc(sizeof(*rule), GFP_KERNEL);
-  if (!rule) {
-    ret = -ENOMEM;
-    goto unlock;
-  }
-  rule->topic_name_a = kstrdup(name_a, GFP_KERNEL);
-  rule->topic_name_b = kstrdup(name_b, GFP_KERNEL);
-  if (!rule->topic_name_a || !rule->topic_name_b) {
-    kfree(rule->topic_name_a);
-    kfree(rule->topic_name_b);
-    kfree(rule);
-    ret = -ENOMEM;
-    goto unlock;
-  }
-  rule->ipc_ns = ipc_ns;
-  rule->domain_a = domain_a;
-  rule->domain_b = domain_b;
-  rule->a_to_b = from_is_a;
-  rule->b_to_a = !from_is_a;
-  INIT_HLIST_NODE(&rule->node);
-  // find_domain_rule scans every bucket, so the hash key is only for even distribution.
-  hash_add(domain_rule_htable, &rule->node, full_name_hash(NULL, name_a, strlen(name_a)));
-
-  dev_info(
-    agnocast_device, "Domain bridge rule added (%s@%u -> %s@%u).\n", topic_name_from, from_domain,
-    topic_name_to, to_domain);
-
-unlock:
   up_write(&global_htables_rwsem);
   return ret;
+}
+
+int agnocast_ioctl_add_domain_bridge(
+  const char * topic_name_from, const char * topic_name_to, const uint32_t from_domain,
+  const uint32_t to_domain, const struct ipc_namespace * ipc_ns)
+{
+  return add_domain_bridge_rule(
+    topic_name_from, topic_name_to, from_domain, to_domain, false, ipc_ns);
+}
+
+int agnocast_ioctl_add_domain_bridge_prefix(
+  const char * topic_name_prefix, const uint32_t from_domain, const uint32_t to_domain,
+  const struct ipc_namespace * ipc_ns)
+{
+  return add_domain_bridge_rule(
+    topic_name_prefix, topic_name_prefix, from_domain, to_domain, true, ipc_ns);
+}
+
+// Reports the domain bridge rule covering (topic_name, domain_id), if any: the partner domain
+// and the name the partner cell uses. Callers need both because a renaming rule gives the two
+// cells different names, so the partner cannot be looked up by the caller's own name.
+int agnocast_ioctl_get_domain_rule(
+  const char * topic_name, const struct ipc_namespace * ipc_ns,
+  struct ioctl_get_domain_rule_args * ioctl_ret)
+{
+  ioctl_ret->ret_found = false;
+  ioctl_ret->ret_peer_domain = 0;
+  ioctl_ret->ret_peer_topic_name[0] = '\0';
+
+  down_read(&global_htables_rwsem);
+
+  const struct domain_bridge_rule * rule =
+    find_domain_rule(topic_name, ipc_ns, ioctl_ret->domain_id);
+  if (rule) {
+    const bool caller_is_a = ioctl_ret->domain_id == rule->domain_a;
+    ioctl_ret->ret_found = true;
+    ioctl_ret->ret_peer_domain = caller_is_a ? rule->domain_b : rule->domain_a;
+    // A prefix rule's stored names are the prefix; the partner cell uses this very name.
+    const char * peer_name =
+      rule->is_prefix ? topic_name : (caller_is_a ? rule->topic_name_b : rule->topic_name_a);
+    strscpy(ioctl_ret->ret_peer_topic_name, peer_name, TOPIC_NAME_BUFFER_SIZE);
+  }
+
+  up_read(&global_htables_rwsem);
+  return 0;
 }
 
 int agnocast_ioctl_remove_bridge(
@@ -3080,6 +3228,40 @@ static long add_domain_bridge_cmd(struct ioctl_add_domain_bridge_args __user * a
     ipc_ns);
 }
 
+static long add_domain_bridge_prefix_cmd(struct ioctl_add_domain_bridge_prefix_args __user * arg)
+{
+  const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
+
+  struct ioctl_add_domain_bridge_prefix_args prefix_args;
+  if (copy_from_user(&prefix_args, arg, sizeof(prefix_args))) return -EFAULT;
+
+  char prefix_buf[TOPIC_NAME_BUFFER_SIZE];
+  int ret = copy_name_from_user(prefix_buf, sizeof(prefix_buf), &prefix_args.topic_name_prefix);
+  if (ret) return ret;
+
+  return agnocast_ioctl_add_domain_bridge_prefix(
+    prefix_buf, prefix_args.from_domain, prefix_args.to_domain, ipc_ns);
+}
+
+static long get_domain_rule_cmd(struct ioctl_get_domain_rule_args __user * arg)
+{
+  const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
+
+  struct ioctl_get_domain_rule_args domain_rule_args;
+  if (copy_from_user(&domain_rule_args, arg, sizeof(domain_rule_args))) return -EFAULT;
+
+  char topic_name_buf[TOPIC_NAME_BUFFER_SIZE];
+  int ret =
+    copy_name_from_user(topic_name_buf, sizeof(topic_name_buf), &domain_rule_args.topic_name);
+  if (ret) return ret;
+
+  ret = agnocast_ioctl_get_domain_rule(topic_name_buf, ipc_ns, &domain_rule_args);
+  if (ret == 0) {
+    if (copy_to_user(arg, &domain_rule_args, sizeof(domain_rule_args))) return -EFAULT;
+  }
+  return ret;
+}
+
 static long remove_bridge_cmd(struct ioctl_remove_bridge_args __user * arg)
 {
   int ret = 0;
@@ -3262,6 +3444,10 @@ long agnocast_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
       return add_discovery_agent_cmd((struct ioctl_add_discovery_agent_args __user *)arg);
     case AGNOCAST_DISCOVERY_AGENT_EXISTS_CMD:
       return discovery_agent_exists_cmd((struct ioctl_discovery_agent_exists_args __user *)arg);
+    case AGNOCAST_ADD_DOMAIN_BRIDGE_PREFIX_CMD:
+      return add_domain_bridge_prefix_cmd((struct ioctl_add_domain_bridge_prefix_args __user *)arg);
+    case AGNOCAST_GET_DOMAIN_RULE_CMD:
+      return get_domain_rule_cmd((struct ioctl_get_domain_rule_args __user *)arg);
     default:
       return -EINVAL;
   }

@@ -474,3 +474,201 @@ void test_case_domain_bridge_rename_multi_publisher(struct kunit * test)
   // Woken exactly once, regardless of the other publishers sharing the struct.
   KUNIT_EXPECT_EQ(test, signal_count_of(eventfd), 1);
 }
+
+// A prefix rule bridges every name under PFX, pairing each with the identical name in the
+// other domain. PFX_A / PFX_B stand for two callers' response topics; NOT_PFX is outside it.
+static const char * PFX = "/kunit_test_domain_bridge_prefix_";
+static const char * PFX_A = "/kunit_test_domain_bridge_prefix_clientA";
+static const char * PFX_B = "/kunit_test_domain_bridge_prefix_clientB";
+static const char * NOT_PFX = "/kunit_test_domain_bridge_outside";
+
+void test_case_domain_bridge_prefix_groups_wrappers(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+
+  setup_process_in_domain(test, 1000, 1);
+  add_publisher_named(test, 1000, PFX_A);
+  setup_process_in_domain(test, 1001, 2);
+  add_subscriber_named(test, 1001, PFX_A);
+
+  // A name covered by the prefix is grouped even though the rule never mentioned it.
+  KUNIT_EXPECT_EQ(test, agnocast_topic_wrapper_refcnt(PFX_A, current->nsproxy->ipc_ns, 1), 2);
+  KUNIT_EXPECT_EQ(test, agnocast_topic_wrapper_refcnt(PFX_A, current->nsproxy->ipc_ns, 2), 2);
+}
+
+// A name outside the prefix keeps its own struct, so a prefix rule cannot silently widen.
+void test_case_domain_bridge_prefix_leaves_other_topics_alone(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+
+  setup_process_in_domain(test, 1000, 1);
+  add_publisher_named(test, 1000, NOT_PFX);
+  setup_process_in_domain(test, 1001, 2);
+  add_subscriber_named(test, 1001, NOT_PFX);
+
+  KUNIT_EXPECT_EQ(test, agnocast_topic_wrapper_refcnt(NOT_PFX, current->nsproxy->ipc_ns, 1), 1);
+  KUNIT_EXPECT_EQ(test, agnocast_topic_wrapper_refcnt(NOT_PFX, current->nsproxy->ipc_ns, 2), 1);
+}
+
+// Two names under one prefix are two independent pairs. This is what keeps one caller's
+// responses out of another's: each response topic gets its own struct.
+void test_case_domain_bridge_prefix_pairs_each_name_separately(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+
+  setup_process_in_domain(test, 1000, 1);
+  add_publisher_named(test, 1000, PFX_A);
+  add_publisher_named(test, 1000, PFX_B);
+  setup_process_in_domain(test, 1001, 2);
+  add_subscriber_named(test, 1001, PFX_A);
+  add_subscriber_named(test, 1001, PFX_B);
+
+  KUNIT_EXPECT_EQ(test, agnocast_topic_wrapper_refcnt(PFX_A, current->nsproxy->ipc_ns, 1), 2);
+  KUNIT_EXPECT_EQ(test, agnocast_topic_wrapper_refcnt(PFX_B, current->nsproxy->ipc_ns, 1), 2);
+}
+
+void test_case_domain_bridge_prefix_cross_domain_delivery(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+
+  agnocast_kunit_eventfd_reset();
+  const uint64_t msg_addr = setup_process_in_domain(test, current->tgid, 1);
+  const topic_local_id_t pub_id = add_publisher_named(test, current->tgid, PFX_A);
+  setup_process_in_domain(test, 1001, 2);
+  const int eventfd = 0;
+  add_subscriber_named_with_eventfd(test, 1001, PFX_A, eventfd);
+
+  union ioctl_publish_msg_args publish_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_publish_msg(PFX_A, current->nsproxy->ipc_ns, pub_id, msg_addr, &publish_args),
+    0);
+
+  KUNIT_EXPECT_EQ(test, signal_count_of(eventfd), 1);
+}
+
+// Re-running the registration tool with an unchanged config must succeed, even once nodes
+// have joined -- an unchanged declaration enables no new direction, so nothing needs fixing up.
+void test_case_domain_bridge_prefix_redeclaration_is_idempotent(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+
+  setup_process_in_domain(test, 1000, 1);
+  add_publisher_named(test, 1000, PFX_A);
+
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+}
+
+void test_case_domain_bridge_prefix_same_domain_rejected(struct kunit * test)
+{
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 3, 3, current->nsproxy->ipc_ns), -EINVAL);
+}
+
+// An empty prefix would swallow every topic in both domains.
+void test_case_domain_bridge_prefix_empty_rejected(struct kunit * test)
+{
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix("", 1, 2, current->nsproxy->ipc_ns), -EINVAL);
+}
+
+// One cell belongs to at most one pair, so the same prefix cannot be re-pointed at a
+// different domain, and a nesting prefix would make the rule lookup ambiguous.
+void test_case_domain_bridge_prefix_conflicting_pair_rejected(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 3, current->nsproxy->ipc_ns), -EBUSY);
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX_A, 1, 2, current->nsproxy->ipc_ns), -EBUSY);
+}
+
+// Grouping merges the two domains' id spaces, so a prefix rule is only safe before any
+// covered endpoint exists -- same reason an exact rule is rejected once its topic is live.
+void test_case_domain_bridge_prefix_rejected_when_covered_endpoint_exists(struct kunit * test)
+{
+  setup_process_in_domain(test, 1000, 1);
+  add_publisher_named(test, 1000, PFX_A);
+
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), -EBUSY);
+}
+
+// An exact rule and a prefix covering the same name are kept disjoint in both orders, so the
+// rule lookup never has to choose between them.
+void test_case_domain_bridge_prefix_over_exact_rejected(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(PFX_A, PFX_A, 1, 2, current->nsproxy->ipc_ns), 0);
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), -EBUSY);
+}
+
+void test_case_domain_bridge_exact_under_prefix_rejected(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(PFX_A, PFX_A, 1, 2, current->nsproxy->ipc_ns), -EBUSY);
+}
+
+// The peer name matters as much as the peer domain: under a rename the peer cell has a
+// different name, and a caller cannot find it by its own name.
+void test_case_get_domain_rule_reports_peer(struct kunit * test)
+{
+  struct ioctl_get_domain_rule_args args;
+
+  args.domain_id = 1;
+  KUNIT_ASSERT_EQ(test, agnocast_ioctl_get_domain_rule(RN_SRC, current->nsproxy->ipc_ns, &args), 0);
+  KUNIT_EXPECT_FALSE(test, args.ret_found);
+
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(RN_SRC, RN_DST, 1, 2, current->nsproxy->ipc_ns), 0);
+
+  args.domain_id = 1;
+  KUNIT_ASSERT_EQ(test, agnocast_ioctl_get_domain_rule(RN_SRC, current->nsproxy->ipc_ns, &args), 0);
+  KUNIT_EXPECT_TRUE(test, args.ret_found);
+  KUNIT_EXPECT_EQ(test, args.ret_peer_domain, 2);
+  KUNIT_EXPECT_STREQ(test, args.ret_peer_topic_name, RN_DST);
+
+  // Asking from the other side reports the mirror image.
+  args.domain_id = 2;
+  KUNIT_ASSERT_EQ(test, agnocast_ioctl_get_domain_rule(RN_DST, current->nsproxy->ipc_ns, &args), 0);
+  KUNIT_EXPECT_TRUE(test, args.ret_found);
+  KUNIT_EXPECT_EQ(test, args.ret_peer_domain, 1);
+  KUNIT_EXPECT_STREQ(test, args.ret_peer_topic_name, RN_SRC);
+
+  // A domain the rule does not cover has no peer.
+  args.domain_id = 3;
+  KUNIT_ASSERT_EQ(test, agnocast_ioctl_get_domain_rule(RN_SRC, current->nsproxy->ipc_ns, &args), 0);
+  KUNIT_EXPECT_FALSE(test, args.ret_found);
+}
+
+// A prefix rule never renames, so the peer cell uses the queried name itself.
+void test_case_get_domain_rule_reports_prefix_peer(struct kunit * test)
+{
+  struct ioctl_get_domain_rule_args args;
+
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+
+  args.domain_id = 2;
+  KUNIT_ASSERT_EQ(test, agnocast_ioctl_get_domain_rule(PFX_A, current->nsproxy->ipc_ns, &args), 0);
+  KUNIT_EXPECT_TRUE(test, args.ret_found);
+  KUNIT_EXPECT_EQ(test, args.ret_peer_domain, 1);
+  KUNIT_EXPECT_STREQ(test, args.ret_peer_topic_name, PFX_A);
+
+  args.domain_id = 2;
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_get_domain_rule(NOT_PFX, current->nsproxy->ipc_ns, &args), 0);
+  KUNIT_EXPECT_FALSE(test, args.ret_found);
+}
