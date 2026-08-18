@@ -6,6 +6,7 @@
 #include "agnocast/agnocast_service.hpp"
 #include "agnocast/agnocast_subscription.hpp"
 #include "agnocast/agnocast_timer_info.hpp"
+#include "agnocast/agnocast_tracepoint_wrapper.h"
 #include "agnocast/node/agnocast_arguments.hpp"
 #include "agnocast/node/agnocast_context.hpp"
 #include "agnocast/node/node_interfaces/node_base.hpp"
