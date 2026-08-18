@@ -2,6 +2,8 @@
 
 #include "agnocast/node/agnocast_node.hpp"
 
+#include <rosidl_typesupport_introspection_cpp/service_introspection.hpp>
+
 #include <rclcpp/version.h>
 #include <sys/stat.h>
 
@@ -259,7 +261,7 @@ const rosidl_service_type_support_t * get_service_typesupport_handle(
 ServiceTsBundle load_service_typesupport(const std::string & service_type)
 {
   static const std::string ts_identifier = "rosidl_typesupport_cpp";
-  static const std::string ts_introspection_identifier = "rosidl_typesupport_introspection_cpp";
+  static const std::string ts_identifier_introspection = "rosidl_typesupport_introspection_cpp";
 
   const std::string request_type = service_type + "_Request";
   const std::string response_type = service_type + "_Response";
@@ -268,29 +270,27 @@ ServiceTsBundle load_service_typesupport(const std::string & service_type)
 
   bundle.ts_lib = rclcpp::get_typesupport_library(service_type, ts_identifier);
   bundle.ts_lib_introspection =
-    rclcpp::get_typesupport_library(service_type, ts_introspection_identifier);
+    rclcpp::get_typesupport_library(service_type, ts_identifier_introspection);
 
 #if RCLCPP_VERSION_MAJOR >= 28
   bundle.service_ts =
     rclcpp::get_service_typesupport_handle(service_type, ts_identifier, *bundle.ts_lib);
 
-  const rosidl_message_type_support_t * request_ts = rclcpp::get_message_typesupport_handle(
-    request_type, ts_introspection_identifier, *bundle.ts_lib_introspection);
-  const rosidl_message_type_support_t * response_ts = rclcpp::get_message_typesupport_handle(
-    response_type, ts_introspection_identifier, *bundle.ts_lib_introspection);
+  bundle.service_ts_introspection = rclcpp::get_service_typesupport_handle(
+    service_type, ts_identifier_introspection, *bundle.ts_lib_introspection);
 #else
   bundle.service_ts = get_service_typesupport_handle(service_type, ts_identifier, *bundle.ts_lib);
 
-  const rosidl_message_type_support_t * request_ts = rclcpp::get_typesupport_handle(
-    request_type, ts_introspection_identifier, *bundle.ts_lib_introspection);
-  const rosidl_message_type_support_t * response_ts = rclcpp::get_typesupport_handle(
-    response_type, ts_introspection_identifier, *bundle.ts_lib_introspection);
+  bundle.service_ts_introspection = get_service_typesupport_handle(
+    service_type, ts_identifier_introspection, *bundle.ts_lib_introspection);
 #endif
 
-  bundle.request_members =
-    static_cast<const rosidl_typesupport_introspection_cpp::MessageMembers *>(request_ts->data);
-  bundle.response_members =
-    static_cast<const rosidl_typesupport_introspection_cpp::MessageMembers *>(response_ts->data);
+  const auto * service_members =
+    static_cast<const rosidl_typesupport_introspection_cpp::ServiceMembers *>(
+      bundle.service_ts_introspection->data);
+
+  bundle.request_members = service_members->request_members_;
+  bundle.response_members = service_members->response_members_;
 
   return bundle;
 }
