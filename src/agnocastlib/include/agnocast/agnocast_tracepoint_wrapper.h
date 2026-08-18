@@ -102,8 +102,14 @@ DECLARE_TRACEPOINT(
 #include "tracetools/utils.hpp"
 
 #include <cstdlib>
+#include <memory>
 #include <string>
 #include <type_traits>
+
+// Compatibility: Humble defines this, Jazzy returns nullptr instead.
+#ifndef TRACETOOLS_SYMBOL_UNKNOWN
+#define TRACETOOLS_SYMBOL_UNKNOWN "UNKNOWN"
+#endif
 
 namespace agnocast
 {
@@ -121,7 +127,7 @@ namespace agnocast
  * that is always valid to pass to `ctf_string()`.
  *
  * \param[in] callback the callback to resolve
- * \return the symbol, or an empty string if it is unavailable
+ * \return the symbol, or `TRACETOOLS_SYMBOL_UNKNOWN` if it could not be resolved
  */
 template <typename CallbackT>
 inline std::string get_callback_symbol([[maybe_unused]] const CallbackT & callback)
@@ -129,16 +135,18 @@ inline std::string get_callback_symbol([[maybe_unused]] const CallbackT & callba
 #ifndef TRACETOOLS_DISABLED
   auto * symbol = tracetools::get_symbol(callback);
   if (symbol == nullptr) {
-    return {};
+    // Jazzy signals failure with nullptr, Humble with this value. Report one form.
+    return TRACETOOLS_SYMBOL_UNKNOWN;
   }
-  std::string result{symbol};
+  // A non-const return type marks the buffer as caller-owned: Humble's `const char *` must not
+  // be freed, Jazzy's `char *` must. The guard frees it on every exit path, throws included.
+  std::unique_ptr<char, decltype(&std::free)> owned{nullptr, &std::free};
   if constexpr (!std::is_const_v<std::remove_pointer_t<decltype(symbol)>>) {
-    // Jazzy onwards: the caller owns the demangled string.
-    std::free(symbol);
+    owned.reset(symbol);
   }
-  return result;
+  return std::string{symbol};
 #else
-  return {};
+  return TRACETOOLS_SYMBOL_UNKNOWN;
 #endif
 }
 
