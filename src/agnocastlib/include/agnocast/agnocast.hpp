@@ -392,7 +392,7 @@ TimerBase::SharedPtr create_timer(
 
   register_timer_info(timer_id, timer, period_ns, group, clock);
 
-  const void * node_handle;
+  [[maybe_unused]] const void * node_handle;
   if constexpr (std::is_base_of_v<rclcpp::Node, NodePtrT>) {
     node_handle = static_cast<const void *>(
       node->get_node_base_interface()->get_shared_rcl_node_handle().get());
