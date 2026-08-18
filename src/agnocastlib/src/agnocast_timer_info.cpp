@@ -451,7 +451,7 @@ void TimerEventHandler::handle(EpollEventLocalID event_local_id)
   // Create a callable that handles the timer event
   *callable = [timer_info, callable_ptr]() {
     // Only the tracepoints below use the capture, and they compile out with TRACETOOLS_DISABLED.
-    (void) callable_ptr;
+    (void)callable_ptr;
     TRACEPOINT(agnocast_callable_start, callable_ptr);
     handle_timer_event(*timer_info);
     TRACEPOINT(agnocast_callable_end, callable_ptr);
@@ -547,7 +547,7 @@ void ClockEventHandler::handle(EpollEventLocalID event_local_id)
 
   *callable = [timer_info, callable_ptr]() {
     // Only the tracepoints below use the capture, and they compile out with TRACETOOLS_DISABLED.
-    (void) callable_ptr;
+    (void)callable_ptr;
     TRACEPOINT(agnocast_callable_start, callable_ptr);
     handle_timer_event(*timer_info);
     TRACEPOINT(agnocast_callable_end, callable_ptr);
