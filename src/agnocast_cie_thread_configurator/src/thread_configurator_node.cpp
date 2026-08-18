@@ -343,6 +343,12 @@ bool ThreadConfiguratorNode::set_affinity_by_cgroup(
       }
       cpus_file << cpus[i];
     }
+    // The kernel rejects invalid content (e.g. a nonexistent CPU) at write(2)
+    // time, not at open, so the stream state must be checked after flushing.
+    cpus_file.flush();
+    if (!cpus_file) {
+      return false;
+    }
   } else {
     return false;
   }
@@ -357,6 +363,11 @@ bool ThreadConfiguratorNode::set_affinity_by_cgroup(
   std::string tasks_path = cgroup_path + "/tasks";
   if (std::ofstream tasks_file{tasks_path}) {
     tasks_file << thread_id;
+    // Attaching a task to an empty or invalid cpuset fails at write(2) time.
+    tasks_file.flush();
+    if (!tasks_file) {
+      return false;
+    }
   } else {
     return false;
   }
@@ -380,7 +391,7 @@ bool ThreadConfiguratorNode::issue_syscalls(const ThreadConfig & config, int64_t
     }
 
     // Specify nice value
-    if (setpriority(PRIO_PROCESS, thread_id, config.priority) == -1) {
+    if (setpriority(PRIO_PROCESS, thread_id, config.nice) == -1) {
       RCLCPP_ERROR(
         this->get_logger(), "Failed to configure nice value (thread=%s, tid=%ld): %s",
         config.thread_str.c_str(), thread_id, strerror(errno));
