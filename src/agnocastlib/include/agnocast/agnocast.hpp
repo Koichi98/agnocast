@@ -392,7 +392,8 @@ TimerBase::SharedPtr create_timer(
 
   register_timer_info(timer_id, timer, period_ns, group, clock);
 
-  [[maybe_unused]] const void * node_handle;
+#ifndef TRACETOOLS_DISABLED
+  const void * node_handle;
   if constexpr (std::is_base_of_v<rclcpp::Node, NodePtrT>) {
     node_handle = static_cast<const void *>(
       node->get_node_base_interface()->get_shared_rcl_node_handle().get());
@@ -403,6 +404,7 @@ TimerBase::SharedPtr create_timer(
   TRACEPOINT(
     agnocast_timer_init, static_cast<const void *>(timer.get()), node_handle, callback_addr,
     static_cast<const void *>(group.get()), callback_symbol.c_str(), period_ns.count());
+#endif
 
   return timer;
 }

@@ -74,9 +74,10 @@ void receive_and_execute_message(
     const auto & [entry_id, entry_addr] = entry;
     [[maybe_unused]] const void * callback_addr = &entry;  // For CARET
 
+#ifndef TRACETOOLS_DISABLED
     {
       constexpr uint8_t PID_SHIFT_BITS = 32;
-      [[maybe_unused]] uint64_t pid_callback_info_id =
+      uint64_t pid_callback_info_id =
         (static_cast<uint64_t>(my_pid) << PID_SHIFT_BITS) | callback_info_id;
       // NOTE: The agnocast_create_callable tracepoint was previously used to associate
       // pid_callback_info_id with callable_addr, as well as to associate callable with entry_addr
@@ -86,6 +87,7 @@ void receive_and_execute_message(
       // ensure that CARET can be used without modifying its implementation.
       TRACEPOINT(agnocast_create_callable, callback_addr, entry_id, pid_callback_info_id);
     }
+#endif
 
     auto typed_msg = callback_info.message_creator(
       reinterpret_cast<void *>(entry_addr), callback_info.topic_name, callback_info.subscriber_id,

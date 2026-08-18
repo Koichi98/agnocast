@@ -318,9 +318,10 @@ public:
   {
     constructor_impl(node, qos, options, role);
 
+#ifndef TRACETOOLS_DISABLED
     {
       auto default_cbg = node->get_node_base_interface()->get_default_callback_group();
-      [[maybe_unused]] auto dummy_cb = []() {};
+      auto dummy_cb = []() {};
       std::string dummy_cb_symbols = "dummy_take" + topic_name_;
       TRACEPOINT(
         agnocast_subscription_init, static_cast<const void *>(this),
@@ -329,6 +330,7 @@ public:
         static_cast<const void *>(&dummy_cb), static_cast<const void *>(default_cbg.get()),
         dummy_cb_symbols.c_str(), topic_name_.c_str(), actual_qos_.depth(), 0);
     }
+#endif
   }
 
   TakeSubscription(
@@ -339,9 +341,10 @@ public:
   {
     constructor_impl(node, qos, options, role);
 
+#ifndef TRACETOOLS_DISABLED
     {
       auto default_cbg = get_default_callback_group_for_tracepoint(node);
-      [[maybe_unused]] auto dummy_cb = []() {};
+      auto dummy_cb = []() {};
       std::string dummy_cb_symbols = "dummy_take" + topic_name_;
       TRACEPOINT(
         agnocast_subscription_init, static_cast<const void *>(this),
@@ -349,6 +352,7 @@ public:
         static_cast<const void *>(&dummy_cb), static_cast<const void *>(default_cbg.get()),
         dummy_cb_symbols.c_str(), topic_name_.c_str(), actual_qos_.depth(), 0);
     }
+#endif
   }
 
   /**
