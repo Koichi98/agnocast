@@ -23,6 +23,7 @@ find_package(rclcpp_components REQUIRED)
 find_package(rcl_yaml_param_parser REQUIRED)
 find_package(rcpputils REQUIRED)
 find_package(rmw REQUIRED)
+find_package(service_msgs REQUIRED)
 find_package(tracetools REQUIRED)
 find_package(LTTngUST REQUIRED)
 find_package(agnocast_cie_config_msgs REQUIRED)
@@ -57,7 +58,7 @@ add_library(agnocast SHARED
   src/node/diagnostic_updater/diagnostic_updater.cpp
   src/vendor/rclcpp/generic_service.cpp src/vendor/rclcpp/generic_client.cpp)
 
-ament_target_dependencies(agnocast rclcpp rcpputils rmw agnocast_cie_thread_configurator rosgraph_msgs agnocast_cie_config_msgs ament_index_cpp message_filters tf2 tf2_ros tf2_msgs geometry_msgs diagnostic_msgs diagnostic_updater rosidl_typesupport_introspection_cpp)
+ament_target_dependencies(agnocast rclcpp rcpputils rmw service_msgs agnocast_cie_thread_configurator rosgraph_msgs agnocast_cie_config_msgs ament_index_cpp message_filters tf2 tf2_ros tf2_msgs geometry_msgs diagnostic_msgs diagnostic_updater rosidl_typesupport_introspection_cpp)
 
 target_link_libraries(agnocast
   ${rcl_yaml_param_parser_LIBRARIES}

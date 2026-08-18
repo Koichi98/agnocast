@@ -31,6 +31,7 @@
   <depend>rmw</depend>
   <depend>rosgraph_msgs</depend>
   <depend>rosidl_typesupport_introspection_cpp</depend>
+  <depend>service_msgs</depend>
   <depend>tracetools</depend>
 
   <depend>agnocast_cie_config_msgs</depend>
