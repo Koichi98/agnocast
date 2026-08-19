@@ -8,10 +8,27 @@
 
 #include <service_msgs/msg/service_event_info.hpp>
 
+#include <cstring>
+
 using service_msgs::msg::ServiceEventInfo;
 
 namespace agnocast
 {
+
+std::pair<ServiceIntrospectionState, GenericPublisher::SharedPtr> ServiceEventPublisher::snapshot()
+  const
+{
+  std::lock_guard<std::mutex> lock(mtx_);
+  return std::make_pair(state_, publisher_);
+}
+
+void ServiceEventPublisher::commit(
+  ServiceIntrospectionState state, GenericPublisher::SharedPtr publisher)
+{
+  std::lock_guard<std::mutex> lock(mtx_);
+  state_ = state;
+  publisher_ = publisher;
+}
 
 ServiceEventPublisher::ServiceEventPublisher(
   std::variant<rclcpp::Node *, agnocast::Node *> node, const std::string & service_name,
@@ -25,22 +42,11 @@ ServiceEventPublisher::ServiceEventPublisher(
 {
 }
 
-void ServiceEventPublisher::set_error_msg(const char * msg)
-{
-  error_msg_ = msg;
-}
-void ServiceEventPublisher::reset_error()
-{
-  error_msg_ = nullptr;
-}
-const char * ServiceEventPublisher::get_error_msg() const
-{
-  return error_msg_;
-}
-
 void ServiceEventPublisher::change_state(ServiceIntrospectionState new_state)
 {
-  if (state_ == new_state) {
+  auto [state, publisher] = snapshot();
+
+  if (state == new_state) {
     return;
   }
 
@@ -49,25 +55,29 @@ void ServiceEventPublisher::change_state(ServiceIntrospectionState new_state)
   // so create a new publisher. The remaining state transitions are between Metadata and Contents,
   // which require no action.
   if (new_state == ServiceIntrospectionState::Off) {
-    publisher_.reset();
-  } else if (state_ == ServiceIntrospectionState::Off) {
+    commit(new_state, nullptr);
+  } else if (state == ServiceIntrospectionState::Off) {
     std::visit(
-      [this](auto * n) {
-        publisher_ = std::make_shared<GenericPublisher>(
+      [this, new_state](auto * n) {
+        auto new_publisher = std::make_shared<GenericPublisher>(
           n, event_topic_name_, event_topic_type_, event_publisher_qos_);
+        commit(new_state, new_publisher);
       },
       node_);
   }
 
-  state_ = new_state;
+  // NOTE: The publisher is destroyed when this function returns, not in the commit(), minimizing
+  // the lock window. This is because we've got the snapshot.
 }
 
-bool ServiceEventPublisher::publish_service_event_message(
+std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_message(
   const uint8_t event_type, const void * payload, int64_t sequence_number,
   const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE])
 {
-  if (state_ == ServiceIntrospectionState::Off) {
-    return true;
+  auto [state, publisher] = snapshot();
+
+  if (state == ServiceIntrospectionState::Off) {
+    return std::make_pair(true, "");
   }
 
   // Prepare the introspection info (metadata).
@@ -87,7 +97,7 @@ bool ServiceEventPublisher::publish_service_event_message(
 
   // Construct the event message.
   void * event_msg;
-  if (state_ == ServiceIntrospectionState::Metadata) {
+  if (state == ServiceIntrospectionState::Metadata) {
     payload = nullptr;
   }
   switch (event_type) {
@@ -102,12 +112,11 @@ bool ServiceEventPublisher::publish_service_event_message(
         &info, &allocator, nullptr, payload);
       break;
     default:
-      set_error_msg("unsupported event type");
-      return false;
+      return std::make_pair(false, "unsupported event type");
   }
   if (event_msg == nullptr) {
-    set_error_msg("event_message_create_handle_function() failed to create event message");
-    return false;
+    return std::make_pair(
+      false, "event_message_create_handle_function() failed to create event message");
   }
 
   // Serialize the event message and publish it.
@@ -116,12 +125,14 @@ bool ServiceEventPublisher::publish_service_event_message(
   try {
     serialization.serialize_message(event_msg, &serialized_msg);
   } catch (const std::exception & e) {
-    set_error_msg("serialize_message() failed to serialize event message");
-    return false;
+    ts_bundle_.service_ts_introspection->event_message_destroy_handle_function(
+      event_msg, &allocator);
+    return std::make_pair(false, "serialize_message() failed to serialize event message");
   }
-  publisher_->publish(serialized_msg);
+  publisher->publish(serialized_msg);
 
-  return true;
+  ts_bundle_.service_ts_introspection->event_message_destroy_handle_function(event_msg, &allocator);
+  return std::make_pair(true, "");
 }
 
 }  // namespace agnocast

@@ -4,7 +4,9 @@
 #include "agnocast/agnocast_utils.hpp"
 
 #include <memory>
+#include <mutex>
 #include <string>
+#include <utility>
 #include <variant>
 
 namespace agnocast
@@ -28,14 +30,12 @@ class ServiceEventPublisher
   const rclcpp::Clock::SharedPtr clock_;
   const ServiceTsBundle ts_bundle_;
 
-  const char * error_msg_ = nullptr;
+  mutable std::mutex mtx_;
   ServiceIntrospectionState state_ = ServiceIntrospectionState::Off;
   GenericPublisher::SharedPtr publisher_ = nullptr;
 
-  /// @brief Sets the error message.
-  /// @param msg Must be a string literal.
-  void set_error_msg(const char * msg);
-  void reset_error();
+  std::pair<ServiceIntrospectionState, GenericPublisher::SharedPtr> snapshot() const;
+  void commit(ServiceIntrospectionState state, GenericPublisher::SharedPtr publisher);
 
 public:
   explicit ServiceEventPublisher(
@@ -43,20 +43,17 @@ public:
     const std::string & service_type, const rclcpp::QoS & qos,
     const rclcpp::Clock::SharedPtr & clock);
 
-  const char * get_error_msg() const;
-
-  /// @brief Changes the state of the service event publisher.
+  /// @brief Changes the state of the service event publisher (thread-safe).
   /// @param new_state The new state to set.
   void change_state(ServiceIntrospectionState new_state);
 
-  /// @brief Publishes a service event message.
+  /// @brief Publishes a service event message (thread-safe).
   /// @param event_type The event type.
   /// @param payload A pointer to the request/response payload.
   /// @param sequence_number The sequence number of the (corresponding) request.
   /// @param client_gid The GID of the client that triggered the request.
-  /// @return true if the message was successfully published, false otherwise with an error message
-  ///         set.
-  bool publish_service_event_message(
+  /// @return A pair consisting of a success flag and an error message (if any).
+  std::pair<bool, std::string> publish_service_event_message(
     const uint8_t event_type, const void * payload, int64_t sequence_number,
     const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE]);
 };
