@@ -1,5 +1,7 @@
 #include "agnocast/agnocast_service_event_publisher.hpp"
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+
 #include "builtin_interfaces/msg/time.hpp"
 #include "rclcpp/serialization.hpp"
 #include "rclcpp/serialized_message.hpp"
@@ -15,73 +17,84 @@ using service_msgs::msg::ServiceEventInfo;
 namespace agnocast
 {
 
-std::pair<ServiceIntrospectionState, GenericPublisher::SharedPtr> ServiceEventPublisher::snapshot()
-  const
+ServiceEventPublisher::Snapshot ServiceEventPublisher::snapshot() const
 {
   std::lock_guard<std::mutex> lock(mtx_);
-  return std::make_pair(state_, publisher_);
+  return Snapshot{state_, publisher_, clock_, ts_bundle_};
 }
 
-void ServiceEventPublisher::commit(
-  ServiceIntrospectionState state, GenericPublisher::SharedPtr publisher)
+void ServiceEventPublisher::commit(const Snapshot & next)
 {
   std::lock_guard<std::mutex> lock(mtx_);
-  state_ = state;
-  publisher_ = publisher;
+  state_ = next.state;
+  publisher_ = next.publisher;
+  clock_ = next.clock;
+  ts_bundle_ = next.ts_bundle;
 }
 
 ServiceEventPublisher::ServiceEventPublisher(
   std::variant<rclcpp::Node *, agnocast::Node *> node, const std::string & service_name,
-  const std::string & service_type, const rclcpp::QoS & qos, const rclcpp::Clock::SharedPtr & clock)
+  const std::string & service_type)
 : node_(std::move(node)),
-  event_topic_name_(service_name + "/_service_event"),
-  event_topic_type_(service_type + "_Event"),
-  event_publisher_qos_(qos),
-  clock_(clock),
-  ts_bundle_(load_service_typesupport(service_type))
+  service_type_(service_type),
+  // Matches RCL_SERVICE_INTROSPECTION_TOPIC_POSTFIX and the `<Srv>_Event` message rosidl
+  // generates, so ros2 service echo can find the topic.
+  event_topic_name_(service_name + RCL_SERVICE_INTROSPECTION_TOPIC_POSTFIX),
+  event_topic_type_(service_type + "_Event")
 {
 }
 
-void ServiceEventPublisher::change_state(ServiceIntrospectionState new_state)
+void ServiceEventPublisher::configure(
+  const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
+  rcl_service_introspection_state_t state)
 {
-  auto [state, publisher] = snapshot();
+  std::lock_guard<std::mutex> transition_lock(transition_mtx_);
 
-  if (state == new_state) {
+  Snapshot current = snapshot();
+
+  if (state == RCL_SERVICE_INTROSPECTION_OFF) {
+    if (current.state == RCL_SERVICE_INTROSPECTION_OFF) {
+      return;
+    }
+    // ts_bundle is carried over: unloading the typesupport libraries would only cost a second
+    // dlopen if introspection is turned back on.
+    commit(Snapshot{state, nullptr, nullptr, current.ts_bundle});
+    // The publisher is destroyed here rather than inside commit(), keeping mtx_ off the
+    // teardown path.
     return;
   }
 
-  // If the new state is Off, the current state is either Metadata or Contents, so destroy the
-  // existing publisher. If the current state is Off, it's changing to either Metadata or Contents,
-  // so create a new publisher. The remaining state transitions are between Metadata and Contents,
-  // which require no action.
-  if (new_state == ServiceIntrospectionState::Off) {
-    commit(new_state, nullptr);
-  } else if (state == ServiceIntrospectionState::Off) {
+  Snapshot next{state, current.publisher, clock, current.ts_bundle};
+
+  if (!next.ts_bundle) {
+    next.ts_bundle =
+      std::make_shared<const ServiceTsBundle>(load_service_typesupport(service_type_));
+  }
+
+  if (!next.publisher) {
     std::visit(
-      [this, new_state](auto * n) {
-        auto new_publisher = std::make_shared<GenericPublisher>(
-          n, event_topic_name_, event_topic_type_, event_publisher_qos_);
-        commit(new_state, new_publisher);
+      [this, &next, &qos_service_event_pub](auto * n) {
+        next.publisher = std::make_shared<GenericPublisher>(
+          n, event_topic_name_, event_topic_type_, qos_service_event_pub);
       },
       node_);
   }
 
-  // NOTE: The publisher is destroyed when this function returns, not in the commit(), minimizing
-  // the lock window. This is because we've got the snapshot.
+  commit(next);
 }
 
 std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_message(
   const uint8_t event_type, const void * payload, int64_t sequence_number,
   const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE])
 {
-  auto [state, publisher] = snapshot();
+  Snapshot active = snapshot();
 
-  if (state == ServiceIntrospectionState::Off) {
+  if (active.state == RCL_SERVICE_INTROSPECTION_OFF) {
     return std::make_pair(true, "");
   }
 
   // Prepare the introspection info (metadata).
-  builtin_interfaces::msg::Time stamp = clock_->now();
+  builtin_interfaces::msg::Time stamp = active.clock->now();
 
   rosidl_service_introspection_info_t info = {};
   info.event_type = event_type;
@@ -97,18 +110,18 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
 
   // Construct the event message.
   void * event_msg;
-  if (state == ServiceIntrospectionState::Metadata) {
+  if (active.state == RCL_SERVICE_INTROSPECTION_METADATA) {
     payload = nullptr;
   }
   switch (event_type) {
     case ServiceEventInfo::REQUEST_RECEIVED:
     case ServiceEventInfo::REQUEST_SENT:
-      event_msg = ts_bundle_.service_ts_introspection->event_message_create_handle_function(
+      event_msg = active.ts_bundle->service_ts_introspection->event_message_create_handle_function(
         &info, &allocator, payload, nullptr);
       break;
     case ServiceEventInfo::RESPONSE_RECEIVED:
     case ServiceEventInfo::RESPONSE_SENT:
-      event_msg = ts_bundle_.service_ts_introspection->event_message_create_handle_function(
+      event_msg = active.ts_bundle->service_ts_introspection->event_message_create_handle_function(
         &info, &allocator, nullptr, payload);
       break;
     default:
@@ -121,18 +134,22 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
 
   // Serialize the event message and publish it.
   rclcpp::SerializedMessage serialized_msg;
-  rclcpp::SerializationBase serialization(ts_bundle_.service_ts->event_typesupport);
+  rclcpp::SerializationBase serialization(active.ts_bundle->service_ts->event_typesupport);
   try {
     serialization.serialize_message(event_msg, &serialized_msg);
   } catch (const std::exception & e) {
-    ts_bundle_.service_ts_introspection->event_message_destroy_handle_function(
+    active.ts_bundle->service_ts_introspection->event_message_destroy_handle_function(
       event_msg, &allocator);
-    return std::make_pair(false, "serialize_message() failed to serialize event message");
+    return std::make_pair(
+      false, std::string("serialize_message() failed to serialize event message: ") + e.what());
   }
-  publisher->publish(serialized_msg);
+  active.publisher->publish(serialized_msg);
 
-  ts_bundle_.service_ts_introspection->event_message_destroy_handle_function(event_msg, &allocator);
+  active.ts_bundle->service_ts_introspection->event_message_destroy_handle_function(
+    event_msg, &allocator);
   return std::make_pair(true, "");
 }
 
 }  // namespace agnocast
+
+#endif  // AGNOCAST_HAS_SERVICE_INTROSPECTION

@@ -10,8 +10,11 @@
 #include "agnocast/internal/service_wire_type.hpp"
 #include "rclcpp/rclcpp.hpp"
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
 #include <service_msgs/msg/service_event_info.hpp>
+#endif
 
+#include <cstring>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -60,7 +63,9 @@ private:
   std::mutex publishers_mtx_;
   std::unordered_map<std::string, typename ServiceResponsePublisher::SharedPtr> publishers_;
   typename ServiceRequestSubscriber::SharedPtr subscriber_;
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
   std::shared_ptr<ServiceEventPublisher> event_publisher_;
+#endif
 
   typename ServiceResponsePublisher::SharedPtr get_or_create_publisher_for(
     const std::string & node_name)
@@ -86,67 +91,83 @@ private:
     return pub;
   }
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+  // Correlation metadata copied out of a request, so that a response event can still be published
+  // after the request has been moved into the user callback.
+  struct RequestOrigin
+  {
+    int64_t seqno;
+    uint8_t client_gid[RMW_GID_STORAGE_SIZE];
+  };
+
+  static RequestOrigin request_origin_of(const ipc_shared_ptr<RequestT> & request)
+  {
+    RequestOrigin origin{request->RequestMeta::seqno, {}};
+    std::memcpy(origin.client_gid, request->RequestMeta::client_gid, sizeof(origin.client_gid));
+    return origin;
+  }
+
+  void log_event_failure(const char * what, const std::string & err_msg)
+  {
+    std::visit(
+      [what, &err_msg](auto * n) {
+        RCLCPP_ERROR(n->get_logger(), "Failed to publish %s event: %s", what, err_msg.c_str());
+      },
+      node_);
+  }
+
   void publish_request_received_event(const ipc_shared_ptr<RequestT> & request)
   {
-    const void * payload = request.get();
-    const int64_t seqno = request->RequestMeta::seqno;
-    const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = request->RequestMeta::client_gid;
+    // static_cast, not a bare void * conversion: only the former applies the wrapper-to-payload
+    // base offset.
+    const auto * payload = static_cast<const typename ServiceT::Request *>(request.get());
 
     auto [ok, err_msg] = event_publisher_->publish_service_event_message(
-      service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, payload, seqno, client_gid);
+      service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, payload, request->RequestMeta::seqno,
+      request->RequestMeta::client_gid);
     if (!ok) {
-      std::visit(
-        [err_msg = std::move(err_msg)](auto * n) {
-          RCLCPP_ERROR(
-            n->get_logger(), "Failed to publish request received event: %s", err_msg.c_str());
-        },
-        node_);
+      log_event_failure("request received", err_msg);
     }
   }
 
+  // Must be called before the response is published: publishing hands the buffer to the kmod,
+  // after which a later publish on the same topic may evict and free it mid-read.
   void publish_response_sent_event(
-    const ipc_shared_ptr<RequestT> & request, const void * response_payload)
+    const RequestOrigin & origin, const ipc_shared_ptr<ResponseT> & response)
   {
-    const int64_t seqno = request->RequestMeta::seqno;
-    const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = request->RequestMeta::client_gid;
+    const auto * payload = static_cast<const typename ServiceT::Response *>(response.get());
 
     auto [ok, err_msg] = event_publisher_->publish_service_event_message(
-      service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, response_payload, seqno, client_gid);
+      service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, payload, origin.seqno, origin.client_gid);
     if (!ok) {
-      std::visit(
-        [err_msg = std::move(err_msg)](auto * n) {
-          RCLCPP_ERROR(
-            n->get_logger(), "Failed to publish response sent event: %s", err_msg.c_str());
-        },
-        node_);
+      log_event_failure("response sent", err_msg);
     }
   }
+#endif
 
   template <typename Func>
   auto wrap_basic_service_callback_for_subscriber(Func && callback)
   {
     return [this, callback = std::forward<Func>(callback)](ipc_shared_ptr<RequestT> && request) {
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
       publish_request_received_event(request);
+      const RequestOrigin origin = request_origin_of(request);
+#endif
 
       auto publisher = this->get_or_create_publisher_for(request->RequestMeta::node_name);
 
-      // Allocate the response and set its metadata.
       ipc_shared_ptr<ResponseT> response = publisher->borrow_loaned_message();
       response->ResponseMeta::seqno = request->RequestMeta::seqno;
 
-      // Invoke the user callback.
-      ipc_shared_ptr<typename ServiceT::Request> request_double = request;
       ipc_shared_ptr<typename ServiceT::Response> response_double(response);
-      callback(std::move(request_double), std::move(response_double));
+      callback(
+        ipc_shared_ptr<typename ServiceT::Request>(std::move(request)), std::move(response_double));
 
-      // Send the response.
-      const void * response_payload = response.get();
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+      publish_response_sent_event(origin, response);
+#endif
+
       publisher->publish(std::move(response));
-
-      // Publish the response sent event.
-      // XXX: Although it's very unlikely, the response may be destroyed even before
-      // publish_response_sent_event() ends in an extreme case (really?).
-      publish_response_sent_event(request, response_payload);
 
       // Safety regarding response_double
       //   When `response` is published, all references that share its control block are
@@ -160,7 +181,9 @@ private:
   auto wrap_deferred_service_callback_for_subscriber(Func && callback)
   {
     return [this, callback = std::forward<Func>(callback)](ipc_shared_ptr<RequestT> && request) {
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
       publish_request_received_event(request);
+#endif
 
       callback(this->shared_from_this(), std::move(request));
     };
@@ -180,6 +203,13 @@ private:
 
     service_name_ = node->get_node_services_interface()->resolve_service_name(service_name);
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+    // Must precede the subscription: registering it makes the callback reachable by an executor
+    // that is already spinning, and the callback dereferences event_publisher_.
+    event_publisher_ = std::make_shared<ServiceEventPublisher>(
+      node_, service_name_, rosidl_generator_traits::name<ServiceT>());
+#endif
+
     SubscriptionOptions options{group};
     std::string topic_name = create_service_request_topic_name(service_name_);
     if constexpr (is_basic_cb<Func>::value) {
@@ -193,9 +223,6 @@ private:
         wrap_deferred_service_callback_for_subscriber(std::forward<Func>(callback)), options,
         SubscriptionRole::AgnocastOnly);
     }
-
-    event_publisher_ = std::make_shared<ServiceEventPublisher>(
-      node_, service_name_, rosidl_generator_traits::name<ServiceT>(), qos_, node->get_clock());
 
     if (role == ServiceRole::Default) {
       std::optional<std::pair<std::string, std::string>> shadow_node_identity{std::nullopt};
@@ -253,10 +280,11 @@ public:
 
     auto publisher = get_or_create_publisher_for(internal_request->RequestMeta::node_name);
 
-    const void * response_payload = internal_response.get();
-    publisher->publish(std::move(internal_response));
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+    publish_response_sent_event(request_origin_of(internal_request), internal_response);
+#endif
 
-    publish_response_sent_event(internal_request, response_payload);
+    publisher->publish(std::move(internal_response));
   }
 
   /**
@@ -280,8 +308,13 @@ public:
     return ipc_shared_ptr<typename ServiceT::Response>(std::move(response));
   }
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
   /**
    * @brief Configure service introspection.
+   *
+   * Only the service side of the exchange is published. A client publishes no REQUEST_SENT or
+   * RESPONSE_RECEIVED events.
+   *
    * @param clock The clock to use to generate introspection timestamps.
    * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
    * @param introspection_state The state to set introspection to.
@@ -291,8 +324,9 @@ public:
     const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
     rcl_service_introspection_state_t introspection_state)
   {
-    // TODO
+    event_publisher_->configure(clock, qos_service_event_pub, introspection_state);
   }
+#endif
 
   const char * get_service_name() const { return service_name_.c_str(); }
 };

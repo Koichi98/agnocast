@@ -263,9 +263,6 @@ ServiceTsBundle load_service_typesupport(const std::string & service_type)
   static const std::string ts_identifier = "rosidl_typesupport_cpp";
   static const std::string ts_identifier_introspection = "rosidl_typesupport_introspection_cpp";
 
-  const std::string request_type = service_type + "_Request";
-  const std::string response_type = service_type + "_Response";
-
   ServiceTsBundle bundle;
 
   bundle.ts_lib = rclcpp::get_typesupport_library(service_type, ts_identifier);
