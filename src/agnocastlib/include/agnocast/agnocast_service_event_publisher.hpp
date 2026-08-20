@@ -1,7 +1,7 @@
 #pragma once
 
 #include "agnocast/agnocast_publisher.hpp"
-#include "agnocast/agnocast_utils.hpp"
+#include "agnocast/internal/service_typesupport.hpp"
 
 #include <memory>
 #include <mutex>

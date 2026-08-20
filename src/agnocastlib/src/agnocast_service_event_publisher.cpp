@@ -103,12 +103,12 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
   switch (event_type) {
     case ServiceEventInfo::REQUEST_RECEIVED:
     case ServiceEventInfo::REQUEST_SENT:
-      event_msg = ts_bundle_.service_ts_introspection->event_message_create_handle_function(
+      event_msg = ts_bundle_.service_ts->event_message_create_handle_function(
         &info, &allocator, payload, nullptr);
       break;
     case ServiceEventInfo::RESPONSE_RECEIVED:
     case ServiceEventInfo::RESPONSE_SENT:
-      event_msg = ts_bundle_.service_ts_introspection->event_message_create_handle_function(
+      event_msg = ts_bundle_.service_ts->event_message_create_handle_function(
         &info, &allocator, nullptr, payload);
       break;
     default:
@@ -125,13 +125,12 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
   try {
     serialization.serialize_message(event_msg, &serialized_msg);
   } catch (const std::exception & e) {
-    ts_bundle_.service_ts_introspection->event_message_destroy_handle_function(
-      event_msg, &allocator);
+    ts_bundle_.service_ts->event_message_destroy_handle_function(event_msg, &allocator);
     return std::make_pair(false, "serialize_message() failed to serialize event message");
   }
   publisher->publish(serialized_msg);
 
-  ts_bundle_.service_ts_introspection->event_message_destroy_handle_function(event_msg, &allocator);
+  ts_bundle_.service_ts->event_message_destroy_handle_function(event_msg, &allocator);
   return std::make_pair(true, "");
 }
 
