@@ -8,6 +8,7 @@
 #include "std_srvs/srv/set_bool.hpp"
 #include <service_msgs/msg/service_event_info.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -92,6 +93,11 @@ protected:
   void enable_introspection(rcl_service_introspection_state_t state)
   {
     service_->configure_introspection(node_->get_clock(), rclcpp::ServicesQoS(), state);
+  }
+
+  void enable_client_introspection(rcl_service_introspection_state_t state)
+  {
+    client_->configure_introspection(node_->get_clock(), rclcpp::ServicesQoS(), state);
   }
 
   /// Issues one call and returns once it has completed. Events may still be in flight.
@@ -197,6 +203,51 @@ TEST_F(ServiceIntrospectionTest, ReEnablingAfterOffPublishesEventsAgain)
 
   EXPECT_EQ(collect_events(2).size(), 2u)
     << "the event publisher must be recreated when introspection is enabled a second time";
+}
+
+TEST_F(ServiceIntrospectionTest, ClientPublishesRequestSentAndResponseReceived)
+{
+  enable_client_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
+
+  call_service(true);
+  auto events = collect_events(2);
+
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].info.event_type, ServiceEventInfo::REQUEST_SENT);
+  EXPECT_EQ(events[1].info.event_type, ServiceEventInfo::RESPONSE_RECEIVED);
+
+  ASSERT_EQ(events[0].request.size(), 1u);
+  EXPECT_TRUE(events[0].request[0].data);
+  ASSERT_EQ(events[1].response.size(), 1u);
+  EXPECT_EQ(events[1].response[0].message, "ok");
+}
+
+TEST_F(ServiceIntrospectionTest, BothSidesTogetherCoverTheWholeExchange)
+{
+  enable_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
+  enable_client_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
+
+  call_service(true);
+  auto events = collect_events(4);
+
+  ASSERT_EQ(events.size(), 4u);
+
+  // One transaction, so every event must carry the same correlation key.
+  for (const auto & e : events) {
+    EXPECT_EQ(e.info.sequence_number, events[0].info.sequence_number);
+    EXPECT_EQ(e.info.client_gid, events[0].info.client_gid);
+  }
+
+  std::vector<uint8_t> types;
+  types.reserve(events.size());
+  for (const auto & e : events) {
+    types.push_back(e.info.event_type);
+  }
+  std::sort(types.begin(), types.end());
+  EXPECT_EQ(
+    types, std::vector<uint8_t>(
+             {ServiceEventInfo::REQUEST_SENT, ServiceEventInfo::REQUEST_RECEIVED,
+              ServiceEventInfo::RESPONSE_SENT, ServiceEventInfo::RESPONSE_RECEIVED}));
 }
 
 #endif  // AGNOCAST_HAS_SERVICE_INTROSPECTION
