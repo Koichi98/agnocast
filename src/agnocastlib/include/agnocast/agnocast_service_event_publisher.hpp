@@ -1,5 +1,16 @@
 #pragma once
 
+#include <rclcpp/version.h>
+
+// Service introspection needs the event typesupport hooks in rosidl_service_type_support_t,
+// rcl_service_introspection_state_t and the service_msgs package, none of which exist before
+// Iron (rclcpp 21). Humble is still a supported target, so the whole feature is gated here.
+// Keep this distinct from the RCLCPP_VERSION_MAJOR >= 28 checks elsewhere: those track when
+// rclcpp::get_service_typesupport_handle appeared, which is an unrelated boundary.
+#define AGNOCAST_HAS_SERVICE_INTROSPECTION (RCLCPP_VERSION_MAJOR >= 21)
+
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+
 #include "agnocast/agnocast_publisher.hpp"
 #include "agnocast/internal/service_typesupport.hpp"
 
@@ -59,3 +70,5 @@ public:
 };
 
 }  // namespace agnocast
+
+#endif  // AGNOCAST_HAS_SERVICE_INTROSPECTION
