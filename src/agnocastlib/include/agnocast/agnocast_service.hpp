@@ -123,27 +123,15 @@ private:
     return origin;
   }
 
-  void log_event_failure(const char * what, const std::string & err_msg)
-  {
-    std::visit(
-      [what, &err_msg](auto * n) {
-        RCLCPP_ERROR(n->get_logger(), "Failed to publish %s event: %s", what, err_msg.c_str());
-      },
-      node_);
-  }
-
   void publish_request_received_event(const ipc_shared_ptr<RequestT> & request)
   {
     // static_cast, not a bare void * conversion: only the former applies the wrapper-to-payload
     // base offset.
     const auto * payload = static_cast<const typename ServiceT::Request *>(request.get());
 
-    auto [ok, err_msg] = event_publisher_->publish_service_event_message(
+    event_publisher_->publish_service_event_message(
       service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, payload, request->RequestMeta::seqno,
       request->RequestMeta::client_gid);
-    if (!ok) {
-      log_event_failure("request received", err_msg);
-    }
   }
 
   // Must be called before the response is published: publishing hands the buffer to the kmod,
@@ -153,11 +141,8 @@ private:
   {
     const auto * payload = static_cast<const typename ServiceT::Response *>(response.get());
 
-    auto [ok, err_msg] = event_publisher_->publish_service_event_message(
+    event_publisher_->publish_service_event_message(
       service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, payload, origin.seqno, origin.client_gid);
-    if (!ok) {
-      log_event_failure("response sent", err_msg);
-    }
   }
 #endif
 

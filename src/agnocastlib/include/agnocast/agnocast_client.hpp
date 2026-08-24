@@ -197,14 +197,9 @@ private:
 #endif
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-  void publish_client_event(
-    const uint8_t event_type, const void * payload, const int64_t seqno, const char * what)
+  void publish_client_event(const uint8_t event_type, const void * payload, const int64_t seqno)
   {
-    auto [ok, err_msg] =
-      event_publisher_->publish_service_event_message(event_type, payload, seqno, get_gid().data);
-    if (!ok) {
-      RCLCPP_ERROR(get_logger(), "Failed to publish %s event: %s", what, err_msg.c_str());
-    }
+    event_publisher_->publish_service_event_message(event_type, payload, seqno, get_gid().data);
   }
 #endif
 
@@ -230,8 +225,7 @@ private:
     // publish on the same topic may evict and free it mid-read.
     publish_client_event(
       service_msgs::msg::ServiceEventInfo::REQUEST_SENT,
-      static_cast<const typename ServiceT::Request *>(internal_request.get()), seqno,
-      "request sent");
+      static_cast<const typename ServiceT::Request *>(internal_request.get()), seqno);
 #endif
 
     publisher_->publish(std::move(internal_request));
@@ -280,7 +274,7 @@ private:
       publish_client_event(
         service_msgs::msg::ServiceEventInfo::RESPONSE_RECEIVED,
         static_cast<const typename ServiceT::Response *>(response.get()),
-        response->ResponseMeta::seqno, "response received");
+        response->ResponseMeta::seqno);
 #endif
 
       info.promise.set_value(ipc_shared_ptr<typename ServiceT::Response>(std::move(response)));

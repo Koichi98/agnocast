@@ -2,6 +2,7 @@
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
 
+#include "agnocast/node/agnocast_node.hpp"
 #include "builtin_interfaces/msg/time.hpp"
 #include "rclcpp/serialization.hpp"
 #include "rclcpp/serialized_message.hpp"
@@ -90,14 +91,47 @@ void ServiceEventPublisher::configure(
   commit(next);
 }
 
-std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_message(
+namespace
+{
+
+const char * event_type_name(const uint8_t event_type)
+{
+  switch (event_type) {
+    case ServiceEventInfo::REQUEST_SENT:
+      return "request sent";
+    case ServiceEventInfo::REQUEST_RECEIVED:
+      return "request received";
+    case ServiceEventInfo::RESPONSE_SENT:
+      return "response sent";
+    case ServiceEventInfo::RESPONSE_RECEIVED:
+      return "response received";
+    default:
+      return "unknown";
+  }
+}
+
+}  // namespace
+
+void ServiceEventPublisher::log_failure(
+  const uint8_t event_type, const std::string & reason) const noexcept
+{
+  std::visit(
+    [this, event_type, &reason](auto * n) {
+      RCLCPP_ERROR(
+        n->get_logger(), "Failed to publish the %s event on '%s': %s", event_type_name(event_type),
+        event_topic_name_.c_str(), reason.c_str());
+    },
+    node_);
+}
+
+void ServiceEventPublisher::publish_service_event_message(
   const uint8_t event_type, const void * payload, int64_t sequence_number,
-  const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE])
+  const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE]) noexcept
 {
   Snapshot active = snapshot();
 
   if (active.state == RCL_SERVICE_INTROSPECTION_OFF) {
-    return std::make_pair(true, "");
+    return;
   }
 
   const bool with_payload = active.state != RCL_SERVICE_INTROSPECTION_METADATA;
@@ -113,7 +147,8 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
       response_payload = with_payload ? payload : nullptr;
       break;
     default:
-      return std::make_pair(false, "unsupported event type");
+      log_failure(event_type, "unsupported event type");
+      return;
   }
 
   // Nothing below may escape: this runs on the request/response path, before the payload is
@@ -141,8 +176,8 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
         &info, &allocator, request_payload, response_payload),
       destroy);
     if (!event_msg) {
-      return std::make_pair(
-        false, "event_message_create_handle_function() failed to create event message");
+      log_failure(event_type, "event_message_create_handle_function() returned null");
+      return;
     }
 
     rclcpp::SerializedMessage serialized_msg;
@@ -150,12 +185,10 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
     serialization.serialize_message(event_msg.get(), &serialized_msg);
     active.publisher->publish(serialized_msg);
   } catch (const std::exception & e) {
-    return std::make_pair(false, std::string("failed to publish event message: ") + e.what());
+    log_failure(event_type, e.what());
   } catch (...) {
-    return std::make_pair(false, "failed to publish event message: unknown exception");
+    log_failure(event_type, "unknown exception");
   }
-
-  return std::make_pair(true, "");
 }
 
 }  // namespace agnocast
