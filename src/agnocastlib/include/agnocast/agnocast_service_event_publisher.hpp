@@ -38,6 +38,11 @@ class ServiceEventPublisher
   const std::string event_topic_name_;
   const std::string event_topic_type_;
 
+  // Serializes whole transitions. Without it the read-decide-write in configure() could
+  // interleave with another transition and lose an update; mtx_ alone cannot prevent that
+  // because the publisher is created outside it.
+  std::mutex transition_mtx_;
+
   mutable std::mutex mtx_;
   rcl_service_introspection_state_t state_ = RCL_SERVICE_INTROSPECTION_OFF;
   GenericPublisher::SharedPtr publisher_;

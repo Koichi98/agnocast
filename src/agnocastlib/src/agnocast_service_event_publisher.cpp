@@ -48,6 +48,8 @@ void ServiceEventPublisher::configure(
   const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
   rcl_service_introspection_state_t state)
 {
+  std::lock_guard<std::mutex> transition_lock(transition_mtx_);
+
   Snapshot current = snapshot();
 
   if (state == RCL_SERVICE_INTROSPECTION_OFF) {
