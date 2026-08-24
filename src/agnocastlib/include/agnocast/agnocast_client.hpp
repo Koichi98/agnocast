@@ -85,13 +85,18 @@ class ClientBase
 {
 protected:
   std::atomic<int64_t> next_sequence_number_{0};
+  std::variant<rclcpp::Node *, agnocast::Node *> node_;
   std::string node_name_;
   std::string service_name_;
   std::function<bool()> check_context_ok_;
 
+  // Defined in the .cpp: agnocast::Node is only forward-declared here.
+  rclcpp::Logger get_logger() const;
+
   template <typename NodeT>
   void init_base(NodeT * node, const std::string & service_name)
   {
+    node_ = node;
     node_name_ = node->get_fully_qualified_name();
     service_name_ = node->get_node_services_interface()->resolve_service_name(service_name);
 
@@ -183,6 +188,27 @@ private:
   typename ServiceRequestPublisher::SharedPtr publisher_;
   typename ServiceResponseSubscriber::SharedPtr subscriber_;
 
+  // Registers the pending call under the request's seqno and sends it. take_future runs while
+  // seqno2_response_call_info_mtx_ is held, so the entry is in place before the response can
+  // arrive.
+  template <typename Func>
+  int64_t send_request_impl(
+    ipc_shared_ptr<typename ServiceT::Request> && request, ResponseCallInfo && call_info,
+    Func && take_future)
+  {
+    auto internal_request = static_ipc_shared_ptr_cast<RequestT>(std::move(request));
+    const int64_t seqno = internal_request->RequestMeta::seqno;
+
+    {
+      std::lock_guard<std::mutex> lock(seqno2_response_call_info_mtx_);
+      take_future(
+        seqno2_response_call_info_.try_emplace(seqno, std::move(call_info)).first->second);
+    }
+
+    publisher_->publish(std::move(internal_request));
+    return seqno;
+  }
+
   template <typename NodeT>
   void constructor_impl(
     NodeT * node, const std::string & service_name, const rclcpp::QoS & qos_arg,
@@ -198,14 +224,14 @@ private:
       node, create_service_request_topic_name(service_name_), qos, pub_options,
       to_publisher_role(role));
 
-    auto subscriber_callback = [this, node](ipc_shared_ptr<ResponseT> && response) {
+    auto subscriber_callback = [this](ipc_shared_ptr<ResponseT> && response) {
       std::unique_lock<std::mutex> lock(seqno2_response_call_info_mtx_);
       /* --- critical section begin --- */
       // Get the corresponding ResponseCallInfo and remove it from the map
       auto it = seqno2_response_call_info_.find(response->ResponseMeta::seqno);
       if (it == seqno2_response_call_info_.end()) {
         lock.unlock();
-        RCLCPP_ERROR(node->get_logger(), "Agnocast internal implementation error: bad entry id");
+        RCLCPP_ERROR(get_logger(), "Agnocast internal implementation error: bad entry id");
         return;
       }
       ResponseCallInfo info = std::move(it->second);
@@ -281,16 +307,9 @@ public:
     std::function<void(SharedFuture)> callback)
   {
     SharedFuture shared_future;
-    auto internal_request = static_ipc_shared_ptr_cast<RequestT>(std::move(request));
-    int64_t seqno = internal_request->RequestMeta::seqno;
-
-    {
-      std::lock_guard<std::mutex> lock(seqno2_response_call_info_mtx_);
-      auto it = seqno2_response_call_info_.try_emplace(seqno, std::move(callback)).first;
-      shared_future = it->second.shared_future.value();
-    }
-
-    publisher_->publish(std::move(internal_request));
+    const int64_t seqno = send_request_impl(
+      std::move(request), ResponseCallInfo(std::move(callback)),
+      [&](ResponseCallInfo & info) { shared_future = info.shared_future.value(); });
     return SharedFutureAndRequestId(std::move(shared_future), seqno);
   }
 
@@ -302,16 +321,9 @@ public:
   FutureAndRequestId async_send_request(ipc_shared_ptr<typename ServiceT::Request> && request)
   {
     Future future;
-    auto internal_request = static_ipc_shared_ptr_cast<RequestT>(std::move(request));
-    int64_t seqno = internal_request->RequestMeta::seqno;
-
-    {
-      std::lock_guard<std::mutex> lock(seqno2_response_call_info_mtx_);
-      auto it = seqno2_response_call_info_.try_emplace(seqno).first;
-      future = it->second.promise.get_future();
-    }
-
-    publisher_->publish(std::move(internal_request));
+    const int64_t seqno = send_request_impl(
+      std::move(request), ResponseCallInfo(),
+      [&](ResponseCallInfo & info) { future = info.promise.get_future(); });
     return FutureAndRequestId(std::move(future), seqno);
   }
 };
@@ -371,7 +383,7 @@ private:
     publisher_ = std::make_shared<TypeErasedPublisher>(
       node, req_topic_name, "", qos, pub_options, to_publisher_role(role));
 
-    auto subscriber_callback = [this, node](ipc_shared_ptr<void> && response) {
+    auto subscriber_callback = [this](ipc_shared_ptr<void> && response) {
       auto generic_response_wrapper =
         GenericResponseWrapper(service_ts_bundle_.response_members, std::move(response));
       int64_t response_seqno = generic_response_wrapper.seqno();
@@ -382,7 +394,7 @@ private:
       auto it = seqno2_response_call_info_.find(response_seqno);
       if (it == seqno2_response_call_info_.end()) {
         lock.unlock();
-        RCLCPP_ERROR(node->get_logger(), "Agnocast internal implementation error: bad entry id");
+        RCLCPP_ERROR(get_logger(), "Agnocast internal implementation error: bad entry id");
         return;
       }
       ResponseCallInfo info = std::move(it->second);
