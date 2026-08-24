@@ -13,6 +13,7 @@
 
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 
 using service_msgs::msg::ServiceEventInfo;
 
@@ -50,6 +51,13 @@ void ServiceEventPublisher::configure(
   const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
   rcl_service_introspection_state_t state)
 {
+  // Checked before anything is committed: publish_service_event_message() dereferences the
+  // clock, and a null one is undefined behaviour rather than an exception, so its try/catch
+  // would not contain it. rcl_service_configure_service_introspection rejects it too.
+  if (state != RCL_SERVICE_INTROSPECTION_OFF && clock == nullptr) {
+    throw std::invalid_argument("a clock is required to enable service introspection");
+  }
+
   std::lock_guard<std::mutex> transition_lock(transition_mtx_);
 
   Snapshot current = snapshot();

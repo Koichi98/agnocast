@@ -76,6 +76,7 @@ public:
   /// @param clock The clock used to generate introspection timestamps.
   /// @param qos_service_event_pub The QoS to use when creating the event publisher.
   /// @param state The state to set introspection to.
+  /// @throws std::invalid_argument if @p clock is null while enabling introspection.
   /// @throws std::runtime_error if the typesupport libraries cannot be loaded.
   void configure(
     const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
