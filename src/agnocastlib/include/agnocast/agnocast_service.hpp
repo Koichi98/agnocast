@@ -108,28 +108,8 @@ private:
   }
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-  void publish_request_received_event(const ipc_shared_ptr<RequestT> & request)
-  {
-    // static_cast, not a bare void * conversion: only the former applies the wrapper-to-payload
-    // base offset.
-    const auto * payload = static_cast<const typename ServiceT::Request *>(request.get());
-    const int64_t seqno = request->RequestMeta::seqno;
-    const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = request->RequestMeta::client_gid;
-
-    auto [ok, err_msg] = event_publisher_->publish_service_event_message(
-      service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, payload, seqno, client_gid);
-    if (!ok) {
-      std::visit(
-        [err_msg = std::move(err_msg)](auto * n) {
-          RCLCPP_ERROR(
-            n->get_logger(), "Failed to publish request received event: %s", err_msg.c_str());
-        },
-        node_);
-    }
-  }
-
-  // Correlation metadata copied out of a request, so that a response event can still be
-  // published after the request has been moved into the user callback.
+  // Correlation metadata copied out of a request, so that a response event can still be published
+  // after the request has been moved into the user callback.
   struct RequestOrigin
   {
     int64_t seqno;
@@ -143,25 +123,42 @@ private:
     return origin;
   }
 
-  // Must be called before the response is published: publishing hands the buffer to the kmod,
-  // after which a later publish on the same topic may evict and free it mid-read.
-  void publish_response_sent_event(const RequestOrigin & origin, const void * response_payload)
+  void log_event_failure(const char * what, const std::string & err_msg)
   {
-    const int64_t seqno = origin.seqno;
-    const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = origin.client_gid;
+    std::visit(
+      [what, &err_msg](auto * n) {
+        RCLCPP_ERROR(n->get_logger(), "Failed to publish %s event: %s", what, err_msg.c_str());
+      },
+      node_);
+  }
+
+  void publish_request_received_event(const ipc_shared_ptr<RequestT> & request)
+  {
+    // static_cast, not a bare void * conversion: only the former applies the wrapper-to-payload
+    // base offset.
+    const auto * payload = static_cast<const typename ServiceT::Request *>(request.get());
 
     auto [ok, err_msg] = event_publisher_->publish_service_event_message(
-      service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, response_payload, seqno, client_gid);
+      service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, payload, request->RequestMeta::seqno,
+      request->RequestMeta::client_gid);
     if (!ok) {
-      std::visit(
-        [err_msg = std::move(err_msg)](auto * n) {
-          RCLCPP_ERROR(
-            n->get_logger(), "Failed to publish response sent event: %s", err_msg.c_str());
-        },
-        node_);
+      log_event_failure("request received", err_msg);
     }
   }
 
+  // Must be called before the response is published: publishing hands the buffer to the kmod,
+  // after which a later publish on the same topic may evict and free it mid-read.
+  void publish_response_sent_event(
+    const RequestOrigin & origin, const ipc_shared_ptr<ResponseT> & response)
+  {
+    const auto * payload = static_cast<const typename ServiceT::Response *>(response.get());
+
+    auto [ok, err_msg] = event_publisher_->publish_service_event_message(
+      service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, payload, origin.seqno, origin.client_gid);
+    if (!ok) {
+      log_event_failure("response sent", err_msg);
+    }
+  }
 #endif
 
   template <typename Func>
@@ -175,18 +172,16 @@ private:
 
       auto publisher = this->get_or_create_publisher_for(request->RequestMeta::node_name);
 
-      // Allocate the response and set its metadata.
       ipc_shared_ptr<ResponseT> response = publisher->borrow_loaned_message();
       response->ResponseMeta::seqno = request->RequestMeta::seqno;
 
-      // Invoke the user callback.
       ipc_shared_ptr<typename ServiceT::Response> response_double(response);
+
       callback(
         ipc_shared_ptr<typename ServiceT::Request>(std::move(request)), std::move(response_double));
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-      publish_response_sent_event(
-        origin, static_cast<const typename ServiceT::Response *>(response.get()));
+      publish_response_sent_event(origin, response);
 #endif
 
       publisher->publish(std::move(response));
@@ -300,13 +295,10 @@ public:
   {
     auto internal_request = static_ipc_shared_ptr_cast<RequestT>(std::move(request));
     auto internal_response = static_ipc_shared_ptr_cast<ResponseT>(std::move(response));
-
     auto publisher = get_or_create_publisher_for(internal_request->RequestMeta::node_name);
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-    publish_response_sent_event(
-      request_origin_of(internal_request),
-      static_cast<const typename ServiceT::Response *>(internal_response.get()));
+    publish_response_sent_event(request_origin_of(internal_request), internal_response);
 #endif
 
     publisher->publish(std::move(internal_response));
