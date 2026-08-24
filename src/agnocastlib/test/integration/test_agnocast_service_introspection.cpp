@@ -45,9 +45,7 @@ protected:
   std::vector<Event> events_;
   agnocast::Subscription<Event>::SharedPtr event_subscriber_;
 
-protected:
   agnocast::Service<std_srvs::srv::SetBool>::SharedPtr service_;
-  agnocast::Service<std_srvs::srv::SetBool>::SharedPtr deferred_service_;
   agnocast::Client<std_srvs::srv::SetBool>::SharedPtr client_;
 
   void SetUp() override
@@ -104,7 +102,6 @@ protected:
     // keeping them test-local.
     client_.reset();
     service_.reset();
-    deferred_service_.reset();
     event_subscriber_.reset();
     executor_.reset();
     node_.reset();
@@ -285,15 +282,15 @@ TEST_F(ServiceIntrospectionTest, BothSidesTogetherCoverTheWholeExchange)
               ServiceEventInfo::RESPONSE_SENT, ServiceEventInfo::RESPONSE_RECEIVED}));
 }
 
-TEST_F(ServiceIntrospectionTest, SwitchingBetweenMetadataAndContentsKeepsThePublisher)
+TEST_F(ServiceIntrospectionTest, SwitchingBetweenMetadataAndContentsChangesOnlyThePayload)
 {
   enable_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
   ASSERT_NO_FATAL_FAILURE(call_service(true));
   ASSERT_EQ(collect_events(2).size(), 2u);
   clear_events();
 
-  // Neither transition destroys the event publisher, so events keep flowing and only the
-  // payload changes.
+  // Events keep flowing across the transition; only the payload appears and disappears. That
+  // the publisher is not recreated is not observable from here.
   enable_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
   ASSERT_NO_FATAL_FAILURE(call_service(true));
   auto metadata_events = collect_events(2);

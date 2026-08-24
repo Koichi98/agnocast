@@ -68,8 +68,9 @@ void ServiceEventPublisher::configure(
     if (current.state == RCL_SERVICE_INTROSPECTION_OFF) {
       return;
     }
-    // ts_bundle is carried over: unloading the typesupport libraries would only cost a second
-    // dlopen if introspection is turned back on.
+    // ts_bundle is carried over so re-enabling does not dlopen the service typesupport again.
+    // The event publisher holds its own libraries for <Srv>_Event, and those are dropped here
+    // and reloaded on the next enable.
     commit(Snapshot{state, nullptr, nullptr, current.ts_bundle});
     // The publisher is destroyed here rather than inside commit(), keeping mtx_ off the
     // teardown path.
