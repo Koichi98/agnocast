@@ -229,7 +229,7 @@ private:
     // Must precede the subscription: registering it makes the callback reachable by an executor
     // that is already spinning, and the callback dereferences event_publisher_.
     event_publisher_ = std::make_shared<ServiceEventPublisher>(
-      node_, service_name_, rosidl_generator_traits::name<ServiceT>(), qos_, node->get_clock());
+      node_, service_name_, rosidl_generator_traits::name<ServiceT>());
 #endif
 
     SubscriptionOptions options{group};
