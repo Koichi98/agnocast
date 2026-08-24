@@ -26,6 +26,7 @@ constexpr const char * kEventTopicName = "/test_introspected_service/_service_ev
 
 class ServiceIntrospectionTest : public ::testing::Test
 {
+protected:
   using Request = std_srvs::srv::SetBool::Request;
   using Response = std_srvs::srv::SetBool::Response;
   using Event = std_srvs::srv::SetBool_Event;
@@ -40,6 +41,7 @@ class ServiceIntrospectionTest : public ::testing::Test
 
 protected:
   agnocast::Service<std_srvs::srv::SetBool>::SharedPtr service_;
+  agnocast::Service<std_srvs::srv::SetBool>::SharedPtr deferred_service_;
   agnocast::Client<std_srvs::srv::SetBool>::SharedPtr client_;
 
   void SetUp() override
@@ -60,6 +62,20 @@ protected:
       agnocast::SubscriptionOptions{
         node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive)});
 
+    create_service();
+
+    client_ = agnocast::create_client<std_srvs::srv::SetBool>(
+      node_.get(), kServiceName, rclcpp::ServicesQoS(),
+      node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive));
+
+    spin_thread_ = std::thread([this]() { executor_->spin(); });
+    ASSERT_TRUE(client_->wait_for_service(5s));
+  }
+
+  /// Creates the service under test. Overridden to cover the deferred-response path, which
+  /// publishes RESPONSE_SENT from send_response() instead of from the subscription callback.
+  virtual void create_service()
+  {
     service_ = agnocast::create_service<std_srvs::srv::SetBool>(
       node_.get(), kServiceName,
       [](
@@ -70,13 +86,6 @@ protected:
       },
       rclcpp::ServicesQoS(),
       node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive));
-
-    client_ = agnocast::create_client<std_srvs::srv::SetBool>(
-      node_.get(), kServiceName, rclcpp::ServicesQoS(),
-      node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive));
-
-    spin_thread_ = std::thread([this]() { executor_->spin(); });
-    ASSERT_TRUE(client_->wait_for_service(5s));
   }
 
   void TearDown() override
@@ -85,6 +94,14 @@ protected:
     if (spin_thread_.joinable()) {
       spin_thread_.join();
     }
+    // Release the endpoints while the context is still up, as test_agnocast_client.cpp does by
+    // keeping them test-local.
+    client_.reset();
+    service_.reset();
+    deferred_service_.reset();
+    event_subscriber_.reset();
+    executor_.reset();
+    node_.reset();
     if (rclcpp::ok()) {
       rclcpp::shutdown();
     }
@@ -100,12 +117,16 @@ protected:
     client_->configure_introspection(node_->get_clock(), rclcpp::ServicesQoS(), state);
   }
 
-  /// Issues one call and returns once it has completed. Events may still be in flight.
-  void call_service(bool data)
+  /// Issues one call and returns the request id the caller was handed, once the call has
+  /// completed. Events may still be in flight. Call through ASSERT_NO_FATAL_FAILURE.
+  void call_service(bool data, int64_t * request_id = nullptr)
   {
     auto request = client_->borrow_loaned_request();
     request->data = data;
     auto future = client_->async_send_request(std::move(request));
+    if (request_id != nullptr) {
+      *request_id = future.request_id;
+    }
     ASSERT_EQ(future.wait_for(5s), std::future_status::ready);
   }
 
@@ -136,7 +157,7 @@ protected:
 
 TEST_F(ServiceIntrospectionTest, PublishesNoEventsWhileIntrospectionIsOff)
 {
-  call_service(true);
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
 
   EXPECT_TRUE(collect_events(1).empty())
     << "no service event should be published before configure_introspection() enables it";
@@ -146,7 +167,8 @@ TEST_F(ServiceIntrospectionTest, ContentsPublishesRequestReceivedAndResponseSent
 {
   enable_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
 
-  call_service(true);
+  int64_t request_id = -1;
+  ASSERT_NO_FATAL_FAILURE(call_service(true, &request_id));
   auto events = collect_events(2);
 
   ASSERT_EQ(events.size(), 2u);
@@ -155,7 +177,14 @@ TEST_F(ServiceIntrospectionTest, ContentsPublishesRequestReceivedAndResponseSent
 
   EXPECT_EQ(events[0].info.sequence_number, events[1].info.sequence_number)
     << "both events of one call must carry the request's sequence number";
+  EXPECT_EQ(events[0].info.sequence_number, request_id)
+    << "the sequence number must be the request id the caller was handed";
+
+  // Both events read the gid from the same request, so equality alone would hold even if the
+  // gid were never populated.
   EXPECT_EQ(events[0].info.client_gid, events[1].info.client_gid);
+  EXPECT_NE(events[0].info.client_gid, decltype(events[0].info.client_gid){})
+    << "the client gid must actually be filled in";
 
   ASSERT_EQ(events[0].request.size(), 1u) << "Contents must carry the request payload";
   EXPECT_TRUE(events[0].request[0].data);
@@ -169,7 +198,7 @@ TEST_F(ServiceIntrospectionTest, MetadataPublishesEventsWithoutPayload)
 {
   enable_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
 
-  call_service(true);
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
   auto events = collect_events(2);
 
   ASSERT_EQ(events.size(), 2u);
@@ -180,13 +209,13 @@ TEST_F(ServiceIntrospectionTest, MetadataPublishesEventsWithoutPayload)
 TEST_F(ServiceIntrospectionTest, SwitchingBackToOffStopsEvents)
 {
   enable_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
-  call_service(true);
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
   ASSERT_EQ(collect_events(2).size(), 2u);
 
   enable_introspection(RCL_SERVICE_INTROSPECTION_OFF);
   clear_events();
 
-  call_service(false);
+  ASSERT_NO_FATAL_FAILURE(call_service(false));
 
   EXPECT_TRUE(collect_events(1).empty())
     << "no service event should be published after introspection is switched off";
@@ -199,7 +228,7 @@ TEST_F(ServiceIntrospectionTest, ReEnablingAfterOffPublishesEventsAgain)
   clear_events();
 
   enable_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
-  call_service(true);
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
 
   EXPECT_EQ(collect_events(2).size(), 2u)
     << "the event publisher must be recreated when introspection is enabled a second time";
@@ -209,7 +238,7 @@ TEST_F(ServiceIntrospectionTest, ClientPublishesRequestSentAndResponseReceived)
 {
   enable_client_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
 
-  call_service(true);
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
   auto events = collect_events(2);
 
   ASSERT_EQ(events.size(), 2u);
@@ -227,7 +256,7 @@ TEST_F(ServiceIntrospectionTest, BothSidesTogetherCoverTheWholeExchange)
   enable_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
   enable_client_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
 
-  call_service(true);
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
   auto events = collect_events(4);
 
   ASSERT_EQ(events.size(), 4u);
@@ -248,6 +277,79 @@ TEST_F(ServiceIntrospectionTest, BothSidesTogetherCoverTheWholeExchange)
     types, std::vector<uint8_t>(
              {ServiceEventInfo::REQUEST_SENT, ServiceEventInfo::REQUEST_RECEIVED,
               ServiceEventInfo::RESPONSE_SENT, ServiceEventInfo::RESPONSE_RECEIVED}));
+}
+
+TEST_F(ServiceIntrospectionTest, SwitchingBetweenMetadataAndContentsKeepsThePublisher)
+{
+  enable_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
+  ASSERT_EQ(collect_events(2).size(), 2u);
+  clear_events();
+
+  // Neither transition destroys the event publisher, so events keep flowing and only the
+  // payload changes.
+  enable_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
+  auto metadata_events = collect_events(2);
+  ASSERT_EQ(metadata_events.size(), 2u);
+  EXPECT_TRUE(metadata_events[0].request.empty());
+  EXPECT_TRUE(metadata_events[1].response.empty());
+  clear_events();
+
+  enable_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
+  auto contents_events = collect_events(2);
+  ASSERT_EQ(contents_events.size(), 2u);
+  EXPECT_EQ(contents_events[0].request.size(), 1u);
+  EXPECT_EQ(contents_events[1].response.size(), 1u);
+}
+
+/// Exercises the deferred-response path, where RESPONSE_SENT comes from send_response().
+class DeferredServiceIntrospectionTest : public ServiceIntrospectionTest
+{
+protected:
+  void create_service() override
+  {
+    service_ = agnocast::create_service<std_srvs::srv::SetBool>(
+      node_.get(), kServiceName,
+      [](
+        agnocast::Service<std_srvs::srv::SetBool>::SharedPtr service,
+        agnocast::ipc_shared_ptr<Request> && request) {
+        auto response = service->borrow_loaned_response(request);
+        response->success = request->data;
+        response->message = "ok";
+        service->send_response(std::move(request), std::move(response));
+      },
+      rclcpp::ServicesQoS(),
+      node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive));
+  }
+};
+
+TEST_F(DeferredServiceIntrospectionTest, DeferredResponsePublishesBothEvents)
+{
+  enable_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
+
+  int64_t request_id = -1;
+  ASSERT_NO_FATAL_FAILURE(call_service(true, &request_id));
+  auto events = collect_events(2);
+
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_EQ(events[0].info.event_type, ServiceEventInfo::REQUEST_RECEIVED);
+  EXPECT_EQ(events[1].info.event_type, ServiceEventInfo::RESPONSE_SENT);
+  EXPECT_EQ(events[1].info.sequence_number, request_id);
+
+  ASSERT_EQ(events[1].response.size(), 1u);
+  EXPECT_TRUE(events[1].response[0].success);
+  EXPECT_EQ(events[1].response[0].message, "ok");
+}
+
+#else
+
+// Without this the binary reports "0 tests from 0 test suites" and passes, which is
+// indistinguishable in CI from the suite having been dropped by mistake.
+TEST(ServiceIntrospectionTest, SkippedBecauseTheDistroHasNoServiceIntrospection)
+{
+  GTEST_SKIP() << "service introspection requires rclcpp 21 or newer";
 }
 
 #endif  // AGNOCAST_HAS_SERVICE_INTROSPECTION
