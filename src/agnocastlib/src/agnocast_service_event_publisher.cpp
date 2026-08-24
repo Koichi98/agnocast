@@ -65,21 +65,27 @@ void ServiceEventPublisher::configure(
     return;
   }
 
-  Snapshot next{state, current.publisher, clock, current.ts_bundle};
+  // Both the clock and the QoS only take effect when the publisher is created, matching
+  // rcl_service_configure_service_introspection: a later call that only moves between
+  // METADATA and CONTENTS leaves them alone.
+  if (current.publisher) {
+    commit(Snapshot{state, current.publisher, current.clock, current.ts_bundle});
+    return;
+  }
+
+  Snapshot next{state, nullptr, clock, current.ts_bundle};
 
   if (!next.ts_bundle) {
     next.ts_bundle =
       std::make_shared<const ServiceTsBundle>(load_service_typesupport(service_type_));
   }
 
-  if (!next.publisher) {
-    std::visit(
-      [this, &next, &qos_service_event_pub](auto * n) {
-        next.publisher = std::make_shared<GenericPublisher>(
-          n, event_topic_name_, event_topic_type_, qos_service_event_pub);
-      },
-      node_);
-  }
+  std::visit(
+    [this, &next, &qos_service_event_pub](auto * n) {
+      next.publisher = std::make_shared<GenericPublisher>(
+        n, event_topic_name_, event_topic_type_, qos_service_event_pub);
+    },
+    node_);
 
   commit(next);
 }

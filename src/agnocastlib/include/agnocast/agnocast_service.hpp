@@ -335,6 +335,8 @@ public:
    * @param clock The clock to use to generate introspection timestamps.
    * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
    * @param introspection_state The state to set introspection to.
+   * @throws std::runtime_error if the typesupport libraries for the event message cannot be
+   * loaded. Only the first transition out of OFF loads them.
    */
   AGNOCAST_PUBLIC
   void configure_introspection(
