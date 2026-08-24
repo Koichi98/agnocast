@@ -125,6 +125,8 @@ private:
     }
   }
 
+  // Must be called before the response is published: publishing hands the buffer to the kmod,
+  // after which a later publish on the same topic may evict and free it mid-read.
   void publish_response_sent_event(
     const ipc_shared_ptr<RequestT> & request, const void * response_payload)
   {
@@ -164,16 +166,11 @@ private:
       ipc_shared_ptr<typename ServiceT::Response> response_double(response);
       callback(std::move(request_double), std::move(response_double));
 
-      // Send the response.
-      const void * response_payload = response.get();
-      publisher->publish(std::move(response));
-
-      // Publish the response sent event.
-      // XXX: Although it's very unlikely, the response may be destroyed even before
-      // publish_response_sent_event() ends in an extreme case (really?).
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-      publish_response_sent_event(request, response_payload);
+      publish_response_sent_event(request, response.get());
 #endif
+
+      publisher->publish(std::move(response));
 
       // Safety regarding response_double
       //   When `response` is published, all references that share its control block are
@@ -285,12 +282,11 @@ public:
 
     auto publisher = get_or_create_publisher_for(internal_request->RequestMeta::node_name);
 
-    const void * response_payload = internal_response.get();
-    publisher->publish(std::move(internal_response));
-
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-    publish_response_sent_event(internal_request, response_payload);
+    publish_response_sent_event(internal_request, internal_response.get());
 #endif
+
+    publisher->publish(std::move(internal_response));
   }
 
   /**
