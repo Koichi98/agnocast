@@ -336,6 +336,10 @@ public:
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
   /**
    * @brief Configure service introspection.
+   *
+   * Only the service side of the exchange is published. A client publishes no REQUEST_SENT or
+   * RESPONSE_RECEIVED events.
+   *
    * @param clock The clock to use to generate introspection timestamps.
    * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
    * @param introspection_state The state to set introspection to.
@@ -345,7 +349,7 @@ public:
     const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
     rcl_service_introspection_state_t introspection_state)
   {
-    // TODO
+    event_publisher_->configure(clock, qos_service_event_pub, introspection_state);
   }
 #endif
 
