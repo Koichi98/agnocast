@@ -25,10 +25,24 @@ namespace agnocast
 enum class ServiceRole : uint8_t {
   /// User-created service; issues an R2A bridge request.
   Default,
-  /// Used by the bridge plugin's own service; no bridge request is issued.
+  /// Used by the bridge implementation itself; marks the endpoints it creates as bridges in kmod
+  /// and issues no bridge request. A bridge service shares the request topic with a real one, so
+  /// that mark is what tells them apart.
   /// Not intended for direct use by application code.
-  AgnocastOnly,
+  BridgeInternal,
 };
+
+constexpr SubscriptionRole to_subscription_role(const ServiceRole role)
+{
+  return role == ServiceRole::BridgeInternal ? SubscriptionRole::BridgeInternal
+                                             : SubscriptionRole::AgnocastOnly;
+}
+
+constexpr PublisherRole to_publisher_role(const ServiceRole role)
+{
+  return role == ServiceRole::BridgeInternal ? PublisherRole::BridgeInternal
+                                             : PublisherRole::AgnocastOnly;
+}
 
 // Internal implementation - users should use agnocast::Service<ServiceT> instead.
 template <typename ServiceT>
@@ -58,6 +72,7 @@ private:
   const std::variant<rclcpp::Node *, agnocast::Node *> node_;
   std::string service_name_;
   const rclcpp::QoS qos_;
+  const ServiceRole role_;
   std::mutex publishers_mtx_;
   std::unordered_map<std::string, typename ServiceResponsePublisher::SharedPtr> publishers_;
   typename ServiceRequestSubscriber::SharedPtr subscriber_;
@@ -76,7 +91,7 @@ private:
             std::string topic_name = create_service_response_topic_name(service_name_, node_name);
             agnocast::PublisherOptions pub_options;
             pub = std::make_shared<ServiceResponsePublisher>(
-              node, topic_name, qos_, pub_options, PublisherRole::AgnocastOnly);
+              node, topic_name, qos_, pub_options, to_publisher_role(role_));
             publishers_[node_name] = pub;
           },
           node_);
@@ -170,7 +185,7 @@ private:
   template <typename Func, typename NodeT>
   void constructor_impl(
     NodeT * node, const std::string & service_name, Func && callback,
-    rclcpp::CallbackGroup::SharedPtr group, ServiceRole role)
+    rclcpp::CallbackGroup::SharedPtr group)
   {
     static_assert(
       is_basic_cb<Func>::value || is_deferred_cb<Func>::value,
@@ -183,22 +198,23 @@ private:
 
     SubscriptionOptions options{group};
     std::string topic_name = create_service_request_topic_name(service_name_);
+    const SubscriptionRole subscriber_role = to_subscription_role(role_);
     if constexpr (is_basic_cb<Func>::value) {
       subscriber_ = std::make_shared<ServiceRequestSubscriber>(
         node, topic_name, qos_,
         wrap_basic_service_callback_for_subscriber(std::forward<Func>(callback)), options,
-        SubscriptionRole::AgnocastOnly);
+        subscriber_role);
     } else if constexpr (is_deferred_cb<Func>::value) {
       subscriber_ = std::make_shared<ServiceRequestSubscriber>(
         node, topic_name, qos_,
         wrap_deferred_service_callback_for_subscriber(std::forward<Func>(callback)), options,
-        SubscriptionRole::AgnocastOnly);
+        subscriber_role);
     }
 
     event_publisher_ = std::make_shared<ServiceEventPublisher>(
       node_, service_name_, rosidl_generator_traits::name<ServiceT>(), qos_, node->get_clock());
 
-    if (role == ServiceRole::Default) {
+    if (role_ == ServiceRole::Default) {
       std::optional<std::pair<std::string, std::string>> shadow_node_identity{std::nullopt};
       if constexpr (std::is_same_v<std::remove_cv_t<NodeT>, agnocast::Node>) {
         shadow_node_identity =
@@ -218,9 +234,9 @@ public:
     rclcpp::Node * node, const std::string & service_name, Func && callback,
     const rclcpp::QoS & qos, rclcpp::CallbackGroup::SharedPtr group,
     ServiceRole role = ServiceRole::Default)
-  : node_(node), qos_(rclcpp::QoS(qos).durability_volatile())
+  : node_(node), qos_(rclcpp::QoS(qos).durability_volatile()), role_(role)
   {
-    constructor_impl(node, service_name, std::forward<Func>(callback), group, role);
+    constructor_impl(node, service_name, std::forward<Func>(callback), group);
   }
 
   template <typename Func>
@@ -228,9 +244,9 @@ public:
     agnocast::Node * node, const std::string & service_name, Func && callback,
     const rclcpp::QoS & qos, rclcpp::CallbackGroup::SharedPtr group,
     ServiceRole role = ServiceRole::Default)
-  : node_(node), qos_(rclcpp::QoS(qos).durability_volatile())
+  : node_(node), qos_(rclcpp::QoS(qos).durability_volatile()), role_(role)
   {
-    constructor_impl(node, service_name, std::forward<Func>(callback), group, role);
+    constructor_impl(node, service_name, std::forward<Func>(callback), group);
   }
 
   /**
@@ -327,6 +343,7 @@ class GenericService : public std::enable_shared_from_this<GenericService>
   const std::variant<rclcpp::Node *, agnocast::Node *> node_;
   std::string service_name_;
   const rclcpp::QoS qos_;
+  const ServiceRole role_;
   std::mutex publishers_mtx_;
   std::unordered_map<std::string, typename TypeErasedPublisher::SharedPtr> publishers_;
   typename Subscription<void>::SharedPtr subscriber_;
@@ -390,7 +407,7 @@ class GenericService : public std::enable_shared_from_this<GenericService>
   template <typename Func, typename NodeT>
   void constructor_impl(
     NodeT * node, const std::string & service_name, const std::string & service_type,
-    Func && callback, const rclcpp::CallbackGroup::SharedPtr & group, ServiceRole role)
+    Func && callback, const rclcpp::CallbackGroup::SharedPtr & group)
   {
     static_assert(
       is_basic_cb<Func>::value || is_deferred_cb<Func>::value,
@@ -405,19 +422,20 @@ class GenericService : public std::enable_shared_from_this<GenericService>
 
     SubscriptionOptions sub_options{group};
     std::string req_topic_name = create_service_request_topic_name(service_name_);
+    const SubscriptionRole subscriber_role = to_subscription_role(role_);
     if constexpr (is_basic_cb<Func>::value) {
       subscriber_ = std::make_shared<Subscription<void>>(
         node, req_topic_name, "", qos_,
         wrap_basic_service_callback_for_subscriber(std::forward<Func>(callback)), sub_options,
-        SubscriptionRole::AgnocastOnly);
+        subscriber_role);
     } else if constexpr (is_deferred_cb<Func>::value) {
       subscriber_ = std::make_shared<Subscription<void>>(
         node, req_topic_name, "", qos_,
         wrap_deferred_service_callback_for_subscriber(std::forward<Func>(callback)), sub_options,
-        SubscriptionRole::AgnocastOnly);
+        subscriber_role);
     }
 
-    if (role == ServiceRole::Default) {
+    if (role_ == ServiceRole::Default) {
       std::optional<std::pair<std::string, std::string>> shadow_node_identity{std::nullopt};
       if constexpr (std::is_same_v<std::remove_cv_t<NodeT>, agnocast::Node>) {
         shadow_node_identity =
@@ -436,9 +454,9 @@ public:
     rclcpp::Node * node, const std::string & service_name, const std::string & service_type,
     Func && callback, const rclcpp::QoS & qos, const rclcpp::CallbackGroup::SharedPtr & group,
     ServiceRole role = ServiceRole::Default)
-  : node_(node), qos_(rclcpp::QoS(qos).durability_volatile())
+  : node_(node), qos_(rclcpp::QoS(qos).durability_volatile()), role_(role)
   {
-    constructor_impl(node, service_name, service_type, std::forward<Func>(callback), group, role);
+    constructor_impl(node, service_name, service_type, std::forward<Func>(callback), group);
   }
 
   template <typename Func>
@@ -446,9 +464,9 @@ public:
     agnocast::Node * node, const std::string & service_name, const std::string & service_type,
     Func && callback, const rclcpp::QoS & qos, const rclcpp::CallbackGroup::SharedPtr & group,
     ServiceRole role = ServiceRole::Default)
-  : node_(node), qos_(rclcpp::QoS(qos).durability_volatile())
+  : node_(node), qos_(rclcpp::QoS(qos).durability_volatile()), role_(role)
   {
-    constructor_impl(node, service_name, service_type, std::forward<Func>(callback), group, role);
+    constructor_impl(node, service_name, service_type, std::forward<Func>(callback), group);
   }
 
   void send_response(ipc_shared_ptr<void> && request, ipc_shared_ptr<void> && response);
