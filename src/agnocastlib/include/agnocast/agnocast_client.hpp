@@ -326,6 +326,19 @@ public:
   /** @brief Allocate a request message in shared memory.
    *  @return Owned pointer to the request message in shared memory. */
   AGNOCAST_PUBLIC
+  ipc_shared_ptr<typename ServiceT::Request> borrow_loaned_request()
+  {
+    auto request = publisher_->borrow_loaned_message();
+
+    request->RequestMeta::seqno = next_sequence_number_.fetch_add(1);
+    std::memcpy(
+      static_cast<void *>(request->RequestMeta::client_gid),
+      static_cast<const void *>(get_gid().data), RMW_GID_STORAGE_SIZE);
+    request->RequestMeta::node_name = node_name_;
+
+    return ipc_shared_ptr<typename ServiceT::Request>(std::move(request));
+  }
+
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
   /**
    * @brief Configure service introspection for this client.
@@ -343,19 +356,6 @@ public:
     event_publisher_->configure(clock, qos_service_event_pub, introspection_state);
   }
 #endif
-
-  ipc_shared_ptr<typename ServiceT::Request> borrow_loaned_request()
-  {
-    auto request = publisher_->borrow_loaned_message();
-
-    request->RequestMeta::seqno = next_sequence_number_.fetch_add(1);
-    std::memcpy(
-      static_cast<void *>(request->RequestMeta::client_gid),
-      static_cast<const void *>(get_gid().data), RMW_GID_STORAGE_SIZE);
-    request->RequestMeta::node_name = node_name_;
-
-    return ipc_shared_ptr<typename ServiceT::Request>(std::move(request));
-  }
 
   /** @brief Send a request asynchronously and invoke a callback when the response arrives.
    *  @param request Request from borrow_loaned_request(). Must be moved in.
