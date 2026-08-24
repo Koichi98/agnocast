@@ -13,9 +13,10 @@
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
 #include <service_msgs/msg/service_event_info.hpp>
-#endif
 
 #include <cstring>
+#endif
+
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -123,15 +124,17 @@ private:
     return origin;
   }
 
-  void publish_request_received_event(const ipc_shared_ptr<RequestT> & request)
+  void publish_request_received_event(
+    const RequestOrigin & origin, const ipc_shared_ptr<RequestT> & request)
   {
-    // static_cast, not a bare void * conversion: only the former applies the wrapper-to-payload
-    // base offset.
+    // The payload is the first base of the wrapper, so this offset is zero today, and the wire
+    // format depends on that (GenericRequestWrapper locates the metadata from the buffer start).
+    // static_cast keeps that an assumption of the layout rather than of this call site.
     const auto * payload = static_cast<const typename ServiceT::Request *>(request.get());
 
     event_publisher_->publish_service_event_message(
-      service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, payload, request->RequestMeta::seqno,
-      request->RequestMeta::client_gid);
+      service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, payload, origin.seqno,
+      origin.client_gid);
   }
 
   // Must be called before the response is published: publishing hands the buffer to the kmod,
@@ -151,8 +154,8 @@ private:
   {
     return [this, callback = std::forward<Func>(callback)](ipc_shared_ptr<RequestT> && request) {
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-      publish_request_received_event(request);
       const RequestOrigin origin = request_origin_of(request);
+      publish_request_received_event(origin, request);
 #endif
 
       auto publisher = this->get_or_create_publisher_for(request->RequestMeta::node_name);
@@ -184,7 +187,7 @@ private:
   {
     return [this, callback = std::forward<Func>(callback)](ipc_shared_ptr<RequestT> && request) {
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-      publish_request_received_event(request);
+      publish_request_received_event(request_origin_of(request), request);
 #endif
 
       callback(this->shared_from_this(), std::move(request));
@@ -314,8 +317,8 @@ public:
   /**
    * @brief Configure service introspection.
    *
-   * Only the service side of the exchange is published. A client publishes no REQUEST_SENT or
-   * RESPONSE_RECEIVED events.
+   * Publishes REQUEST_RECEIVED and RESPONSE_SENT. A client reports its own side of the
+   * exchange through agnocast::Client::configure_introspection.
    *
    * @param clock The clock to use to generate introspection timestamps.
    * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
