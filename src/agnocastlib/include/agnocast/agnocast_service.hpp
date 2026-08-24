@@ -225,6 +225,13 @@ private:
 
     service_name_ = node->get_node_services_interface()->resolve_service_name(service_name);
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+    // Must precede the subscription: registering it makes the callback reachable by an executor
+    // that is already spinning, and the callback dereferences event_publisher_.
+    event_publisher_ = std::make_shared<ServiceEventPublisher>(
+      node_, service_name_, rosidl_generator_traits::name<ServiceT>(), qos_, node->get_clock());
+#endif
+
     SubscriptionOptions options{group};
     std::string topic_name = create_service_request_topic_name(service_name_);
     const SubscriptionRole subscriber_role = to_subscription_role(role_);
@@ -239,11 +246,6 @@ private:
         wrap_deferred_service_callback_for_subscriber(std::forward<Func>(callback)), options,
         subscriber_role);
     }
-
-#if AGNOCAST_HAS_SERVICE_INTROSPECTION
-    event_publisher_ = std::make_shared<ServiceEventPublisher>(
-      node_, service_name_, rosidl_generator_traits::name<ServiceT>(), qos_, node->get_clock());
-#endif
 
     if (role_ == ServiceRole::Default) {
       std::optional<std::pair<std::string, std::string>> shadow_node_identity{std::nullopt};
