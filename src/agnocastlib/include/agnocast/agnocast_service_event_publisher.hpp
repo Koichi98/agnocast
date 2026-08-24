@@ -21,6 +21,7 @@
 #include <rcl/service_introspection.h>
 #include <rmw/types.h>
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -45,6 +46,10 @@ class ServiceEventPublisher
   // interleave with another transition and lose an update; mtx_ alone cannot prevent that
   // because the publisher is created outside it.
   std::mutex transition_mtx_;
+
+  // Read before mtx_ so that a service with introspection off costs nothing on the
+  // request/response path. mtx_ still guards it together with the rest of the snapshot.
+  std::atomic<rcl_service_introspection_state_t> published_state_{RCL_SERVICE_INTROSPECTION_OFF};
 
   mutable std::mutex mtx_;
   rcl_service_introspection_state_t state_ = RCL_SERVICE_INTROSPECTION_OFF;

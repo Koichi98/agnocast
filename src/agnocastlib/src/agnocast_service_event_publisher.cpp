@@ -30,6 +30,7 @@ void ServiceEventPublisher::commit(const Snapshot & next)
 {
   std::lock_guard<std::mutex> lock(mtx_);
   state_ = next.state;
+  published_state_.store(next.state, std::memory_order_relaxed);
   publisher_ = next.publisher;
   clock_ = next.clock;
   ts_bundle_ = next.ts_bundle;
@@ -136,8 +137,13 @@ void ServiceEventPublisher::publish_service_event_message(
   const uint8_t event_type, const void * payload, int64_t sequence_number,
   const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE]) noexcept
 {
+  if (published_state_.load(std::memory_order_relaxed) == RCL_SERVICE_INTROSPECTION_OFF) {
+    return;
+  }
+
   Snapshot active = snapshot();
 
+  // configure() may have turned introspection off between the two reads.
   if (active.state == RCL_SERVICE_INTROSPECTION_OFF) {
     return;
   }
