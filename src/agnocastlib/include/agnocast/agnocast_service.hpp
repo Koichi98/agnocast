@@ -15,6 +15,7 @@
 #include <service_msgs/msg/service_event_info.hpp>
 #endif
 
+#include <cstring>
 #include <memory>
 #include <string>
 #include <type_traits>
@@ -125,13 +126,27 @@ private:
     }
   }
 
+  // Correlation metadata copied out of a request, so that a response event can still be
+  // published after the request has been moved into the user callback.
+  struct RequestOrigin
+  {
+    int64_t seqno;
+    uint8_t client_gid[RMW_GID_STORAGE_SIZE];
+  };
+
+  static RequestOrigin request_origin_of(const ipc_shared_ptr<RequestT> & request)
+  {
+    RequestOrigin origin{request->RequestMeta::seqno, {}};
+    std::memcpy(origin.client_gid, request->RequestMeta::client_gid, sizeof(origin.client_gid));
+    return origin;
+  }
+
   // Must be called before the response is published: publishing hands the buffer to the kmod,
   // after which a later publish on the same topic may evict and free it mid-read.
-  void publish_response_sent_event(
-    const ipc_shared_ptr<RequestT> & request, const void * response_payload)
+  void publish_response_sent_event(const RequestOrigin & origin, const void * response_payload)
   {
-    const int64_t seqno = request->RequestMeta::seqno;
-    const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = request->RequestMeta::client_gid;
+    const int64_t seqno = origin.seqno;
+    const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = origin.client_gid;
 
     auto [ok, err_msg] = event_publisher_->publish_service_event_message(
       service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, response_payload, seqno, client_gid);
@@ -153,6 +168,7 @@ private:
     return [this, callback = std::forward<Func>(callback)](ipc_shared_ptr<RequestT> && request) {
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
       publish_request_received_event(request);
+      const RequestOrigin origin = request_origin_of(request);
 #endif
 
       auto publisher = this->get_or_create_publisher_for(request->RequestMeta::node_name);
@@ -162,12 +178,12 @@ private:
       response->ResponseMeta::seqno = request->RequestMeta::seqno;
 
       // Invoke the user callback.
-      ipc_shared_ptr<typename ServiceT::Request> request_double = request;
       ipc_shared_ptr<typename ServiceT::Response> response_double(response);
-      callback(std::move(request_double), std::move(response_double));
+      callback(
+        ipc_shared_ptr<typename ServiceT::Request>(std::move(request)), std::move(response_double));
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-      publish_response_sent_event(request, response.get());
+      publish_response_sent_event(origin, response.get());
 #endif
 
       publisher->publish(std::move(response));
@@ -283,7 +299,7 @@ public:
     auto publisher = get_or_create_publisher_for(internal_request->RequestMeta::node_name);
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-    publish_response_sent_event(internal_request, internal_response.get());
+    publish_response_sent_event(request_origin_of(internal_request), internal_response.get());
 #endif
 
     publisher->publish(std::move(internal_response));
