@@ -61,7 +61,9 @@ class ServiceEventPublisher
   };
 
   Snapshot snapshot() const;
-  void log_failure(const uint8_t event_type, const std::string & reason) const noexcept;
+  // Takes const char *, not std::string: this runs from a noexcept context, and the failure it
+  // most often reports is std::bad_alloc, so it must not allocate.
+  void log_failure(const uint8_t event_type, const char * reason) const noexcept;
   void commit(const Snapshot & next);
 
 public:

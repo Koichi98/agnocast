@@ -113,13 +113,13 @@ const char * event_type_name(const uint8_t event_type)
 }  // namespace
 
 void ServiceEventPublisher::log_failure(
-  const uint8_t event_type, const std::string & reason) const noexcept
+  const uint8_t event_type, const char * reason) const noexcept
 {
   std::visit(
-    [this, event_type, &reason](auto * n) {
+    [this, event_type, reason](auto * n) {
       RCLCPP_ERROR(
         n->get_logger(), "Failed to publish the %s event on '%s': %s", event_type_name(event_type),
-        event_topic_name_.c_str(), reason.c_str());
+        event_topic_name_.c_str(), reason);
     },
     node_);
 }
