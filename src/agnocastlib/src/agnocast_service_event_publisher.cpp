@@ -38,13 +38,14 @@ void ServiceEventPublisher::commit(const Snapshot & next)
 
 ServiceEventPublisher::ServiceEventPublisher(
   std::variant<rclcpp::Node *, agnocast::Node *> node, const std::string & service_name,
-  const std::string & service_type)
+  const std::string & service_type, PublisherRole publisher_role)
 : node_(std::move(node)),
   service_type_(service_type),
   // Matches RCL_SERVICE_INTROSPECTION_TOPIC_POSTFIX and the `<Srv>_Event` message rosidl
   // generates, so ros2 service echo can find the topic.
   event_topic_name_(service_name + RCL_SERVICE_INTROSPECTION_TOPIC_POSTFIX),
-  event_topic_type_(service_type + "_Event")
+  event_topic_type_(service_type + "_Event"),
+  publisher_role_(publisher_role)
 {
 }
 

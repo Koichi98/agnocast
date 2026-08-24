@@ -41,6 +41,7 @@ class ServiceEventPublisher
   const std::string service_type_;
   const std::string event_topic_name_;
   const std::string event_topic_type_;
+  const PublisherRole publisher_role_;
 
   // Serializes whole transitions. Without it the read-decide-write in configure() could
   // interleave with another transition and lose an update; mtx_ alone cannot prevent that
@@ -72,9 +73,11 @@ class ServiceEventPublisher
   void commit(const Snapshot & next);
 
 public:
+  /// @param publisher_role Role for the event publisher. Carries the owning endpoint's role, so
+  /// a bridge-owned service marks its event publisher as a bridge in the kmod too.
   ServiceEventPublisher(
     std::variant<rclcpp::Node *, agnocast::Node *> node, const std::string & service_name,
-    const std::string & service_type);
+    const std::string & service_type, PublisherRole publisher_role);
 
   /// @brief Sets the introspection state, creating or destroying the event publisher as needed
   /// (thread-safe).

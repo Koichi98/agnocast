@@ -3,6 +3,12 @@
 
 #include <gtest/gtest.h>
 
+// The gate reaches here only through agnocast/agnocast.hpp, so assert it arrived: #if would
+// otherwise read an undefined macro as 0 and silently drop every case below.
+#ifndef AGNOCAST_SERVICE_INTROSPECTION_GATE_INCLUDED
+#error "agnocast/agnocast_service_event_publisher.hpp must be included before the gate is used"
+#endif
+
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
 
 #include "std_srvs/srv/set_bool.hpp"
