@@ -110,7 +110,9 @@ private:
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
   void publish_request_received_event(const ipc_shared_ptr<RequestT> & request)
   {
-    const void * payload = request.get();
+    // static_cast, not a bare void * conversion: only the former applies the wrapper-to-payload
+    // base offset.
+    const auto * payload = static_cast<const typename ServiceT::Request *>(request.get());
     const int64_t seqno = request->RequestMeta::seqno;
     const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = request->RequestMeta::client_gid;
 
@@ -183,7 +185,8 @@ private:
         ipc_shared_ptr<typename ServiceT::Request>(std::move(request)), std::move(response_double));
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-      publish_response_sent_event(origin, response.get());
+      publish_response_sent_event(
+        origin, static_cast<const typename ServiceT::Response *>(response.get()));
 #endif
 
       publisher->publish(std::move(response));
@@ -299,7 +302,9 @@ public:
     auto publisher = get_or_create_publisher_for(internal_request->RequestMeta::node_name);
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-    publish_response_sent_event(request_origin_of(internal_request), internal_response.get());
+    publish_response_sent_event(
+      request_origin_of(internal_request),
+      static_cast<const typename ServiceT::Response *>(internal_response.get()));
 #endif
 
     publisher->publish(std::move(internal_response));
