@@ -9,6 +9,10 @@
 // rclcpp::get_service_typesupport_handle appeared, which is an unrelated boundary.
 #define AGNOCAST_HAS_SERVICE_INTROSPECTION (RCLCPP_VERSION_MAJOR >= 21)
 
+// #if treats an undefined identifier as 0, so a translation unit that checks the gate without
+// including this header would silently lose the feature. Consumers assert on this instead.
+#define AGNOCAST_SERVICE_INTROSPECTION_GATE_INCLUDED 1
+
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
 
 #include "agnocast/agnocast_publisher.hpp"

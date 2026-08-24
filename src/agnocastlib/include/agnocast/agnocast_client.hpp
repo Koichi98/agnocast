@@ -14,6 +14,9 @@
 #include "rclcpp/node_interfaces/node_base_interface.hpp"
 #include "rclcpp/rclcpp.hpp"
 
+#ifndef AGNOCAST_SERVICE_INTROSPECTION_GATE_INCLUDED
+#error "agnocast/agnocast_service_event_publisher.hpp must be included before the gate is used"
+#endif
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
 #include <service_msgs/msg/service_event_info.hpp>
 #endif
@@ -193,7 +196,7 @@ private:
   typename ServiceRequestPublisher::SharedPtr publisher_;
   typename ServiceResponseSubscriber::SharedPtr subscriber_;
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-  std::shared_ptr<ServiceEventPublisher> event_publisher_;
+  std::unique_ptr<ServiceEventPublisher> event_publisher_;
 #endif
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
@@ -250,7 +253,7 @@ private:
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
     // Must precede the subscription: registering it makes the callback reachable by an executor
     // that is already spinning, and the callback dereferences event_publisher_.
-    event_publisher_ = std::make_shared<ServiceEventPublisher>(
+    event_publisher_ = std::make_unique<ServiceEventPublisher>(
       node_, service_name_, rosidl_generator_traits::name<ServiceT>());
 #endif
 
