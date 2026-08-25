@@ -141,7 +141,8 @@ std::optional<std::vector<std::string>> read_ros2_node_names_of_this_scope()
 //
 // The split keys off the mere existence of the agent's file, not off whether a given node has
 // reached its snapshot yet, so a just-started rclcpp::Node falls into a gap: skipped here and not
-// yet announced there, for as long as DDS discovery plus one agent tick takes.
+// yet announced there. The agent rewrites once per second, so the gap is up to a second wide even
+// where DDS discovery costs nothing.
 std::vector<std::string> NodeGraph::get_node_names() const
 {
   const std::optional<std::vector<std::string>> ros2_node_names =
