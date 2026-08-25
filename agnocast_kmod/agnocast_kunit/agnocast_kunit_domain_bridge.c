@@ -14,12 +14,15 @@ static const char * TOPIC_NAME = "/kunit_test_domain_bridge_topic";
 static const char * RN_SRC = "/kunit_test_domain_bridge_rename_src";
 static const char * RN_DST = "/kunit_test_domain_bridge_rename_dst";
 
-// A prefix rule bridges every name under PFX, pairing each with the identical name in the other
-// domain. PFX_A / PFX_B stand for two callers' response topics; OUTSIDE lies beyond the prefix.
-static const char * PFX = "/kunit_test_domain_bridge_prefix_";
-static const char * PFX_A = "/kunit_test_domain_bridge_prefix_clientA";
-static const char * PFX_B = "/kunit_test_domain_bridge_prefix_clientB";
-static const char * OUTSIDE = "/kunit_test_domain_bridge_outside";
+// A service's response topics. Registering the service bridges every name under the response
+// prefix, pairing each with the identical name in the other domain, so PFX_A and PFX_B stand for
+// two callers' response topics under one service; OUTSIDE lies beyond it by its last component
+// only.
+static const char * SVC = "/kunit_test_domain_bridge_prefix";
+static const char * PFX_A = "/AGNOCAST_SRV_RESPONSE/kunit_test_domain_bridge_prefix_SEP_/clientA";
+static const char * PFX_B = "/AGNOCAST_SRV_RESPONSE/kunit_test_domain_bridge_prefix_SEP_/clientB";
+static const char * OUTSIDE =
+  "/AGNOCAST_SRV_RESPONSE/kunit_test_domain_bridge_prefix_other_SEP_/clientA";
 
 #define KUNIT_PUB_SHM_BUF_SIZE 4
 
@@ -566,7 +569,7 @@ void test_case_domain_bridge_prefix_groups_wrappers(struct kunit * test)
 {
   // Arrange
   KUNIT_ASSERT_EQ(
-    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+    test, agnocast_ioctl_add_domain_bridge_service(SVC, SVC, 2, 1, current->nsproxy->ipc_ns), 0);
   setup_process_in_domain(test, 1000, 1);
   setup_process_in_domain(test, 1001, 2);
 
@@ -583,7 +586,7 @@ void test_case_domain_bridge_prefix_leaves_other_topics_alone(struct kunit * tes
 {
   // Arrange
   KUNIT_ASSERT_EQ(
-    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+    test, agnocast_ioctl_add_domain_bridge_service(SVC, SVC, 2, 1, current->nsproxy->ipc_ns), 0);
   setup_process_in_domain(test, 1000, 1);
   setup_process_in_domain(test, 1001, 2);
 
@@ -602,7 +605,7 @@ void test_case_domain_bridge_prefix_pairs_each_name_separately(struct kunit * te
 {
   // Arrange
   KUNIT_ASSERT_EQ(
-    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+    test, agnocast_ioctl_add_domain_bridge_service(SVC, SVC, 2, 1, current->nsproxy->ipc_ns), 0);
   setup_process_in_domain(test, 1000, 1);
   setup_process_in_domain(test, 1001, 2);
 
@@ -621,7 +624,7 @@ void test_case_domain_bridge_prefix_cross_domain_delivery(struct kunit * test)
 {
   // Arrange
   KUNIT_ASSERT_EQ(
-    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+    test, agnocast_ioctl_add_domain_bridge_service(SVC, SVC, 2, 1, current->nsproxy->ipc_ns), 0);
 
   agnocast_kunit_eventfd_reset();
   const uint64_t msg_addr = setup_process_in_domain(test, current->tgid, 1);
@@ -644,7 +647,7 @@ void test_case_domain_bridge_prefix_direction_respected(struct kunit * test)
 {
   // Arrange: only 1 -> 2 is declared, and the publisher sits in domain 2.
   KUNIT_ASSERT_EQ(
-    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+    test, agnocast_ioctl_add_domain_bridge_service(SVC, SVC, 2, 1, current->nsproxy->ipc_ns), 0);
 
   agnocast_kunit_eventfd_reset();
   const uint64_t msg_addr = setup_process_in_domain(test, current->tgid, 2);
@@ -667,7 +670,7 @@ void test_case_domain_bridge_exact_under_prefix_rejected(struct kunit * test)
 {
   // Arrange
   KUNIT_ASSERT_EQ(
-    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+    test, agnocast_ioctl_add_domain_bridge_service(SVC, SVC, 2, 1, current->nsproxy->ipc_ns), 0);
 
   // Act
   const int ret = agnocast_ioctl_add_domain_bridge(PFX_A, PFX_A, 1, 2, current->nsproxy->ipc_ns);

@@ -2323,10 +2323,17 @@ static struct domain_bridge_rule * find_domain_rule(
   return NULL;
 }
 
-// The caller holds global_htables_rwsem for write and has verified, over everything the new rule
-// would cover -- two cells for an exact rule, every name under the prefix for a prefix rule --
-// that no domain_bridge_rule overlaps it and that no endpoint has joined it.
-static int insert_domain_rule(
+// A validated declaration, held until every other half of the registration has validated too.
+// That is what lets a caller registering two rules reject the pair without having touched
+// anything. At most one field is set; both NULL means the declaration enables nothing new.
+struct domain_rule_plan
+{
+  struct domain_bridge_rule * insert;  // allocated, not in the table yet
+  bool * direction;                    // an existing rule's direction flag, turned on
+};
+
+// The caller owns the rule until apply_domain_rule_plan() links it.
+static struct domain_bridge_rule * alloc_domain_rule(
   const char * topic_name_from, const char * topic_name_to, const uint32_t from_domain,
   const uint32_t to_domain, const bool is_prefix, const struct ipc_namespace * ipc_ns)
 {
@@ -2339,7 +2346,7 @@ static int insert_domain_rule(
   const char * name_b = from_is_a ? topic_name_to : topic_name_from;
 
   struct domain_bridge_rule * rule = kmalloc(sizeof(*rule), GFP_KERNEL);
-  if (!rule) return -ENOMEM;
+  if (!rule) return NULL;
 
   rule->topic_name_a = kstrdup(name_a, GFP_KERNEL);
   rule->topic_name_b = kstrdup(name_b, GFP_KERNEL);
@@ -2347,7 +2354,7 @@ static int insert_domain_rule(
     kfree(rule->topic_name_a);
     kfree(rule->topic_name_b);
     kfree(rule);
-    return -ENOMEM;
+    return NULL;
   }
   rule->ipc_ns = ipc_ns;
   rule->domain_a = from_is_a ? from_domain : to_domain;
@@ -2356,20 +2363,50 @@ static int insert_domain_rule(
   rule->b_to_a = !from_is_a;
   rule->is_prefix = is_prefix;
   INIT_HLIST_NODE(&rule->node);
-  // find_domain_rule scans every bucket, so the hash key is only for even distribution.
-  hash_add(domain_rule_htable, &rule->node, full_name_hash(NULL, name_a, strlen(name_a)));
-
-  dev_info(
-    agnocast_device, "Domain bridge %srule added (%s@%u -> %s@%u).\n", is_prefix ? "prefix " : "",
-    topic_name_from, from_domain, topic_name_to, to_domain);
-  return 0;
+  return rule;
 }
 
-// The caller holds global_htables_rwsem for write.
-static int add_domain_rule(
-  const char * topic_name_from, const char * topic_name_to, const uint32_t from_domain,
-  const uint32_t to_domain, const struct ipc_namespace * ipc_ns)
+// The caller holds global_htables_rwsem for write, and has not dropped it since the plan was
+// validated.
+static void apply_domain_rule_plan(const struct domain_rule_plan * plan)
 {
+  if (plan->direction) *plan->direction = true;
+  if (!plan->insert) return;
+
+  // find_domain_rule scans every bucket, so the hash key is only for even distribution.
+  hash_add(
+    domain_rule_htable, &plan->insert->node,
+    full_name_hash(NULL, plan->insert->topic_name_a, strlen(plan->insert->topic_name_a)));
+
+  // Exactly one direction is set on a freshly allocated rule, so it names the declared pairing.
+  const bool from_is_a = plan->insert->a_to_b;
+  dev_info(
+    agnocast_device, "Domain bridge %srule added (%s@%u -> %s@%u).\n",
+    plan->insert->is_prefix ? "prefix " : "",
+    from_is_a ? plan->insert->topic_name_a : plan->insert->topic_name_b,
+    from_is_a ? plan->insert->domain_a : plan->insert->domain_b,
+    from_is_a ? plan->insert->topic_name_b : plan->insert->topic_name_a,
+    from_is_a ? plan->insert->domain_b : plan->insert->domain_a);
+}
+
+static void discard_domain_rule_plan(const struct domain_rule_plan * plan)
+{
+  if (!plan->insert) return;
+
+  kfree(plan->insert->topic_name_a);
+  kfree(plan->insert->topic_name_b);
+  kfree(plan->insert);
+}
+
+// Validates one exact rule into plan without touching the table. Every way the registration can
+// fail is here, so applying the plan cannot fail.
+// The caller holds global_htables_rwsem for write.
+static int check_domain_rule(
+  const char * topic_name_from, const char * topic_name_to, const uint32_t from_domain,
+  const uint32_t to_domain, const struct ipc_namespace * ipc_ns, struct domain_rule_plan * plan)
+{
+  *plan = (struct domain_rule_plan){};
+
   // Invariant: each cell (name, domain) belongs to at most one rule, and a rule pairs
   // exactly two cells. r_from == r_to (non-NULL) means an existing rule already pairs exactly
   // these two cells -- a re-declaration or the reverse direction. Any other overlap (a cell
@@ -2416,11 +2453,7 @@ static int add_domain_rule(
       return -EBUSY;
     }
 
-    if (from_is_a) {
-      r_from->a_to_b = true;
-    } else {
-      r_from->b_to_a = true;
-    }
+    plan->direction = from_is_a ? &r_from->a_to_b : &r_from->b_to_a;
     return 0;
   }
 
@@ -2436,7 +2469,9 @@ static int add_domain_rule(
     return -EBUSY;
   }
 
-  return insert_domain_rule(topic_name_from, topic_name_to, from_domain, to_domain, false, ipc_ns);
+  plan->insert =
+    alloc_domain_rule(topic_name_from, topic_name_to, from_domain, to_domain, false, ipc_ns);
+  return plan->insert ? 0 : -ENOMEM;
 }
 
 // A prefix rule groups every cell it covers, and grouping merges id spaces, so it must be
@@ -2457,13 +2492,16 @@ static bool any_topic_under_prefix(
   return false;
 }
 
-// Registers a prefix rule, or folds a re-declaration into the identical existing one. Every other
-// overlap is rejected so find_domain_rule never has to choose between two candidates.
+// Validates one prefix rule into plan on the same terms, folding a re-declaration into the
+// identical existing rule. Every other overlap is rejected so find_domain_rule never has to
+// choose between two candidates.
 // The caller holds global_htables_rwsem for write.
-static int add_prefix_domain_rule(
+static int check_prefix_domain_rule(
   const char * prefix, const uint32_t from_domain, const uint32_t to_domain,
-  const struct ipc_namespace * ipc_ns)
+  const struct ipc_namespace * ipc_ns, struct domain_rule_plan * plan)
 {
+  *plan = (struct domain_rule_plan){};
+
   const size_t prefix_len = strlen(prefix);
   const uint32_t domain_a = min(from_domain, to_domain);
   const uint32_t domain_b = max(from_domain, to_domain);
@@ -2535,8 +2573,7 @@ static int add_prefix_domain_rule(
         prefix, from_domain, prefix, to_domain, __func__);
       return -EBUSY;
     }
-    same->a_to_b |= from_is_a;
-    same->b_to_a |= !from_is_a;
+    plan->direction = from_is_a ? &same->a_to_b : &same->b_to_a;
     return 0;
   }
 
@@ -2549,7 +2586,8 @@ static int add_prefix_domain_rule(
     return -EBUSY;
   }
 
-  return insert_domain_rule(prefix, prefix, from_domain, to_domain, true, ipc_ns);
+  plan->insert = alloc_domain_rule(prefix, prefix, from_domain, to_domain, true, ipc_ns);
+  return plan->insert ? 0 : -ENOMEM;
 }
 
 int agnocast_ioctl_add_domain_bridge(
@@ -2558,21 +2596,63 @@ int agnocast_ioctl_add_domain_bridge(
 {
   if (from_domain == to_domain) return -EINVAL;
 
+  struct domain_rule_plan plan;
+
   down_write(&global_htables_rwsem);
-  const int ret = add_domain_rule(topic_name_from, topic_name_to, from_domain, to_domain, ipc_ns);
+  const int ret =
+    check_domain_rule(topic_name_from, topic_name_to, from_domain, to_domain, ipc_ns, &plan);
+  if (ret == 0) apply_domain_rule_plan(&plan);
   up_write(&global_htables_rwsem);
   return ret;
 }
 
-int agnocast_ioctl_add_domain_bridge_prefix(
-  const char * topic_name_prefix, const uint32_t from_domain, const uint32_t to_domain,
-  const struct ipc_namespace * ipc_ns)
+int agnocast_ioctl_add_domain_bridge_service(
+  const char * service_name_from, const char * service_name_to, const uint32_t from_domain,
+  const uint32_t to_domain, const struct ipc_namespace * ipc_ns)
 {
   if (from_domain == to_domain) return -EINVAL;
-  if (topic_name_prefix[0] != '/' || topic_name_prefix[1] == '\0') return -EINVAL;
+  if (service_name_from[0] != '/' || service_name_from[1] == '\0') return -EINVAL;
+  if (service_name_to[0] != '/' || service_name_to[1] == '\0') return -EINVAL;
+
+  char request_from[TOPIC_NAME_BUFFER_SIZE];
+  char request_to[TOPIC_NAME_BUFFER_SIZE];
+  char response_prefix[TOPIC_NAME_BUFFER_SIZE];
+  // The response prefix uses the caller-side name on both sides: the client dictates the response
+  // topic name and the server publishes to whatever the request asked for, rename or not.
+  if (
+    snprintf(request_from, sizeof(request_from), "%s%s", SRV_REQUEST_PREFIX, service_name_from) >=
+      (int)sizeof(request_from) ||
+    snprintf(request_to, sizeof(request_to), "%s%s", SRV_REQUEST_PREFIX, service_name_to) >=
+      (int)sizeof(request_to) ||
+    snprintf(
+      response_prefix, sizeof(response_prefix), "%s%s%s", SRV_RESPONSE_PREFIX, service_name_from,
+      SRV_RESPONSE_SEP) >= (int)sizeof(response_prefix)) {
+    dev_warn(
+      agnocast_device,
+      "Domain bridge service rule (%s@%u -> %s@%u) rejected: name too long. (%s)\n",
+      service_name_from, from_domain, service_name_to, to_domain, __func__);
+    return -ENAMETOOLONG;
+  }
 
   down_write(&global_htables_rwsem);
-  const int ret = add_prefix_domain_rule(topic_name_prefix, from_domain, to_domain, ipc_ns);
+
+  struct domain_rule_plan request_plan;
+  struct domain_rule_plan response_plan;
+  int ret =
+    check_domain_rule(request_from, request_to, from_domain, to_domain, ipc_ns, &request_plan);
+  if (ret == 0) {
+    // Responses travel the other way: the server publishes them for the clients.
+    ret = check_prefix_domain_rule(response_prefix, to_domain, from_domain, ipc_ns, &response_plan);
+    if (ret == 0) {
+      apply_domain_rule_plan(&request_plan);
+      apply_domain_rule_plan(&response_plan);
+    } else {
+      // Defensive: response_plan is empty unless a check is ever added after it.
+      discard_domain_rule_plan(&request_plan);
+      discard_domain_rule_plan(&response_plan);
+    }
+  }
+
   up_write(&global_htables_rwsem);
   return ret;
 }
@@ -3288,19 +3368,23 @@ static long add_domain_bridge_cmd(struct ioctl_add_domain_bridge_args __user * a
     ipc_ns);
 }
 
-static long add_domain_bridge_prefix_cmd(struct ioctl_add_domain_bridge_prefix_args __user * arg)
+static long add_domain_bridge_service_cmd(struct ioctl_add_domain_bridge_service_args __user * arg)
 {
   const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
 
-  struct ioctl_add_domain_bridge_prefix_args prefix_args;
-  if (copy_from_user(&prefix_args, arg, sizeof(prefix_args))) return -EFAULT;
+  struct ioctl_add_domain_bridge_service_args service_args;
+  if (copy_from_user(&service_args, arg, sizeof(service_args))) return -EFAULT;
 
-  char prefix_buf[TOPIC_NAME_BUFFER_SIZE];
-  int ret = copy_name_from_user(prefix_buf, sizeof(prefix_buf), &prefix_args.topic_name_prefix);
+  char from_name_buf[TOPIC_NAME_BUFFER_SIZE];
+  char to_name_buf[TOPIC_NAME_BUFFER_SIZE];
+  int ret =
+    copy_name_from_user(from_name_buf, sizeof(from_name_buf), &service_args.service_name_from);
+  if (ret) return ret;
+  ret = copy_name_from_user(to_name_buf, sizeof(to_name_buf), &service_args.service_name_to);
   if (ret) return ret;
 
-  return agnocast_ioctl_add_domain_bridge_prefix(
-    prefix_buf, prefix_args.from_domain, prefix_args.to_domain, ipc_ns);
+  return agnocast_ioctl_add_domain_bridge_service(
+    from_name_buf, to_name_buf, service_args.from_domain, service_args.to_domain, ipc_ns);
 }
 
 static long remove_bridge_cmd(struct ioctl_remove_bridge_args __user * arg)
@@ -3485,8 +3569,9 @@ long agnocast_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
       return add_discovery_agent_cmd((struct ioctl_add_discovery_agent_args __user *)arg);
     case AGNOCAST_DISCOVERY_AGENT_EXISTS_CMD:
       return discovery_agent_exists_cmd((struct ioctl_discovery_agent_exists_args __user *)arg);
-    case AGNOCAST_ADD_DOMAIN_BRIDGE_PREFIX_CMD:
-      return add_domain_bridge_prefix_cmd((struct ioctl_add_domain_bridge_prefix_args __user *)arg);
+    case AGNOCAST_ADD_DOMAIN_BRIDGE_SERVICE_CMD:
+      return add_domain_bridge_service_cmd(
+        (struct ioctl_add_domain_bridge_service_args __user *)arg);
     default:
       return -EINVAL;
   }

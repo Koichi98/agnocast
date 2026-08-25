@@ -17,6 +17,12 @@
 #define TOPIC_NAME_BUFFER_SIZE 256  // Maximum length of topic name: 256 characters
 #define VERSION_BUFFER_LEN 32       // Maximum size of version number represented as a string
 
+// Must match create_service_{request,response}_topic_name in
+// src/agnocastlib/src/agnocast_utils.cpp, which owns the naming.
+#define SRV_REQUEST_PREFIX "/AGNOCAST_SRV_REQUEST"
+#define SRV_RESPONSE_PREFIX "/AGNOCAST_SRV_RESPONSE"
+#define SRV_RESPONSE_SEP "_SEP_"
+
 typedef int32_t topic_local_id_t;
 struct publisher_shm_info
 {
@@ -297,12 +303,16 @@ struct ioctl_add_domain_bridge_args
   uint32_t to_domain;
 };
 
-// Bridges every topic whose name starts with topic_name_prefix, pairing it with the identical
-// name in the other domain. For topic families whose full names appear only at runtime and so
-// cannot be listed in a config -- an Agnocast service's per-client response topics.
-struct ioctl_add_domain_bridge_prefix_args
+// Bridges one Agnocast service: an exact rule for its request topic plus a prefix rule for the
+// per-client response topics, whose full names appear only at runtime. Both go in or neither
+// does -- the id that keeps a response topic name per-client is only unique across domains the
+// request rule has merged.
+// The clients call service_name_from in from_domain; the server offers service_name_to in
+// to_domain.
+struct ioctl_add_domain_bridge_service_args
 {
-  struct name_info topic_name_prefix;
+  struct name_info service_name_from;
+  struct name_info service_name_to;
   uint32_t from_domain;
   uint32_t to_domain;
 };
@@ -336,8 +346,8 @@ struct ioctl_add_domain_bridge_prefix_args
 #define AGNOCAST_ADD_DISCOVERY_AGENT_CMD _IOWR(0xA6, 30, struct ioctl_add_discovery_agent_args)
 #define AGNOCAST_DISCOVERY_AGENT_EXISTS_CMD \
   _IOWR(0xA6, 31, struct ioctl_discovery_agent_exists_args)
-#define AGNOCAST_ADD_DOMAIN_BRIDGE_PREFIX_CMD \
-  _IOW(0xA6, 32, struct ioctl_add_domain_bridge_prefix_args)
+#define AGNOCAST_ADD_DOMAIN_BRIDGE_SERVICE_CMD \
+  _IOW(0xA6, 32, struct ioctl_add_domain_bridge_service_args)
 
 // ================================================
 // ros2cli ioctls
@@ -482,9 +492,9 @@ int agnocast_ioctl_add_domain_bridge(
   const char * topic_name_from, const char * topic_name_to, uint32_t from_domain,
   uint32_t to_domain, const struct ipc_namespace * ipc_ns);
 
-int agnocast_ioctl_add_domain_bridge_prefix(
-  const char * topic_name_prefix, uint32_t from_domain, uint32_t to_domain,
-  const struct ipc_namespace * ipc_ns);
+int agnocast_ioctl_add_domain_bridge_service(
+  const char * service_name_from, const char * service_name_to, uint32_t from_domain,
+  uint32_t to_domain, const struct ipc_namespace * ipc_ns);
 
 int agnocast_ioctl_get_version(struct ioctl_get_version_args * ioctl_ret);
 
