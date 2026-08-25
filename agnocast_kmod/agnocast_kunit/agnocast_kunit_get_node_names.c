@@ -259,3 +259,29 @@ void test_case_get_node_names_buffer_too_small(struct kunit * test)
 
   KUNIT_EXPECT_EQ(test, ret, -ENOBUFS);
 }
+
+// Past MAX_NODE_NUM the caller gets an error instead of a silently truncated graph. Split across
+// two topics because MAX_PUBLISHER_NUM caps a single one at MAX_NODE_NUM publishers.
+void test_case_get_node_names_too_many_nodes(struct kunit * test)
+{
+  const size_t buf_size = (size_t)(MAX_NODE_NUM + 1) * NODE_NAME_BUFFER_SIZE;
+  char * buf = kunit_kzalloc(test, buf_size, GFP_KERNEL);
+  KUNIT_ASSERT_NOT_NULL(test, buf);
+  size_t used = 0;
+  uint32_t node_num = 0;
+  char node_name[NODE_NAME_BUFFER_SIZE];
+  int i;
+
+  setup_process(test, PID);
+  for (i = 0; i < MAX_NODE_NUM; i++) {
+    snprintf(node_name, sizeof(node_name), "/kunit_test_node%d", i);
+    add_publisher(test, TOPIC_NAME, node_name, PID, false, false);
+  }
+  snprintf(node_name, sizeof(node_name), "/kunit_test_node%d", MAX_NODE_NUM);
+  add_publisher(test, TOPIC_NAME2, node_name, PID, false, false);
+
+  int ret = agnocast_ioctl_get_node_names(
+    current->nsproxy->ipc_ns, DOMAIN_ID, EXCLUDE_ROS2_NODES, buf, buf_size, &used, &node_num);
+
+  KUNIT_EXPECT_EQ(test, ret, -ENOBUFS);
+}

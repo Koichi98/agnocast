@@ -12,7 +12,8 @@
     KUNIT_CASE(test_case_get_node_names_excludes_ros2_node_subscriber), \
     KUNIT_CASE(test_case_get_node_names_includes_ros2_node),            \
     KUNIT_CASE(test_case_get_node_names_other_domain),                  \
-    KUNIT_CASE(test_case_get_node_names_buffer_too_small)
+    KUNIT_CASE(test_case_get_node_names_buffer_too_small),              \
+    KUNIT_CASE(test_case_get_node_names_too_many_nodes)
 
 void test_case_get_node_names_no_node(struct kunit * test);
 void test_case_get_node_names_multiple_nodes(struct kunit * test);
@@ -24,3 +25,4 @@ void test_case_get_node_names_excludes_ros2_node_subscriber(struct kunit * test)
 void test_case_get_node_names_includes_ros2_node(struct kunit * test);
 void test_case_get_node_names_other_domain(struct kunit * test);
 void test_case_get_node_names_buffer_too_small(struct kunit * test);
+void test_case_get_node_names_too_many_nodes(struct kunit * test);

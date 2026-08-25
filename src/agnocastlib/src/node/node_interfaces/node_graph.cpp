@@ -10,6 +10,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cerrno>
 #include <optional>
 #include <stdexcept>
 
@@ -74,7 +75,8 @@ namespace
 {
 std::vector<std::string> query_agnocast_node_names(const bool exclude_ros2_nodes)
 {
-  // Sized to the kernel-side limit so that the kernel never has to report -ENOBUFS.
+  // Large enough for MAX_NODE_NUM names of the maximum length, so the buffer is never the reason
+  // the kernel reports -ENOBUFS.
   std::vector<char> buffer(static_cast<size_t>(MAX_NODE_NUM) * NODE_NAME_BUFFER_SIZE);
 
   union ioctl_get_node_names_args get_node_names_args = {};
@@ -82,6 +84,17 @@ std::vector<std::string> query_agnocast_node_names(const bool exclude_ros2_nodes
   get_node_names_args.node_name_buffer_size = static_cast<uint32_t>(buffer.size());
   get_node_names_args.exclude_ros2_nodes = exclude_ros2_nodes;
   if (ioctl(agnocast_fd, AGNOCAST_GET_NODE_NAMES_CMD, &get_node_names_args) < 0) {
+    // More than MAX_NODE_NUM nodes is a graph too large to report, not a broken kmod state, so it
+    // must not take the caller down the way the other ioctl wrappers do: a partial graph is a far
+    // better answer to a query than killing the process asking it.
+    if (errno == ENOBUFS) {
+      RCLCPP_ERROR(
+        logger,
+        "AGNOCAST_GET_NODE_NAMES_CMD failed: more than MAX_NODE_NUM (%d) agnocast nodes in this "
+        "IPC namespace and ROS_DOMAIN_ID. get_node_names() reports the ROS 2 nodes only.",
+        MAX_NODE_NUM);
+      return {};
+    }
     RCLCPP_ERROR(logger, "AGNOCAST_GET_NODE_NAMES_CMD failed: %s", strerror(errno));
     close(agnocast_fd);
     exit(EXIT_FAILURE);
@@ -123,8 +136,10 @@ std::optional<std::vector<std::string>> read_ros2_node_names_of_this_scope()
 //
 // Without an agent there is no DDS-side list, and the second-best answer is every Agnocast node
 // regardless of whether DDS also announces it: a node visible through one interface beats a node
-// missing from both. The result therefore holds fewer node names once an agent starts, if the
-// process' own nodes are the only Agnocast ones around.
+// missing from both. Starting an agent therefore normally grows the result, since the DDS-side
+// list covers every rclcpp::Node and not just those holding an Agnocast endpoint. It shrinks it
+// only for an rclcpp::Node the agent's own participant fails to discover, which is dropped from
+// the kmod half without turning up in the DDS half.
 std::vector<std::string> NodeGraph::get_node_names() const
 {
   const std::optional<std::vector<std::string>> ros2_node_names =
