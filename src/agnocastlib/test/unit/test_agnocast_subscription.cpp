@@ -1,6 +1,7 @@
 #include "agnocast/agnocast.hpp"
 #include "agnocast/agnocast_callback_info.hpp"
 #include "agnocast/agnocast_subscription.hpp"
+#include "agnocast/node/agnocast_node.hpp"
 
 #include "std_msgs/msg/string.hpp"
 
@@ -12,15 +13,18 @@
 #include <mutex>
 #include <string>
 
+bool initialize_mock_last_is_ros2_node = false;
+
 namespace agnocast
 {
 // Stubbed so a subscription can be constructed without a kernel module. init_base(), which
 // resolves the QoS, still runs for real and calls this with its result. id_ is left at -1 so
 // ~SubscriptionBase() issues no ioctl either.
 void SubscriptionBase::initialize(
-  const rclcpp::QoS &, const bool, const bool, SubscriptionRole, const std::string &, const bool,
-  const std::string &)
+  const rclcpp::QoS &, const bool, const bool, SubscriptionRole, const std::string &,
+  const bool is_ros2_node, const std::string &)
 {
+  initialize_mock_last_is_ros2_node = is_ros2_node;
 }
 }  // namespace agnocast
 
@@ -183,4 +187,50 @@ TEST_F(GetActualQosTest, the_resolved_durability_reaches_the_callback_registry)
     [&topic](const auto & e) { return e.second.topic_name == topic; });
   ASSERT_NE(entry, agnocast::id2_callback_info.end());
   EXPECT_TRUE(entry->second.is_transient_local);
+}
+
+// The mirror of PublisherIsRos2NodeTest in test_agnocast_publisher.cpp: subscriptions carry the
+// same flag, and NodeGraph::get_node_names() reads it off either endpoint kind.
+class SubscriptionIsRos2NodeTest : public GetActualQosTest
+{
+};
+
+TEST_F(SubscriptionIsRos2NodeTest, a_subscription_of_an_rclcpp_node_registers_as_a_ros2_node)
+{
+  auto node = std::make_shared<rclcpp::Node>("test_sub_is_ros2_rclcpp");
+  initialize_mock_last_is_ros2_node = false;
+
+  auto sub = agnocast::create_subscription<StringMsg>(
+    node.get(), "/test_sub_is_ros2_rclcpp", 1,
+    [](const agnocast::ipc_shared_ptr<const StringMsg> &) {});
+
+  EXPECT_TRUE(initialize_mock_last_is_ros2_node);
+}
+
+TEST_F(
+  SubscriptionIsRos2NodeTest, a_subscription_of_an_agnocast_node_does_not_register_as_a_ros2_node)
+{
+  rclcpp::NodeOptions options;
+  options.start_parameter_services(false);
+  auto node = std::make_shared<agnocast::Node>("test_sub_is_ros2_agnocast", "/", options);
+  initialize_mock_last_is_ros2_node = true;
+
+  auto sub = agnocast::create_subscription<StringMsg>(
+    node.get(), "/test_sub_is_ros2_agnocast", 1,
+    [](const agnocast::ipc_shared_ptr<const StringMsg> &) {});
+
+  EXPECT_FALSE(initialize_mock_last_is_ros2_node);
+}
+
+// A take subscription reaches initialize() through the other init_base() overload.
+TEST_F(SubscriptionIsRos2NodeTest, a_take_subscription_carries_the_flag_of_its_node)
+{
+  rclcpp::NodeOptions options;
+  options.start_parameter_services(false);
+  auto node = std::make_shared<agnocast::Node>("test_take_sub_is_ros2", "/", options);
+  initialize_mock_last_is_ros2_node = true;
+
+  agnocast::TakeSubscription<StringMsg> sub(node.get(), "/test_take_sub_is_ros2", rclcpp::QoS{1});
+
+  EXPECT_FALSE(initialize_mock_last_is_ros2_node);
 }
