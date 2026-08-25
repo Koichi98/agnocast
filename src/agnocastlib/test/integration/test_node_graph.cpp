@@ -119,6 +119,13 @@ TEST_F(NodeGraphIntegrationTest, node_delegates_counting_to_the_node_graph_inter
   EXPECT_EQ(node_->count_publishers(topic), 1u);
 }
 
+TEST_F(NodeGraphIntegrationTest, node_delegates_get_node_names_to_the_node_graph_interface)
+{
+  auto pub = node_->create_publisher<StringMsg>("/test_node_graph_names_delegation", 1);
+
+  EXPECT_THAT(node_->get_node_names(), ::testing::Contains("/test_node_graph"));
+}
+
 // get_node_names() reports every node of this IPC namespace and ROS_DOMAIN_ID that owns an
 // agnocast endpoint, plus the caller itself, so the assertions below check for membership rather
 // than for an exact list: the kmod still holds the nodes registered by the tests that ran before

@@ -405,6 +405,15 @@ public:
   AGNOCAST_PUBLIC
   rclcpp::Time now() const { return node_clock_->get_clock()->now(); }
 
+  /// Return the fully qualified names of the nodes in this IPC namespace and ROS_DOMAIN_ID.
+  ///
+  /// Reports the agnocast nodes that own an endpoint, the ROS 2 nodes a running
+  /// ros2agnocast_discovery_agent sees, and this node itself. See
+  /// docs/agnocast_node_interface_comparison.md for what each source requires.
+  /// @return Node names, with a name shared by several nodes repeated once per node.
+  AGNOCAST_PUBLIC
+  std::vector<std::string> get_node_names() const { return node_graph_->get_node_names(); }
+
   /// Return the number of publishers on a topic.
   ///
   /// Counts the agnocast publishers in the same domain, plus the ROS 2 publishers reported by a
