@@ -346,6 +346,21 @@ TEST_F(DeferredServiceIntrospectionTest, DeferredResponsePublishesBothEvents)
   EXPECT_EQ(events[1].response[0].message, "ok");
 }
 
+TEST_F(ServiceIntrospectionTest, ATransitionThatReusesThePublisherIgnoresTheQos)
+{
+  enable_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
+
+  // The QoS is only consulted when the publisher is created, so a QoS that would be rejected
+  // on the way in is accepted here, and the existing publisher keeps its own.
+  EXPECT_NO_THROW(service_->configure_introspection(
+    node_->get_clock(), rclcpp::QoS(rclcpp::KeepAll()), RCL_SERVICE_INTROSPECTION_METADATA));
+
+  ASSERT_NO_FATAL_FAILURE(call_service(true));
+  auto events = collect_events(2);
+  ASSERT_EQ(events.size(), 2u);
+  EXPECT_TRUE(events[0].request.empty()) << "the state change must still have taken effect";
+}
+
 #else
 
 // Without this the binary reports "0 tests from 0 test suites" and passes, which is

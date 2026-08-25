@@ -91,7 +91,8 @@ public:
     const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
     rcl_service_introspection_state_t state);
 
-  /// @brief Returns the state introspection is currently in (thread-safe).
+  /// @brief Returns the last state committed by configure(). Safe to call from any thread, but
+  /// reads without the lock, so it can trail a configure() running concurrently.
   rcl_service_introspection_state_t introspection_state() const noexcept
   {
     return published_state_.load(std::memory_order_relaxed);

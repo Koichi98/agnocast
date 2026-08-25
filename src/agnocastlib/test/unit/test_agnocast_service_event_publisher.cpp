@@ -6,8 +6,6 @@
 
 #include "rclcpp/rclcpp.hpp"
 
-#include <service_msgs/msg/service_event_info.hpp>
-
 #include <stdexcept>
 
 // configure() rejects its arguments before it creates the event publisher, so these need no
@@ -59,6 +57,10 @@ TEST_F(ServiceEventPublisherTest, ConfigureRejectsAQosAgnocastCannotUse)
     event_publisher_->configure(
       node_->get_clock(), rclcpp::QoS(rclcpp::KeepAll()), RCL_SERVICE_INTROSPECTION_CONTENTS),
     std::invalid_argument);
+
+  // This path throws after the snapshot is taken, unlike the clock check, so confirm it
+  // committed nothing on the way.
+  EXPECT_EQ(event_publisher_->introspection_state(), RCL_SERVICE_INTROSPECTION_OFF);
 }
 
 TEST_F(ServiceEventPublisherTest, ARejectedConfigureLeavesIntrospectionOff)
