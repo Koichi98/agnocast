@@ -2513,33 +2513,26 @@ static int check_prefix_domain_rule(
   {
     if (ipc_ns != rule->ipc_ns) continue;
 
+    // A service name cannot contain the separator, so no prefix can start with another.
     if (rule->is_prefix) {
-      const size_t len = strlen(rule->topic_name_a);
-      const bool nests = (len <= prefix_len) ? strncmp(rule->topic_name_a, prefix, len) == 0
-                                             : strncmp(prefix, rule->topic_name_a, prefix_len) == 0;
-      // find_domain_rule filters by domain before testing the name, so two prefix rules can both
-      // match a lookup only if their pairs share a domain; over disjoint pairs nesting is harmless.
-      const bool shares_domain = rule->domain_a == domain_a || rule->domain_a == domain_b ||
-                                 rule->domain_b == domain_a || rule->domain_b == domain_b;
-      if (!nests || !shares_domain) continue;
+      if (strcmp(rule->topic_name_a, prefix) != 0) continue;
 
-      if (len == prefix_len) {
-        if (rule->domain_a == domain_a && rule->domain_b == domain_b) {
-          same = rule;
-          continue;
-        }
-        dev_warn(
-          agnocast_device,
-          "Domain bridge prefix rule (%s@%u -> %s@%u) rejected: the prefix is already paired with "
-          "another domain. (%s)\n",
-          prefix, from_domain, prefix, to_domain, __func__);
-        return -EBUSY;
+      if (rule->domain_a == domain_a && rule->domain_b == domain_b) {
+        same = rule;
+        continue;
       }
+
+      // find_domain_rule filters by domain before testing the name, so the same prefix over a
+      // disjoint pair can never be the other candidate for a lookup.
+      if (
+        rule->domain_a != domain_a && rule->domain_a != domain_b && rule->domain_b != domain_a &&
+        rule->domain_b != domain_b)
+        continue;
 
       dev_warn(
         agnocast_device,
-        "Domain bridge prefix rule (%s@%u -> %s@%u) rejected: it nests with an existing prefix "
-        "rule. (%s)\n",
+        "Domain bridge prefix rule (%s@%u -> %s@%u) rejected: the prefix is already paired with "
+        "another domain. (%s)\n",
         prefix, from_domain, prefix, to_domain, __func__);
       return -EBUSY;
     }
@@ -2613,6 +2606,10 @@ int agnocast_ioctl_add_domain_bridge_service(
   if (from_domain == to_domain) return -EINVAL;
   if (service_name_from[0] != '/' || service_name_from[1] == '\0') return -EINVAL;
   if (service_name_to[0] != '/' || service_name_to[1] == '\0') return -EINVAL;
+  // A ROS name cannot contain the separator, so a caller passing one has bypassed ROS validation.
+  // Such a name would put its response topics under another service's response prefix.
+  if (strstr(service_name_from, SRV_RESPONSE_SEP) || strstr(service_name_to, SRV_RESPONSE_SEP))
+    return -EINVAL;
 
   char request_from[TOPIC_NAME_BUFFER_SIZE];
   char request_to[TOPIC_NAME_BUFFER_SIZE];

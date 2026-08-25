@@ -117,7 +117,7 @@ std::string create_service_response_topic_name(
   const std::string & service_name, const std::string & client_node_name,
   const topic_local_id_t client_publisher_id)
 {
-  return "/AGNOCAST_SRV_RESPONSE" + service_name + "_SEP_" + client_node_name + "_SEP_" +
+  return "/AGNOCAST_SRV_RESPONSE" + service_name + SRV_SEP + client_node_name + SRV_SEP +
          std::to_string(client_publisher_id);
 }
 

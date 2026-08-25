@@ -17,11 +17,11 @@
 #define TOPIC_NAME_BUFFER_SIZE 256  // Maximum length of topic name: 256 characters
 #define VERSION_BUFFER_LEN 32       // Maximum size of version number represented as a string
 
-// Must match create_service_{request,response}_topic_name in
-// src/agnocastlib/src/agnocast_utils.cpp, which owns the naming.
+// Must match agnocast::SRV_SEP and create_service_{request,response}_topic_name in
+// src/agnocastlib, which own the naming.
 #define SRV_REQUEST_PREFIX "/AGNOCAST_SRV_REQUEST"
 #define SRV_RESPONSE_PREFIX "/AGNOCAST_SRV_RESPONSE"
-#define SRV_RESPONSE_SEP "_SEP_"
+#define SRV_RESPONSE_SEP "%"
 
 typedef int32_t topic_local_id_t;
 struct publisher_shm_info

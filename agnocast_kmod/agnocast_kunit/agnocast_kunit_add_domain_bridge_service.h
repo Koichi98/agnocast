@@ -10,6 +10,7 @@
     KUNIT_CASE(test_case_add_domain_bridge_service_root_rejected),                     \
     KUNIT_CASE(test_case_add_domain_bridge_service_relative_rejected),                 \
     KUNIT_CASE(test_case_add_domain_bridge_service_relative_target_rejected),          \
+    KUNIT_CASE(test_case_add_domain_bridge_service_separator_in_name_rejected),        \
     KUNIT_CASE(test_case_add_domain_bridge_service_too_long_rejected),                 \
     KUNIT_CASE(test_case_add_domain_bridge_service_redeclaration_is_idempotent),       \
     KUNIT_CASE(test_case_add_domain_bridge_service_reverse_direction),                 \
@@ -17,10 +18,8 @@
     KUNIT_CASE(test_case_add_domain_bridge_service_accepted_beside_an_exact_rule),     \
     KUNIT_CASE(test_case_add_domain_bridge_service_accepted_with_a_topic_outside_it),  \
     KUNIT_CASE(test_case_add_domain_bridge_service_accepted_with_a_client_elsewhere),  \
-    KUNIT_CASE(test_case_add_domain_bridge_service_nested_over_disjoint_domains),      \
+    KUNIT_CASE(test_case_add_domain_bridge_service_accepted_over_a_disjoint_pair),     \
     KUNIT_CASE(test_case_add_domain_bridge_service_repointed_pair_rejected),           \
-    KUNIT_CASE(test_case_add_domain_bridge_service_nested_rejected),                   \
-    KUNIT_CASE(test_case_add_domain_bridge_service_nested_rejected_either_order),      \
     KUNIT_CASE(test_case_add_domain_bridge_service_late_reverse_direction_rejected),   \
     KUNIT_CASE(test_case_add_domain_bridge_service_rejected_when_client_joined),       \
     KUNIT_CASE(test_case_add_domain_bridge_service_rejected_when_response_joined),     \
@@ -36,6 +35,7 @@ void test_case_add_domain_bridge_service_empty_rejected(struct kunit * test);
 void test_case_add_domain_bridge_service_root_rejected(struct kunit * test);
 void test_case_add_domain_bridge_service_relative_rejected(struct kunit * test);
 void test_case_add_domain_bridge_service_relative_target_rejected(struct kunit * test);
+void test_case_add_domain_bridge_service_separator_in_name_rejected(struct kunit * test);
 void test_case_add_domain_bridge_service_too_long_rejected(struct kunit * test);
 void test_case_add_domain_bridge_service_redeclaration_is_idempotent(struct kunit * test);
 void test_case_add_domain_bridge_service_reverse_direction(struct kunit * test);
@@ -43,10 +43,8 @@ void test_case_add_domain_bridge_service_accepted_beside_another_service(struct 
 void test_case_add_domain_bridge_service_accepted_beside_an_exact_rule(struct kunit * test);
 void test_case_add_domain_bridge_service_accepted_with_a_topic_outside_it(struct kunit * test);
 void test_case_add_domain_bridge_service_accepted_with_a_client_elsewhere(struct kunit * test);
-void test_case_add_domain_bridge_service_nested_over_disjoint_domains(struct kunit * test);
+void test_case_add_domain_bridge_service_accepted_over_a_disjoint_pair(struct kunit * test);
 void test_case_add_domain_bridge_service_repointed_pair_rejected(struct kunit * test);
-void test_case_add_domain_bridge_service_nested_rejected(struct kunit * test);
-void test_case_add_domain_bridge_service_nested_rejected_either_order(struct kunit * test);
 void test_case_add_domain_bridge_service_late_reverse_direction_rejected(struct kunit * test);
 void test_case_add_domain_bridge_service_rejected_when_client_joined(struct kunit * test);
 void test_case_add_domain_bridge_service_rejected_when_response_joined(struct kunit * test);

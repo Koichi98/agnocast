@@ -121,7 +121,7 @@ TEST_F(CreateCallbackGroupIdTest, AgnocastClient)
 {
   // Arrange
   auto group = node_->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
-  std::vector<std::string> agnocast_topics = {"/AGNOCAST_SRV_RESPONSE/my_service_SEP_client_node"};
+  std::vector<std::string> agnocast_topics = {"/AGNOCAST_SRV_RESPONSE/my_service%client_node"};
 
   // Act
   auto id = agnocast::create_callback_group_id(group, node_, agnocast_topics);

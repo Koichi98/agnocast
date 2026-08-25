@@ -89,6 +89,8 @@ std::string create_shm_name(const pid_t pid);
 // `${AGNOCAST_TMPFS_DIR:-/dev/shm}/agnocast_type_registry/<ipc_ns_inode>/`.
 uint64_t get_self_ipc_ns_inode();
 std::string create_service_request_topic_name(const std::string & service_name);
+// A character no ROS name can contain, so one service's response prefix cannot cover another's.
+inline constexpr char SRV_SEP[] = "%";
 // A domain bridge merges two domains, where the same fully qualified node name may legitimately
 // appear twice, into one response topic. The publisher id separates such clients: it comes from a
 // counter the kernel module keeps per request topic.

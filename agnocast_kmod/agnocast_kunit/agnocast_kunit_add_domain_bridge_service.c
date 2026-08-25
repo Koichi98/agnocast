@@ -9,19 +9,18 @@
 // naming scheme shows up here as a failing test.
 //
 // SVC is the name the clients call; SVC_RENAMED is what the server offers when the two differ.
-// SVC_NESTED embeds _SEP_ in the service name itself -- the only way one service's response
-// prefix can nest inside another's.
 static const char * SVC = "/kunit_svc";
 static const char * SVC_RENAMED = "/kunit_svc_renamed";
 static const char * SVC_OTHER = "/kunit_svc_other";
-static const char * SVC_NESTED = "/kunit_svc_SEP_nested";
+// A name no ROS node can resolve to, so it only reaches the ioctl from an unvalidated caller.
+static const char * SVC_WITH_SEP = "/kunit_svc%nested";
 
 static const char * REQ = "/AGNOCAST_SRV_REQUEST/kunit_svc";
 static const char * REQ_RENAMED = "/AGNOCAST_SRV_REQUEST/kunit_svc_renamed";
 // A response topic of one client: the prefix plus the per-client suffix the client appends.
-static const char * RES_A = "/AGNOCAST_SRV_RESPONSE/kunit_svc_SEP_/nodeA_SEP_0";
+static const char * RES_A = "/AGNOCAST_SRV_RESPONSE/kunit_svc%/nodeA%0";
 // Beyond the response prefix by its last component only.
-static const char * OUTSIDE = "/AGNOCAST_SRV_RESPONSE/kunit_svc_outside_SEP_/nodeA_SEP_0";
+static const char * OUTSIDE = "/AGNOCAST_SRV_RESPONSE/kunit_svc_outside%/nodeA%0";
 
 static int add_service(
   const char * from, const char * to, const uint32_t from_domain, const uint32_t to_domain)
@@ -98,8 +97,7 @@ void test_case_add_domain_bridge_service_renames_only_the_request(struct kunit *
   // The response prefix keeps the caller-side name on both sides, so the server's domain reaches
   // it under the *client's* service name and not under the renamed one.
   KUNIT_EXPECT_TRUE(test, has_rule(RES_A, 2));
-  KUNIT_EXPECT_FALSE(
-    test, has_rule("/AGNOCAST_SRV_RESPONSE/kunit_svc_renamed_SEP_/nodeA_SEP_0", 2));
+  KUNIT_EXPECT_FALSE(test, has_rule("/AGNOCAST_SRV_RESPONSE/kunit_svc_renamed%/nodeA%0", 2));
 }
 
 void test_case_add_domain_bridge_service_same_domain_rejected(struct kunit * test)
@@ -142,6 +140,15 @@ void test_case_add_domain_bridge_service_relative_target_rejected(struct kunit *
 {
   // Act: the rename target is the one missing its leading '/'.
   const int ret = add_service(SVC, SVC_RENAMED + 1, 1, 2);
+
+  // Assert
+  KUNIT_EXPECT_EQ(test, ret, -EINVAL);
+}
+
+void test_case_add_domain_bridge_service_separator_in_name_rejected(struct kunit * test)
+{
+  // Act
+  const int ret = add_service(SVC_WITH_SEP, SVC_WITH_SEP, 1, 2);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -EINVAL);
@@ -247,14 +254,14 @@ void test_case_add_domain_bridge_service_accepted_with_a_client_elsewhere(struct
   KUNIT_EXPECT_EQ(test, ret, 0);
 }
 
-void test_case_add_domain_bridge_service_nested_over_disjoint_domains(struct kunit * test)
+void test_case_add_domain_bridge_service_accepted_over_a_disjoint_pair(struct kunit * test)
 {
   // Arrange
   KUNIT_ASSERT_EQ(test, add_service(SVC, SVC, 1, 2), 0);
 
-  // Act: a service whose response prefix nests inside the first one's, over a disjoint domain
-  // pair. Nesting is harmless there, because a lookup filters by domain before the name.
-  const int ret = add_service(SVC_NESTED, SVC_NESTED, 3, 4);
+  // Act: the same service between two other domains. A lookup filters by domain before the name,
+  // so the two registrations never compete.
+  const int ret = add_service(SVC, SVC, 3, 4);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -270,31 +277,6 @@ void test_case_add_domain_bridge_service_repointed_pair_rejected(struct kunit * 
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -EBUSY);
-}
-
-void test_case_add_domain_bridge_service_nested_rejected(struct kunit * test)
-{
-  // Arrange
-  KUNIT_ASSERT_EQ(test, add_service(SVC, SVC, 1, 2), 0);
-
-  // Act: a service whose response prefix nests inside the one already registered.
-  const int ret = add_service(SVC_NESTED, SVC_NESTED, 1, 2);
-
-  // Assert
-  KUNIT_EXPECT_EQ(test, ret, -EBUSY);
-}
-
-void test_case_add_domain_bridge_service_nested_rejected_either_order(struct kunit * test)
-{
-  // Arrange: the nested service first, so the outer one is the newcomer.
-  KUNIT_ASSERT_EQ(test, add_service(SVC_NESTED, SVC_NESTED, 1, 2), 0);
-
-  // Act
-  const int ret = add_service(SVC, SVC, 1, 2);
-
-  // Assert: rejected, and the request rule is never inserted.
-  KUNIT_EXPECT_EQ(test, ret, -EBUSY);
-  KUNIT_EXPECT_FALSE(test, has_rule(REQ, 1));
 }
 
 void test_case_add_domain_bridge_service_late_reverse_direction_rejected(struct kunit * test)

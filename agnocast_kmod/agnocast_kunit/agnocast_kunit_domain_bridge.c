@@ -19,10 +19,10 @@ static const char * RN_DST = "/kunit_test_domain_bridge_rename_dst";
 // two callers' response topics under one service; OUTSIDE lies beyond it by its last component
 // only.
 static const char * SVC = "/kunit_test_domain_bridge_prefix";
-static const char * PFX_A = "/AGNOCAST_SRV_RESPONSE/kunit_test_domain_bridge_prefix_SEP_/clientA";
-static const char * PFX_B = "/AGNOCAST_SRV_RESPONSE/kunit_test_domain_bridge_prefix_SEP_/clientB";
+static const char * PFX_A = "/AGNOCAST_SRV_RESPONSE/kunit_test_domain_bridge_prefix%/clientA";
+static const char * PFX_B = "/AGNOCAST_SRV_RESPONSE/kunit_test_domain_bridge_prefix%/clientB";
 static const char * OUTSIDE =
-  "/AGNOCAST_SRV_RESPONSE/kunit_test_domain_bridge_prefix_other_SEP_/clientA";
+  "/AGNOCAST_SRV_RESPONSE/kunit_test_domain_bridge_prefix_other%/clientA";
 
 #define KUNIT_PUB_SHM_BUF_SIZE 4
 

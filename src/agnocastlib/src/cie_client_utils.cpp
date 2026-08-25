@@ -1,6 +1,7 @@
 #include "agnocast/cie_client_utils.hpp"
 
 #include "agnocast/agnocast_publisher.hpp"
+#include "agnocast/agnocast_utils.hpp"
 #include "agnocast/node/agnocast_node.hpp"
 #include "rclcpp/rclcpp.hpp"
 
@@ -63,7 +64,7 @@ std::string create_callback_group_id(
       entries.push_back("Service(" + topic.substr(SRV_REQUEST_PREFIX_LEN) + ")");
     } else if (topic.rfind("/AGNOCAST_SRV_RESPONSE", 0) == 0) {
       auto service_part = topic.substr(SRV_RESPONSE_PREFIX_LEN);
-      auto sep_pos = service_part.find("_SEP_");
+      auto sep_pos = service_part.find(SRV_SEP);
       entries.push_back("Client(" + service_part.substr(0, sep_pos) + ")");
     } else {
       entries.push_back("Subscription(" + topic + ")");
