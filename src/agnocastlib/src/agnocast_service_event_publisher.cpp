@@ -95,7 +95,8 @@ void ServiceEventPublisher::configure(
   std::visit(
     [this, &next, &qos_service_event_pub](auto * n) {
       next.publisher = std::make_shared<GenericPublisher>(
-        n, event_topic_name_, event_topic_type_, qos_service_event_pub);
+        n, event_topic_name_, event_topic_type_, qos_service_event_pub, PublisherOptions{},
+        publisher_role_);
     },
     node_);
 

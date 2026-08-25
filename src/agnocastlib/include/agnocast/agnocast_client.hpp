@@ -63,6 +63,20 @@ constexpr PublisherRole to_publisher_role(const ClientRole role)
                                             : PublisherRole::AgnocastOnly;
 }
 
+// register_service_bridge covers the request and response topics, but nothing covers the event
+// topic, so a user-owned event publisher has to request its own A2R bridge. Default therefore
+// stays Default here, where to_publisher_role maps it to AgnocastOnly.
+constexpr PublisherRole to_event_publisher_role(const ClientRole role)
+{
+  return role == ClientRole::BridgeInternal ? PublisherRole::BridgeInternal
+                                            : PublisherRole::Default;
+}
+
+// Default must not collapse to AgnocastOnly here: that would drop the A2R bridge request and
+// hide the event topic from ROS 2, which is the reason for publishing it.
+static_assert(to_event_publisher_role(ClientRole::Default) == PublisherRole::Default);
+static_assert(to_event_publisher_role(ClientRole::BridgeInternal) == PublisherRole::BridgeInternal);
+
 namespace detail
 {
 
@@ -251,7 +265,8 @@ private:
     // Must precede the subscription: registering it makes the callback reachable by an executor
     // that is already spinning, and the callback dereferences event_publisher_.
     event_publisher_ = std::make_unique<ServiceEventPublisher>(
-      node_, service_name_, rosidl_generator_traits::name<ServiceT>(), to_publisher_role(role));
+      node_, service_name_, rosidl_generator_traits::name<ServiceT>(),
+      to_event_publisher_role(role));
 #endif
 
     auto subscriber_callback = [this](ipc_shared_ptr<ResponseT> && response) {
