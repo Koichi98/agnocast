@@ -6,6 +6,8 @@
 
 #include "rclcpp/rclcpp.hpp"
 
+#include <service_msgs/msg/service_event_info.hpp>
+
 #include <stdexcept>
 
 // configure() rejects its arguments before it creates the event publisher, so these need no
@@ -65,11 +67,19 @@ TEST_F(ServiceEventPublisherTest, ARejectedConfigureLeavesIntrospectionOff)
     event_publisher_->configure(nullptr, rclcpp::ServicesQoS(), RCL_SERVICE_INTROSPECTION_CONTENTS),
     std::invalid_argument);
 
-  // Still off, so publishing an event returns without touching the publisher that was never
-  // created. Anything else would fault here.
-  const uint8_t client_gid[RMW_GID_STORAGE_SIZE] = {};
-  event_publisher_->publish_service_event_message(
-    service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, nullptr, 0, client_gid);
+  // Asserted rather than probed by publishing: a state committed before the throw would make
+  // publish_service_event_message() dereference a null clock, which is a fault gtest cannot
+  // contain, and that would discard the results of every other case in this binary.
+  EXPECT_EQ(event_publisher_->introspection_state(), RCL_SERVICE_INTROSPECTION_OFF);
+}
+
+TEST_F(ServiceEventPublisherTest, DisablingDoesNotRejectAQosItWillNotUse)
+{
+  // The QoS is only used when a publisher is created, so turning introspection off must work
+  // whatever QoS the caller happens to be passing along.
+  EXPECT_NO_THROW(event_publisher_->configure(
+    node_->get_clock(), rclcpp::QoS(rclcpp::KeepAll()), RCL_SERVICE_INTROSPECTION_OFF));
+  EXPECT_EQ(event_publisher_->introspection_state(), RCL_SERVICE_INTROSPECTION_OFF);
 }
 
 #endif  // AGNOCAST_HAS_SERVICE_INTROSPECTION

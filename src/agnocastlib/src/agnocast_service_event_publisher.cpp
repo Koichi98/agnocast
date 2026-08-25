@@ -60,14 +60,6 @@ void ServiceEventPublisher::configure(
     throw std::invalid_argument("a clock is required to configure service introspection");
   }
 
-  // GenericPublisher would run this same check through validate_publisher_qos() and call
-  // exit() on failure. Enabling introspection is a runtime toggle, typically from a parameter
-  // callback, so that would kill the node; reject it here instead.
-  const char * const unsupported = detail::unsupported_qos_reason(qos_service_event_pub);
-  if (unsupported != nullptr) {
-    throw std::invalid_argument(unsupported);
-  }
-
   std::lock_guard<std::mutex> transition_lock(transition_mtx_);
 
   Snapshot current = snapshot();
@@ -91,6 +83,16 @@ void ServiceEventPublisher::configure(
   if (current.publisher) {
     commit(Snapshot{state, current.publisher, current.clock, current.ts_bundle});
     return;
+  }
+
+  // Checked only here, where the QoS is about to be used: GenericPublisher would run the same
+  // check through validate_publisher_qos() and call exit() on failure, and enabling
+  // introspection is a runtime toggle, typically from a parameter callback, so that would kill
+  // the node. Disabling, and a transition that reuses the publisher, ignore the QoS entirely
+  // and so do not reject it.
+  const char * const unsupported = detail::unsupported_qos_reason(qos_service_event_pub);
+  if (unsupported != nullptr) {
+    throw std::invalid_argument(unsupported);
   }
 
   Snapshot next{state, nullptr, clock, current.ts_bundle};

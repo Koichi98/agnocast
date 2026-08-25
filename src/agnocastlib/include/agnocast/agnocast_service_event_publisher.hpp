@@ -85,11 +85,17 @@ public:
   /// @param qos_service_event_pub The QoS to use when creating the event publisher.
   /// @param state The state to set introspection to.
   /// @throws std::invalid_argument if @p clock is null, including when disabling, or if the QoS
-  /// cannot be used.
+  /// cannot be used. The QoS is only checked when a publisher is about to be created.
   /// @throws std::runtime_error if the typesupport libraries cannot be loaded.
   void configure(
     const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
     rcl_service_introspection_state_t state);
+
+  /// @brief Returns the state introspection is currently in (thread-safe).
+  rcl_service_introspection_state_t introspection_state() const noexcept
+  {
+    return published_state_.load(std::memory_order_relaxed);
+  }
 
   /// @brief Publishes a service event message (thread-safe). A no-op while introspection is off.
   ///
