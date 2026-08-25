@@ -50,7 +50,7 @@ constexpr PublisherRole to_publisher_role(const ServiceRole role)
 
 // register_service_bridge covers the request and response topics, but nothing covers the event
 // topic, so a user-owned event publisher has to request its own A2R bridge. Default therefore
-// stays Default here, where to_publisher_role maps it to AgnocastOnly.
+// stays Default here, whereas to_publisher_role maps it to AgnocastOnly.
 constexpr PublisherRole to_event_publisher_role(const ServiceRole role)
 {
   return role == ServiceRole::BridgeInternal ? PublisherRole::BridgeInternal
@@ -343,8 +343,8 @@ public:
    * @param clock The clock to use to generate introspection timestamps.
    * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
    * @param introspection_state The state to set introspection to.
-   * @throws std::invalid_argument if @p clock is null, or if @p qos_service_event_pub uses a
-   * history policy Agnocast cannot support.
+   * @throws std::invalid_argument if @p clock is null, including when disabling, as in rcl; or
+   * if @p qos_service_event_pub uses a history policy Agnocast cannot support.
    * @throws std::runtime_error if the typesupport libraries for the event message cannot be
    * loaded. Only the first transition out of OFF loads them.
    */

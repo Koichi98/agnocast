@@ -17,10 +17,23 @@ extern bool is_bridge_process;
 namespace detail
 {
 
-inline void validate_qos_common(const rclcpp::QoS & qos)
+// Reports why a QoS cannot be used at all, or nullptr if it can. Split out of
+// validate_qos_common so that callers which must not take the process down, such as a runtime
+// toggle, can reject the QoS themselves rather than duplicating the conditions.
+inline const char * unsupported_qos_reason(const rclcpp::QoS & qos)
 {
   if (qos.history() == rclcpp::HistoryPolicy::KeepAll) {
-    RCLCPP_ERROR(logger, "Agnocast does not support KeepAll history policy. Use KeepLast instead.");
+    return "Agnocast does not support KeepAll history policy. Use KeepLast instead.";
+  }
+
+  return nullptr;
+}
+
+inline void validate_qos_common(const rclcpp::QoS & qos)
+{
+  const char * const unsupported = unsupported_qos_reason(qos);
+  if (unsupported != nullptr) {
+    RCLCPP_ERROR(logger, "%s", unsupported);
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   }

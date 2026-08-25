@@ -60,11 +60,12 @@ void ServiceEventPublisher::configure(
     throw std::invalid_argument("a clock is required to configure service introspection");
   }
 
-  // validate_publisher_qos() calls exit() on a QoS Agnocast cannot use. Enabling introspection
-  // is a runtime toggle, typically from a parameter callback, so that would kill the node.
-  if (qos_service_event_pub.history() == rclcpp::HistoryPolicy::KeepAll) {
-    throw std::invalid_argument(
-      "Agnocast does not support the KeepAll history policy for the service event publisher");
+  // GenericPublisher would run this same check through validate_publisher_qos() and call
+  // exit() on failure. Enabling introspection is a runtime toggle, typically from a parameter
+  // callback, so that would kill the node; reject it here instead.
+  const char * const unsupported = detail::unsupported_qos_reason(qos_service_event_pub);
+  if (unsupported != nullptr) {
+    throw std::invalid_argument(unsupported);
   }
 
   std::lock_guard<std::mutex> transition_lock(transition_mtx_);
@@ -175,8 +176,10 @@ void ServiceEventPublisher::publish_service_event_message(
       return;
   }
 
-  // Nothing below may escape: this runs on the request/response path, before the payload is
-  // handed to the kmod, so an exception here would stop the call itself from being delivered.
+  // No exception below may escape: this runs on the request/response path, before the payload
+  // is handed to the kmod, so one would stop the call itself from being delivered. It does not
+  // cover exit(), which publish() still reaches on an ioctl failure like every other Agnocast
+  // publish.
   try {
     builtin_interfaces::msg::Time stamp = active.clock->now();
 
