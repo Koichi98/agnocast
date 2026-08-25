@@ -16,7 +16,7 @@ topics:
   chatter:
     type: std_msgs/msg/String
 """
-    assert parse_domain_bridge_config(text) == ([('chatter', 'chatter', 1, 2)], [])
+    assert parse_domain_bridge_config(text) == ([('chatter', 'chatter', 1, 2)], [], [])
 
 
 def test_per_topic_domains_override_top_level():
@@ -30,7 +30,7 @@ topics:
     from_domain: 3
     to_domain: 4
 """
-    rules, skipped = parse_domain_bridge_config(text)
+    rules, _services, skipped = parse_domain_bridge_config(text)
     assert ('chatter', 'chatter', 1, 2) in rules
     assert ('special', 'special', 3, 4) in rules
     assert skipped == []
@@ -46,7 +46,7 @@ topics:
     type: std_msgs/msg/String
     remap: /chatter
 """
-    assert parse_domain_bridge_config(text) == ([('/in_sub/chatter', '/chatter', 1, 2)], [])
+    assert parse_domain_bridge_config(text) == ([('/in_sub/chatter', '/chatter', 1, 2)], [], [])
 
 
 def test_absent_remap_reuses_the_source_name():
@@ -57,7 +57,7 @@ topics:
   chatter:
     type: std_msgs/msg/String
 """
-    assert parse_domain_bridge_config(text) == ([('chatter', 'chatter', 1, 2)], [])
+    assert parse_domain_bridge_config(text) == ([('chatter', 'chatter', 1, 2)], [], [])
 
 
 def test_non_string_topic_key_without_remap_is_coerced():
@@ -69,7 +69,7 @@ to_domain: 2
 topics:
   123:
 """
-    assert parse_domain_bridge_config(text) == ([('123', '123', 1, 2)], [])
+    assert parse_domain_bridge_config(text) == ([('123', '123', 1, 2)], [], [])
 
 
 def test_non_string_remap_raises():
@@ -90,14 +90,15 @@ topics:
   chatter:
     type: std_msgs/msg/String
 """
-    rules, skipped = parse_domain_bridge_config(text)
+    rules, _services, skipped = parse_domain_bridge_config(text)
     assert rules == []
     assert skipped == ['chatter']
 
 
 def test_empty_or_topicless_config_yields_no_rules():
-    assert parse_domain_bridge_config('') == ([], [])
-    assert parse_domain_bridge_config('topics:') == ([], [])
+    assert parse_domain_bridge_config('') == ([], [], [])
+    assert parse_domain_bridge_config('topics:') == ([], [], [])
+    assert parse_domain_bridge_config('services:') == ([], [], [])
 
 
 def test_non_integer_domain_raises():
@@ -157,6 +158,51 @@ def test_non_mapping_topic_spec_raises():
         parse_domain_bridge_config('from_domain: 1\nto_domain: 2\ntopics:\n  chatter: oops\n')
 
 
+def test_non_mapping_services_raises():
+    with pytest.raises((ValueError, TypeError)):
+        parse_domain_bridge_config('services:\n  - add_two_ints\n')
+
+
+def test_services_are_parsed_into_their_own_list():
+    # from_domain is the clients' side, to_domain the server's.
+    text = """
+from_domain: 2
+to_domain: 1
+topics:
+  chatter:
+services:
+  /add_two_ints:
+    type: example_interfaces/srv/AddTwoInts
+"""
+    topics, services, skipped = parse_domain_bridge_config(text)
+    assert topics == [('chatter', 'chatter', 2, 1)]
+    assert services == [('/add_two_ints', '/add_two_ints', 2, 1)]
+    assert skipped == []
+
+
+def test_service_remap_and_per_entry_domains_are_honored():
+    text = """
+from_domain: 2
+to_domain: 1
+services:
+  /add_two_ints:
+    remap: /renamed_add
+  /other:
+    from_domain: 4
+    to_domain: 3
+"""
+    _topics, services, skipped = parse_domain_bridge_config(text)
+    assert ('/add_two_ints', '/renamed_add', 2, 1) in services
+    assert ('/other', '/other', 4, 3) in services
+    assert skipped == []
+
+
+def test_service_without_resolvable_domain_pair_is_reported_as_skipped():
+    _topics, services, skipped = parse_domain_bridge_config('services:\n  /add_two_ints:\n')
+    assert services == []
+    assert skipped == ['/add_two_ints']
+
+
 def test_null_topic_spec_with_top_level_domains_is_used():
     # `chatter:` with no body is a None spec; it should fall back to the
     # top-level domains, not crash.
@@ -166,4 +212,4 @@ to_domain: 2
 topics:
   chatter:
 """
-    assert parse_domain_bridge_config(text) == ([('chatter', 'chatter', 1, 2)], [])
+    assert parse_domain_bridge_config(text) == ([('chatter', 'chatter', 1, 2)], [], [])

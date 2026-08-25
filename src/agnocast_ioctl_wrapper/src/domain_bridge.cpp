@@ -50,4 +50,42 @@ int add_agnocast_domain_bridge_rule(
   close(fd);
   return 0;
 }
+
+// Register a domain bridge for one service: the clients call service_name_from in from_domain,
+// the server offers service_name_to in to_domain. The kmod expands this into the request rule and
+// the response prefix rule and applies both atomically. Returns 0 on success, -1 on failure.
+int add_agnocast_domain_bridge_service_rule(
+  const char * service_name_from, const char * service_name_to, uint32_t from_domain,
+  uint32_t to_domain)
+{
+  if (service_name_from == nullptr || service_name_to == nullptr) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  int fd = open("/dev/agnocast", O_RDONLY);
+  if (fd < 0) {
+    if (errno == ENOENT) {
+      fprintf(stderr, "%s", AGNOCAST_DEVICE_NOT_FOUND_MSG);
+    } else {
+      perror("Failed to open /dev/agnocast");
+    }
+    return -1;
+  }
+
+  ioctl_add_domain_bridge_service_args args = {};
+  args.service_name_from = {service_name_from, strlen(service_name_from)};
+  args.service_name_to = {service_name_to, strlen(service_name_to)};
+  args.from_domain = from_domain;
+  args.to_domain = to_domain;
+
+  if (ioctl(fd, AGNOCAST_ADD_DOMAIN_BRIDGE_SERVICE_CMD, &args) < 0) {
+    perror("AGNOCAST_ADD_DOMAIN_BRIDGE_SERVICE_CMD failed");
+    close(fd);
+    return -1;
+  }
+
+  close(fd);
+  return 0;
+}
 }
