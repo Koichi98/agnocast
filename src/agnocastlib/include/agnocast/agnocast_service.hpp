@@ -94,10 +94,10 @@ private:
   const ServiceRole role_;
   std::mutex publishers_mtx_;
   std::unordered_map<std::string, typename ServiceResponsePublisher::SharedPtr> publishers_;
-  typename ServiceRequestSubscriber::SharedPtr subscriber_;
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
   std::unique_ptr<ServiceEventPublisher> event_publisher_;
 #endif
+  typename ServiceRequestSubscriber::SharedPtr subscriber_;
 
   typename ServiceResponsePublisher::SharedPtr get_or_create_publisher_for(
     const std::string & node_name)

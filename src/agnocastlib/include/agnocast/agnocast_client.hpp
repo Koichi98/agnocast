@@ -205,10 +205,10 @@ private:
   std::mutex seqno2_response_call_info_mtx_;
   std::unordered_map<int64_t, ResponseCallInfo> seqno2_response_call_info_;
   typename ServiceRequestPublisher::SharedPtr publisher_;
-  typename ServiceResponseSubscriber::SharedPtr subscriber_;
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
   std::unique_ptr<ServiceEventPublisher> event_publisher_;
 #endif
+  typename ServiceResponseSubscriber::SharedPtr subscriber_;
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
   void publish_client_event(const uint8_t event_type, const void * payload, const int64_t seqno)
