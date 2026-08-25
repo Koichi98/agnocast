@@ -44,6 +44,9 @@ protected:
   {
     std::error_code ec;
     std::filesystem::remove_all(base_dir_, ec);
+    // The override is a global, so leaving it pointing at the directory just removed would follow
+    // the rest of this binary.
+    agnocast::internal::reset_ros2_node_registry_base_dir_for_test();
   }
 
   void write_file(const std::string & content) const
