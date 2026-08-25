@@ -351,14 +351,15 @@ public:
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
   /**
    * @brief Configure service introspection for this client.
-   * @param clock The clock to use to generate introspection timestamps.
-   * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
-   * @param introspection_state The state to set introspection to.
    * Enabling introspection creates an Agnocast publisher, which registers with the kernel
    * module and requests an A2R bridge over the daemon socket. Unlike the rclcpp equivalent,
    * which only creates a local rcl publisher, this can block while that request is retried.
    *
-   * @throws std::invalid_argument if enabling introspection without a clock.
+   * @param clock The clock to use to generate introspection timestamps.
+   * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
+   * @param introspection_state The state to set introspection to.
+   * @throws std::invalid_argument if @p clock is null, or if @p qos_service_event_pub uses a
+   * history policy Agnocast cannot support.
    * @throws std::runtime_error if the typesupport libraries for the event message cannot be
    * loaded. Only the first transition out of OFF loads them.
    */

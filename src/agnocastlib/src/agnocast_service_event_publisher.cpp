@@ -53,11 +53,18 @@ void ServiceEventPublisher::configure(
   const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
   rcl_service_introspection_state_t state)
 {
-  // Checked before anything is committed: publish_service_event_message() dereferences the
+  // Checked before anything is committed. publish_service_event_message() dereferences the
   // clock, and a null one is undefined behaviour rather than an exception, so its try/catch
-  // would not contain it. rcl_service_configure_service_introspection rejects it too.
-  if (state != RCL_SERVICE_INTROSPECTION_OFF && clock == nullptr) {
-    throw std::invalid_argument("a clock is required to enable service introspection");
+  // would not contain it. Checked for every state, as rcl does.
+  if (clock == nullptr) {
+    throw std::invalid_argument("a clock is required to configure service introspection");
+  }
+
+  // validate_publisher_qos() calls exit() on a QoS Agnocast cannot use. Enabling introspection
+  // is a runtime toggle, typically from a parameter callback, so that would kill the node.
+  if (qos_service_event_pub.history() == rclcpp::HistoryPolicy::KeepAll) {
+    throw std::invalid_argument(
+      "Agnocast does not support the KeepAll history policy for the service event publisher");
   }
 
   std::lock_guard<std::mutex> transition_lock(transition_mtx_);
