@@ -307,6 +307,16 @@ struct ioctl_add_domain_bridge_prefix_args
   uint32_t to_domain;
 };
 
+// Removes the whole rule covering one cell, not a single direction: a rule is the
+// unit that grouped the two domains' id spaces, so both directions go at once.
+// The cell may be either side of the pair, named by that side's own topic name. A
+// prefix rule is named by any topic name it covers, or by the prefix itself.
+struct ioctl_remove_domain_bridge_args
+{
+  struct name_info topic_name;
+  uint32_t domain_id;
+};
+
 #define AGNOCAST_GET_VERSION_CMD _IOR(0xA6, 1, struct ioctl_get_version_args)
 #define AGNOCAST_ADD_PROCESS_CMD _IOWR(0xA6, 2, union ioctl_add_process_args)
 #define AGNOCAST_ADD_SUBSCRIBER_CMD _IOWR(0xA6, 3, union ioctl_add_subscriber_args)
@@ -338,6 +348,7 @@ struct ioctl_add_domain_bridge_prefix_args
   _IOWR(0xA6, 31, struct ioctl_discovery_agent_exists_args)
 #define AGNOCAST_ADD_DOMAIN_BRIDGE_PREFIX_CMD \
   _IOW(0xA6, 32, struct ioctl_add_domain_bridge_prefix_args)
+#define AGNOCAST_REMOVE_DOMAIN_BRIDGE_CMD _IOW(0xA6, 33, struct ioctl_remove_domain_bridge_args)
 
 // ================================================
 // ros2cli ioctls
@@ -485,6 +496,9 @@ int agnocast_ioctl_add_domain_bridge(
 int agnocast_ioctl_add_domain_bridge_prefix(
   const char * topic_name_prefix, uint32_t from_domain, uint32_t to_domain,
   const struct ipc_namespace * ipc_ns);
+
+int agnocast_ioctl_remove_domain_bridge(
+  const char * topic_name, uint32_t domain_id, const struct ipc_namespace * ipc_ns);
 
 int agnocast_ioctl_get_version(struct ioctl_get_version_args * ioctl_ret);
 

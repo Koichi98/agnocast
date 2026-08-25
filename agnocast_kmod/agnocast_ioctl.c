@@ -2577,6 +2577,64 @@ int agnocast_ioctl_add_domain_bridge_prefix(
   return ret;
 }
 
+// The caller holds global_htables_rwsem for write.
+//
+// Removing a rule is the inverse of inserting one, so it carries the same precondition:
+// grouping merged the two domains' id and entry_id spaces, and ungrouping them is only safe
+// while neither side has allocated any. A live wrapper means ids are already handed out (to
+// userspace too, in publisher/subscriber handles and mapped shm info), and topic_struct->rule
+// caches this rule by raw pointer, so freeing it under a wrapper would dangle. Both are ruled
+// out by requiring that no wrapper the rule covers exists.
+static int remove_domain_rule(
+  const char * topic_name, const uint32_t domain_id, const struct ipc_namespace * ipc_ns)
+{
+  struct domain_bridge_rule * rule = find_domain_rule(topic_name, ipc_ns, domain_id);
+  if (!rule) {
+    dev_warn(
+      agnocast_device, "Domain bridge rule (%s@%u) not found. (%s)\n", topic_name, domain_id,
+      __func__);
+    return -ENOENT;
+  }
+
+  // A prefix rule's stored names are the prefix, not a topic name, so looking them up as topics
+  // would find nothing and wrongly allow the removal; scan every name it covers instead. For an
+  // exact rule, check both cells rather than only the named one: either side's wrapper holds the
+  // shared struct (and its ->rule pointer) alive.
+  const bool busy = rule->is_prefix ? any_topic_under_prefix(
+                                        rule->topic_name_a, ipc_ns, rule->domain_a, rule->domain_b)
+                                    : (find_topic(rule->topic_name_a, ipc_ns, rule->domain_a) ||
+                                       find_topic(rule->topic_name_b, ipc_ns, rule->domain_b));
+  if (busy) {
+    dev_warn(
+      agnocast_device,
+      "Domain bridge %srule (%s@%u -> %s@%u) removal rejected: an endpoint has still joined it. "
+      "(%s)\n",
+      rule->is_prefix ? "prefix " : "", rule->topic_name_a, rule->domain_a, rule->topic_name_b,
+      rule->domain_b, __func__);
+    return -EBUSY;
+  }
+
+  dev_info(
+    agnocast_device, "Domain bridge %srule removed (%s@%u <-> %s@%u).\n",
+    rule->is_prefix ? "prefix " : "", rule->topic_name_a, rule->domain_a, rule->topic_name_b,
+    rule->domain_b);
+
+  hash_del(&rule->node);
+  kfree(rule->topic_name_a);
+  kfree(rule->topic_name_b);
+  kfree(rule);
+  return 0;
+}
+
+int agnocast_ioctl_remove_domain_bridge(
+  const char * topic_name, const uint32_t domain_id, const struct ipc_namespace * ipc_ns)
+{
+  down_write(&global_htables_rwsem);
+  const int ret = remove_domain_rule(topic_name, domain_id, ipc_ns);
+  up_write(&global_htables_rwsem);
+  return ret;
+}
+
 int agnocast_ioctl_remove_bridge(
   const char * topic_name, const pid_t pid, const bool is_r2a, const struct ipc_namespace * ipc_ns)
 {
@@ -3303,6 +3361,21 @@ static long add_domain_bridge_prefix_cmd(struct ioctl_add_domain_bridge_prefix_a
     prefix_buf, prefix_args.from_domain, prefix_args.to_domain, ipc_ns);
 }
 
+static long remove_domain_bridge_cmd(struct ioctl_remove_domain_bridge_args __user * arg)
+{
+  const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
+
+  struct ioctl_remove_domain_bridge_args domain_bridge_args;
+  if (copy_from_user(&domain_bridge_args, arg, sizeof(domain_bridge_args))) return -EFAULT;
+
+  char topic_name_buf[TOPIC_NAME_BUFFER_SIZE];
+  const int ret =
+    copy_name_from_user(topic_name_buf, sizeof(topic_name_buf), &domain_bridge_args.topic_name);
+  if (ret) return ret;
+
+  return agnocast_ioctl_remove_domain_bridge(topic_name_buf, domain_bridge_args.domain_id, ipc_ns);
+}
+
 static long remove_bridge_cmd(struct ioctl_remove_bridge_args __user * arg)
 {
   int ret = 0;
@@ -3469,6 +3542,8 @@ long agnocast_ioctl(struct file * file, unsigned int cmd, unsigned long arg)
       return remove_bridge_cmd((struct ioctl_remove_bridge_args __user *)arg);
     case AGNOCAST_ADD_DOMAIN_BRIDGE_CMD:
       return add_domain_bridge_cmd((struct ioctl_add_domain_bridge_args __user *)arg);
+    case AGNOCAST_REMOVE_DOMAIN_BRIDGE_CMD:
+      return remove_domain_bridge_cmd((struct ioctl_remove_domain_bridge_args __user *)arg);
     case AGNOCAST_CHECK_AND_REQUEST_BRIDGE_SHUTDOWN_CMD:
       return check_and_request_bridge_shutdown_cmd(
         (struct ioctl_check_and_request_bridge_shutdown_args __user *)arg);

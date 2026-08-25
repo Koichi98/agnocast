@@ -31,7 +31,17 @@
     KUNIT_CASE(test_case_domain_bridge_prefix_pairs_each_name_separately),    \
     KUNIT_CASE(test_case_domain_bridge_prefix_cross_domain_delivery),         \
     KUNIT_CASE(test_case_domain_bridge_prefix_direction_respected),           \
-    KUNIT_CASE(test_case_domain_bridge_exact_under_prefix_rejected)
+    KUNIT_CASE(test_case_domain_bridge_exact_under_prefix_rejected),          \
+    KUNIT_CASE(test_case_remove_domain_bridge_normal),                        \
+    KUNIT_CASE(test_case_remove_domain_bridge_not_found),                     \
+    KUNIT_CASE(test_case_remove_domain_bridge_rejected_when_endpoint_exists), \
+    KUNIT_CASE(test_case_remove_domain_bridge_by_partner_cell),               \
+    KUNIT_CASE(test_case_remove_domain_bridge_after_endpoints_exit),          \
+    KUNIT_CASE(test_case_remove_domain_bridge_allows_repairing_config),       \
+    KUNIT_CASE(test_case_remove_domain_bridge_rename_by_either_cell),         \
+    KUNIT_CASE(test_case_remove_domain_bridge_ungroups_wrappers),             \
+    KUNIT_CASE(test_case_remove_domain_bridge_prefix_rule),                   \
+    KUNIT_CASE(test_case_remove_domain_bridge_prefix_rejected_when_covered_topic_exists)
 
 void test_case_add_domain_bridge_normal(struct kunit * test);
 void test_case_add_domain_bridge_reverse_first_declaration(struct kunit * test);
@@ -62,3 +72,13 @@ void test_case_domain_bridge_prefix_pairs_each_name_separately(struct kunit * te
 void test_case_domain_bridge_prefix_cross_domain_delivery(struct kunit * test);
 void test_case_domain_bridge_prefix_direction_respected(struct kunit * test);
 void test_case_domain_bridge_exact_under_prefix_rejected(struct kunit * test);
+void test_case_remove_domain_bridge_normal(struct kunit * test);
+void test_case_remove_domain_bridge_not_found(struct kunit * test);
+void test_case_remove_domain_bridge_rejected_when_endpoint_exists(struct kunit * test);
+void test_case_remove_domain_bridge_by_partner_cell(struct kunit * test);
+void test_case_remove_domain_bridge_after_endpoints_exit(struct kunit * test);
+void test_case_remove_domain_bridge_allows_repairing_config(struct kunit * test);
+void test_case_remove_domain_bridge_rename_by_either_cell(struct kunit * test);
+void test_case_remove_domain_bridge_ungroups_wrappers(struct kunit * test);
+void test_case_remove_domain_bridge_prefix_rule(struct kunit * test);
+void test_case_remove_domain_bridge_prefix_rejected_when_covered_topic_exists(struct kunit * test);

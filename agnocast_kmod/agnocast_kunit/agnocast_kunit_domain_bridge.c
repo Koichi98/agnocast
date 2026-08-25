@@ -675,3 +675,189 @@ void test_case_domain_bridge_exact_under_prefix_rejected(struct kunit * test)
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -EBUSY);
 }
+
+void test_case_remove_domain_bridge_normal(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(TOPIC_NAME, TOPIC_NAME, 1, 2, current->nsproxy->ipc_ns),
+    0);
+
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(TOPIC_NAME, 1, current->nsproxy->ipc_ns), 0);
+
+  uint32_t domain_a = 0, domain_b = 0;
+  bool a_to_b = false, b_to_a = false;
+  KUNIT_EXPECT_FALSE(
+    test, agnocast_get_domain_rule(
+            TOPIC_NAME, current->nsproxy->ipc_ns, 1, &domain_a, &domain_b, &a_to_b, &b_to_a));
+}
+
+void test_case_remove_domain_bridge_not_found(struct kunit * test)
+{
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(TOPIC_NAME, 1, current->nsproxy->ipc_ns), -ENOENT);
+}
+
+void test_case_remove_domain_bridge_rejected_when_endpoint_exists(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(TOPIC_NAME, TOPIC_NAME, 1, 2, current->nsproxy->ipc_ns),
+    0);
+
+  setup_process_in_domain(test, 1000, 1);
+  add_publisher_for(test, 1000);
+
+  // Ungrouping would strand the ids already handed out in domain 1, and the wrapper's
+  // topic_struct still points at this rule.
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(TOPIC_NAME, 1, current->nsproxy->ipc_ns), -EBUSY);
+
+  // The rule must survive the rejected removal.
+  uint32_t domain_a = 0, domain_b = 0;
+  bool a_to_b = false, b_to_a = false;
+  KUNIT_EXPECT_TRUE(
+    test, agnocast_get_domain_rule(
+            TOPIC_NAME, current->nsproxy->ipc_ns, 1, &domain_a, &domain_b, &a_to_b, &b_to_a));
+}
+
+// An endpoint in the partner domain blocks removal just as one in the named domain does:
+// either side's wrapper keeps the shared struct, and its ->rule pointer, alive.
+void test_case_remove_domain_bridge_by_partner_cell(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(TOPIC_NAME, TOPIC_NAME, 1, 2, current->nsproxy->ipc_ns),
+    0);
+
+  setup_process_in_domain(test, 1001, 2);
+  add_subscriber_for(test, 1001);
+
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(TOPIC_NAME, 1, current->nsproxy->ipc_ns), -EBUSY);
+}
+
+void test_case_remove_domain_bridge_after_endpoints_exit(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(TOPIC_NAME, TOPIC_NAME, 1, 2, current->nsproxy->ipc_ns),
+    0);
+
+  setup_process_in_domain(test, 1000, 1);
+  add_publisher_for(test, 1000);
+  setup_process_in_domain(test, 1001, 2);
+  add_subscriber_for(test, 1001);
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(TOPIC_NAME, 1, current->nsproxy->ipc_ns), -EBUSY);
+
+  agnocast_enqueue_exit_pid(1000);
+  agnocast_enqueue_exit_pid(1001);
+  msleep(20);  // let exit_worker_thread drain both pids
+  KUNIT_ASSERT_EQ(test, agnocast_topic_wrapper_refcnt(TOPIC_NAME, current->nsproxy->ipc_ns, 1), 0);
+
+  // With both wrappers gone the id spaces are empty again, so the rule may go.
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(TOPIC_NAME, 1, current->nsproxy->ipc_ns), 0);
+}
+
+// The point of the remove path: a wrong pair can be repaired without reloading the kmod.
+// Re-pairing a cell is otherwise permanently rejected as a fan-out.
+void test_case_remove_domain_bridge_allows_repairing_config(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(TOPIC_NAME, TOPIC_NAME, 1, 2, current->nsproxy->ipc_ns),
+    0);
+  // Re-pairing domain 1's cell with domain 3 is a fan-out while the 1<->2 rule stands.
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(TOPIC_NAME, TOPIC_NAME, 1, 3, current->nsproxy->ipc_ns),
+    -EBUSY);
+
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(TOPIC_NAME, 1, current->nsproxy->ipc_ns), 0);
+
+  // The cell is free again, so the corrected pair is accepted.
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(TOPIC_NAME, TOPIC_NAME, 1, 3, current->nsproxy->ipc_ns),
+    0);
+
+  uint32_t domain_a = 0, domain_b = 0;
+  bool a_to_b = false, b_to_a = false;
+  KUNIT_ASSERT_TRUE(
+    test, agnocast_get_domain_rule(
+            TOPIC_NAME, current->nsproxy->ipc_ns, 1, &domain_a, &domain_b, &a_to_b, &b_to_a));
+  KUNIT_EXPECT_EQ(test, domain_a, 1);
+  KUNIT_EXPECT_EQ(test, domain_b, 3);
+}
+
+// A renamed rule is reachable from either cell, each named by its own side's topic name.
+void test_case_remove_domain_bridge_rename_by_either_cell(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(RN_SRC, RN_DST, 1, 2, current->nsproxy->ipc_ns), 0);
+  // Naming the destination cell removes the same rule.
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(RN_DST, 2, current->nsproxy->ipc_ns), 0);
+
+  uint32_t domain_a = 0, domain_b = 0;
+  bool a_to_b = false, b_to_a = false;
+  KUNIT_EXPECT_FALSE(
+    test, agnocast_get_domain_rule(
+            RN_SRC, current->nsproxy->ipc_ns, 1, &domain_a, &domain_b, &a_to_b, &b_to_a));
+
+  // Re-adding after removal must reuse the freed cells, and the reverse rename is a
+  // different pair that the stale rule would have rejected.
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(RN_DST, RN_SRC, 2, 1, current->nsproxy->ipc_ns), 0);
+}
+
+// After removal a new endpoint must get its own topic_struct: the wrappers are no longer
+// grouped, so refcnt stays 1 on each side.
+void test_case_remove_domain_bridge_ungroups_wrappers(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge(TOPIC_NAME, TOPIC_NAME, 1, 2, current->nsproxy->ipc_ns),
+    0);
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(TOPIC_NAME, 1, current->nsproxy->ipc_ns), 0);
+
+  setup_process_in_domain(test, 1000, 1);
+  add_publisher_for(test, 1000);
+  setup_process_in_domain(test, 1001, 2);
+  add_subscriber_for(test, 1001);
+
+  KUNIT_EXPECT_EQ(test, agnocast_topic_wrapper_refcnt(TOPIC_NAME, current->nsproxy->ipc_ns, 1), 1);
+  KUNIT_EXPECT_EQ(test, agnocast_topic_wrapper_refcnt(TOPIC_NAME, current->nsproxy->ipc_ns, 2), 1);
+}
+
+// A prefix rule is named for removal by any topic it covers, and its stored names are the
+// prefix rather than a topic name.
+void test_case_remove_domain_bridge_prefix_rule(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+
+  KUNIT_EXPECT_EQ(test, agnocast_ioctl_remove_domain_bridge(PFX_A, 1, current->nsproxy->ipc_ns), 0);
+
+  // No cell under the prefix is covered any more.
+  uint32_t domain_a = 0, domain_b = 0;
+  bool a_to_b = false, b_to_a = false;
+  KUNIT_EXPECT_FALSE(
+    test, agnocast_get_domain_rule(
+            PFX_B, current->nsproxy->ipc_ns, 1, &domain_a, &domain_b, &a_to_b, &b_to_a));
+}
+
+// The busy check must scan the names the prefix covers: looking the prefix up as a topic name
+// would find nothing and let the rule go while a covered endpoint still holds grouped ids.
+void test_case_remove_domain_bridge_prefix_rejected_when_covered_topic_exists(struct kunit * test)
+{
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_domain_bridge_prefix(PFX, 1, 2, current->nsproxy->ipc_ns), 0);
+
+  setup_process_in_domain(test, 1000, 1);
+  add_publisher_named(test, 1000, PFX_A);
+
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(PFX_A, 1, current->nsproxy->ipc_ns), -EBUSY);
+
+  // Naming a different covered topic resolves to the same rule, so it is refused too.
+  KUNIT_EXPECT_EQ(
+    test, agnocast_ioctl_remove_domain_bridge(PFX_B, 1, current->nsproxy->ipc_ns), -EBUSY);
+}

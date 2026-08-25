@@ -50,4 +50,44 @@ int add_agnocast_domain_bridge_rule(
   close(fd);
   return 0;
 }
+
+// Remove the domain bridge rule covering the cell (topic_name, domain_id) in this
+// process's IPC namespace. The cell may be either side of the pair, named by that
+// side's own topic name, and the whole rule (both directions) goes at once.
+// Returns 0 on success, -1 on failure; errno is ENOENT when no rule covers the
+// cell and EBUSY when an endpoint has still joined either side.
+int remove_agnocast_domain_bridge_rule(const char * topic_name, uint32_t domain_id)
+{
+  if (topic_name == nullptr) {
+    errno = EINVAL;
+    return -1;
+  }
+
+  int fd = open("/dev/agnocast", O_RDONLY);
+  if (fd < 0) {
+    if (errno == ENOENT) {
+      fprintf(stderr, "%s", AGNOCAST_DEVICE_NOT_FOUND_MSG);
+    } else {
+      perror("Failed to open /dev/agnocast");
+    }
+    return -1;
+  }
+
+  ioctl_remove_domain_bridge_args args = {};
+  args.topic_name = {topic_name, strlen(topic_name)};
+  args.domain_id = domain_id;
+
+  if (ioctl(fd, AGNOCAST_REMOVE_DOMAIN_BRIDGE_CMD, &args) < 0) {
+    // Preserved across close(), which may otherwise overwrite errno, so the
+    // caller can distinguish ENOENT from EBUSY.
+    const int saved_errno = errno;
+    perror("AGNOCAST_REMOVE_DOMAIN_BRIDGE_CMD failed");
+    close(fd);
+    errno = saved_errno;
+    return -1;
+  }
+
+  close(fd);
+  return 0;
+}
 }

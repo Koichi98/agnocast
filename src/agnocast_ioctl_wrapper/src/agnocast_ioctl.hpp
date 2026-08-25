@@ -89,6 +89,13 @@ struct ioctl_add_domain_bridge_args
   uint32_t to_domain;
 };
 
+// Mirrors agnocast_kmod/agnocast.h so _IOW encodes the same size.
+struct ioctl_remove_domain_bridge_args
+{
+  struct name_info topic_name;
+  uint32_t domain_id;
+};
+
 struct ioctl_discovery_agent_should_exit_args
 {
   uint32_t domain_id;
@@ -120,3 +127,4 @@ struct ioctl_discovery_agent_exists_args
 #define AGNOCAST_GET_NODE_SUBSCRIBER_TOPICS_CMD _IOWR(0xA6, 23, union ioctl_node_info_args)
 #define AGNOCAST_GET_NODE_PUBLISHER_TOPICS_CMD _IOWR(0xA6, 24, union ioctl_node_info_args)
 #define AGNOCAST_ADD_DOMAIN_BRIDGE_CMD _IOW(0xA6, 28, struct ioctl_add_domain_bridge_args)
+#define AGNOCAST_REMOVE_DOMAIN_BRIDGE_CMD _IOW(0xA6, 33, struct ioctl_remove_domain_bridge_args)
