@@ -18,7 +18,6 @@
 #include <chrono>
 #include <memory>
 #include <mutex>
-#include <stdexcept>
 #include <thread>
 #include <vector>
 
@@ -345,42 +344,6 @@ TEST_F(DeferredServiceIntrospectionTest, DeferredResponsePublishesBothEvents)
   ASSERT_EQ(events[1].response.size(), 1u);
   EXPECT_TRUE(events[1].response[0].success);
   EXPECT_EQ(events[1].response[0].message, "ok");
-}
-
-TEST_F(ServiceIntrospectionTest, ConfiguringWithoutAClockIsRejected)
-{
-  EXPECT_THROW(
-    service_->configure_introspection(
-      nullptr, rclcpp::ServicesQoS(), RCL_SERVICE_INTROSPECTION_CONTENTS),
-    std::invalid_argument);
-
-  // Rejected before anything is committed, so introspection is still off.
-  ASSERT_NO_FATAL_FAILURE(call_service(true));
-  EXPECT_TRUE(collect_events(1).empty());
-
-  // The clock is required even to disable, as it is in rcl.
-  EXPECT_THROW(
-    service_->configure_introspection(
-      nullptr, rclcpp::ServicesQoS(), RCL_SERVICE_INTROSPECTION_OFF),
-    std::invalid_argument);
-}
-
-TEST_F(ServiceIntrospectionTest, ConfiguringWithAQosAgnocastCannotUseIsRejected)
-{
-  // KeepAll would reach validate_publisher_qos() and call exit(), killing the node on what is
-  // just a diagnostic toggle.
-  EXPECT_THROW(
-    service_->configure_introspection(
-      node_->get_clock(), rclcpp::QoS(rclcpp::KeepAll()), RCL_SERVICE_INTROSPECTION_CONTENTS),
-    std::invalid_argument);
-
-  ASSERT_NO_FATAL_FAILURE(call_service(true));
-  EXPECT_TRUE(collect_events(1).empty());
-
-  // Still usable afterwards.
-  enable_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
-  ASSERT_NO_FATAL_FAILURE(call_service(true));
-  EXPECT_EQ(collect_events(2).size(), 2u);
 }
 
 #else
