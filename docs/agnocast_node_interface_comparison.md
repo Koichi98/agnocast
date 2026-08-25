@@ -200,12 +200,14 @@ Each interface is accessible via getter methods such as `get_node_base_interface
 #### ROS 2 node visibility
 
 `agnocast::Node` creates no DDS participant, so it cannot observe the ROS 2 graph on its own.
-`get_node_names()` therefore assembles the graph from two sources, each reporting the nodes of the caller's IPC namespace and `ROS_DOMAIN_ID`:
+`get_node_names()` therefore assembles the graph from two sources, which do not share a scope:
 
-| Source | Reports | Requires |
-|--------|---------|----------|
-| kmod (`AGNOCAST_GET_NODE_NAMES_CMD`) | Nodes owning at least one non-bridge agnocast endpoint | - |
-| `ros2agnocast_discovery_agent` | Nodes that DDS announces, i.e. every `rclcpp::Node` | A running agent in this (IPC namespace, domain) |
+| Source | Reports | Scope | Requires |
+|--------|---------|-------|----------|
+| kmod (`AGNOCAST_GET_NODE_NAMES_CMD`) | Nodes owning at least one non-bridge agnocast endpoint | The caller's IPC namespace and `ROS_DOMAIN_ID` | - |
+| `ros2agnocast_discovery_agent` | Nodes that DDS announces, i.e. every `rclcpp::Node` | Whatever the agent's participant sees in the domain, which reaches across IPC namespaces and hosts | A running agent in this (IPC namespace, domain) |
+
+The DDS side is wider on purpose: the agent reports `get_node_names_and_namespaces()` verbatim, and agnocast relies on DDS crossing IPC namespaces elsewhere too (that is what cross-namespace bridges are for). So `get_node_names()` also lists `rclcpp` nodes from other IPC namespaces on this host -- including other namespaces' agents -- and from other hosts in the domain, exactly as `rclcpp` would.
 
 The agent has a participant of its own and already runs once per (IPC namespace, `ROS_DOMAIN_ID`), so each tick it writes the DDS node list to `${AGNOCAST_TMPFS_DIR:-/dev/shm}/agnocast_ros2_nodes/<ipc_ns_inode>/<domain_id>` for agnocast processes to read back.
 
@@ -214,7 +216,8 @@ This is what preserves duplicate node names — merging two overlapping lists by
 
 Consequences worth knowing:
 
-- **Without an agent** (not installed, `AGNOCAST_NO_DISCOVERY_AGENT=1`, or not started yet) there is no DDS-side list, and the kmod's full list is used instead: agnocast nodes are still reported, but the ROS 2-only ones are not. Starting an agent normally *grows* the result, because the DDS-side list covers every `rclcpp::Node` rather than only those holding an agnocast endpoint. It shrinks the result only for an `rclcpp::Node` that the agent's own participant fails to discover, which is then dropped from the kmod side without appearing on the DDS side.
+- **Without an agent** (not installed, `AGNOCAST_NO_DISCOVERY_AGENT=1`, or not started yet) there is no DDS-side list, and the kmod's full list is used instead: agnocast nodes are still reported, but the ROS 2-only ones are not. Starting an agent normally *grows* the result, because the DDS-side list covers every `rclcpp::Node` rather than only those holding an agnocast endpoint.
+- **A freshly started `rclcpp::Node` is briefly missing** whenever an agent is running. The kmod side is skipped for it as soon as an agent's file exists, but the DDS side only picks it up after SPDP discovery plus up to one agent tick (1 s), so it appears in neither for that window. Without an agent the same node shows up in the kmod's list immediately. The same window applies to an `rclcpp::Node` the agent's participant never discovers, which then stays missing.
 - **Staleness**: the DDS-side list is refreshed once per second, and one that has not been refreshed for 5 s is ignored (an agent killed without the chance to remove its file).
 - **Same-name nodes in one process** collapse into a single entry. rclcpp cannot tell those apart either: a node has no identity of its own beyond its participant, so agnocast likewise keys nodes on `(pid, fully qualified name)`.
 - `get_node_names_and_namespaces()` still throws, even though the DDS-side list carries namespaces: the kmod stores only the fully qualified name.

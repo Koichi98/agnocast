@@ -7,9 +7,9 @@
 //
 // A pure-Agnocast process has no DDS participant, so `agnocast::Node` cannot
 // see the ROS 2 graph on its own. The discovery agent does have one, and it
-// already runs once per (IPC namespace, ROS_DOMAIN_ID) -- exactly the scope
-// `NodeGraph::get_node_names()` reports on -- so it writes what it sees there
-// for the Agnocast processes to read back.
+// already runs once per (IPC namespace, ROS_DOMAIN_ID), so it writes what that
+// participant sees there for the Agnocast processes to read back. What it sees
+// is the whole domain, not just this IPC namespace.
 //
 // Each line is tab-separated and `\n`-terminated:
 //

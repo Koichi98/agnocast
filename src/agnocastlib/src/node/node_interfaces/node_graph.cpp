@@ -88,10 +88,10 @@ std::vector<std::string> query_agnocast_node_names(const bool exclude_ros2_nodes
     // must not take the caller down the way the other ioctl wrappers do: a partial graph is a far
     // better answer to a query than killing the process asking it.
     if (errno == ENOBUFS) {
-      RCLCPP_ERROR(
+      RCLCPP_ERROR_ONCE(
         logger,
         "AGNOCAST_GET_NODE_NAMES_CMD failed: more than MAX_NODE_NUM (%d) agnocast nodes in this "
-        "IPC namespace and ROS_DOMAIN_ID. get_node_names() reports the ROS 2 nodes only.",
+        "IPC namespace and ROS_DOMAIN_ID, so get_node_names() omits the agnocast ones.",
         MAX_NODE_NUM);
       return {};
     }
@@ -131,15 +131,17 @@ std::optional<std::vector<std::string>> read_ros2_node_names_of_this_scope()
 // overlapping lists -- is what lets duplicate node names survive: `rclcpp` reports a name once per
 // node that carries it, and merging by name would collapse those into one entry.
 //
-// Both sources are scoped to this IPC namespace and ROS_DOMAIN_ID, which is also the scope the
-// agent runs in (one agent per (namespace, domain)).
+// The two do not share a scope. The kmod answers for this IPC namespace and ROS_DOMAIN_ID, while
+// the agent hands over its participant's whole view of the domain, which reaches across IPC
+// namespaces and hosts -- the same reach rclcpp has, and the reason cross-namespace bridges exist.
 //
 // Without an agent there is no DDS-side list, and the second-best answer is every Agnocast node
 // regardless of whether DDS also announces it: a node visible through one interface beats a node
-// missing from both. Starting an agent therefore normally grows the result, since the DDS-side
-// list covers every rclcpp::Node and not just those holding an Agnocast endpoint. It shrinks it
-// only for an rclcpp::Node the agent's own participant fails to discover, which is dropped from
-// the kmod half without turning up in the DDS half.
+// missing from both.
+//
+// The split keys off the mere existence of the agent's file, not off whether a given node has
+// reached its snapshot yet, so a just-started rclcpp::Node falls into a gap: skipped here and not
+// yet announced there, for as long as DDS discovery plus one agent tick takes.
 std::vector<std::string> NodeGraph::get_node_names() const
 {
   const std::optional<std::vector<std::string>> ros2_node_names =
