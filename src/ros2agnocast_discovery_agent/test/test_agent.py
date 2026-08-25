@@ -353,8 +353,11 @@ def _idle_gate_self(should_exit_ret, commit_ret):
     lib = MagicMock()
     lib.agnocast_discovery_agent_should_exit.return_value = should_exit_ret
     lib.agnocast_discovery_agent_commit_exit.return_value = commit_ret
+    # One mock records both calls, so their relative order is observable below.
+    registry = MagicMock()
+    registry.cleanup = lib.registry_cleanup
     return SimpleNamespace(
-        _lib=lib, _domain_id=0, _ipc_ns_inode=1,
+        _lib=lib, _domain_id=0, _ipc_ns_inode=1, _ros2_node_registry=registry,
         _idle_tracker=IdleExitTracker(threshold=1), get_logger=lambda: MagicMock())
 
 
@@ -371,6 +374,17 @@ def test_idle_exit_vetoed_keeps_running_when_process_races_in():
     fake_self = _idle_gate_self(should_exit_ret=1, commit_ret=0)
     DiscoveryAgent._maybe_exit_when_idle(fake_self)  # must not raise
     fake_self._lib.agnocast_discovery_agent_commit_exit.assert_called_once_with(0)
+
+
+# commit_exit frees the kmod slot, so a successor can claim it and write its own node list the
+# moment it returns. Unlinking after that would delete the successor's file.
+def test_idle_exit_drops_the_node_list_before_freeing_the_kmod_slot():
+    fake_self = _idle_gate_self(should_exit_ret=1, commit_ret=1)
+    with pytest.raises(ExternalShutdownException):
+        DiscoveryAgent._maybe_exit_when_idle(fake_self)
+    assert [c[0] for c in fake_self._lib.mock_calls] == [
+        'agnocast_discovery_agent_should_exit', 'registry_cleanup',
+        'agnocast_discovery_agent_commit_exit']
 
 
 def test_idle_exit_never_commits_on_query_error():

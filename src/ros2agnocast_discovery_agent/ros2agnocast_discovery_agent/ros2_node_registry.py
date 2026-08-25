@@ -3,8 +3,8 @@
 An ``agnocast::Node`` process creates no DDS participant, so
 ``NodeGraph::get_node_names()`` cannot see the ROS 2 graph from the inside. This
 agent does have a participant, and it already runs once per (IPC namespace,
-ROS_DOMAIN_ID) -- the same scope ``get_node_names()`` reports on -- so each tick
-it writes what ``rclpy`` sees to
+ROS_DOMAIN_ID), so each tick it writes what ``rclpy`` sees -- the whole domain,
+not just this IPC namespace -- to
 ``${AGNOCAST_TMPFS_DIR:-/dev/shm}/agnocast_ros2_nodes/<ipc_ns_inode>/<domain_id>``.
 
 This is the mirror image of :mod:`type_registry` (there agnocastlib writes and
@@ -60,6 +60,7 @@ class Ros2NodeRegistryWriter:
         self._path = os.path.join(self._ns_dir, str(domain_id))
         self._logger = logger
         self._warned = False
+        self._released = False
 
     @property
     def path(self) -> str:
@@ -73,6 +74,7 @@ class Ros2NodeRegistryWriter:
 
         Returns True when the file was replaced.
         """
+        self._released = False
         lines = ''.join(
             f'{namespace}\t{name}\n' for name, namespace in node_names_and_namespaces)
         try:
@@ -97,7 +99,16 @@ class Ros2NodeRegistryWriter:
         return True
 
     def cleanup(self) -> None:
-        """Remove the file so readers stop reporting this agent's snapshot."""
+        """Remove the file so readers stop reporting this agent's snapshot.
+
+        Unlinks at most once per written file. The agent releases its kmod slot after
+        cleaning up, so by the time the shutdown path runs again the file at this path
+        may belong to a successor that claimed the slot, and deleting that would blind
+        readers to a live agent.
+        """
+        if self._released:
+            return
+        self._released = True
         try:
             os.unlink(self._path)
         except FileNotFoundError:

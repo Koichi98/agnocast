@@ -129,3 +129,32 @@ def test_write_warns_once_and_keeps_going_when_the_base_dir_is_unusable():
         assert not writer.write([('talker', '/')])
 
         assert len(logger.warnings) == 1
+
+
+# The agent unlinks before it frees its kmod slot, so the shutdown path runs a second
+# cleanup() once a successor may already own the path. That one must not delete it.
+def test_cleanup_twice_leaves_a_successors_file_alone():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        writer = _make_writer(tmpdir)
+        writer.write([('talker', '/')])
+        writer.cleanup()
+
+        successor = _make_writer(tmpdir)
+        successor.write([('successor', '/')])
+        writer.cleanup()
+
+        assert _read(successor.path) == '/\tsuccessor\n'
+
+
+# A vetoed exit keeps the agent running, so the next tick's write must make the file
+# removable again.
+def test_cleanup_works_again_after_a_rewrite():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        writer = _make_writer(tmpdir)
+        writer.write([('talker', '/')])
+        writer.cleanup()
+
+        writer.write([('talker', '/')])
+        writer.cleanup()
+
+        assert not os.path.exists(writer.path)

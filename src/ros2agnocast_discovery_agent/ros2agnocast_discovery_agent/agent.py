@@ -409,6 +409,10 @@ class DiscoveryAgent(Node):
             self._idle_tracker.reset()
             return
         if self._idle_tracker.update(ret == 1):
+            # Before commit_exit, which is what frees the slot: a successor claiming it and writing
+            # its own list must not have that list unlinked by us on the way out. A vetoed exit
+            # leaves the file missing until the next tick, which readers see as "no agent".
+            self._ros2_node_registry.cleanup()
             if self._lib.agnocast_discovery_agent_commit_exit(self._domain_id) == 1:
                 self.get_logger().debug(
                     f'no Agnocast node in (ipc_ns={self._ipc_ns_inode}, domain={self._domain_id}) '
