@@ -230,6 +230,12 @@ bool ServiceBridgeItem::ros2_client_exists(const ServiceBridgeDeps & deps)
   }
 }
 
+bool ServiceBridgeItem::r2a_forced() const
+{
+  return r2a_forced_until_.has_value() &&
+         is_daemon_force_active(*r2a_forced_until_, std::chrono::steady_clock::now());
+}
+
 // Returns false if the target Agnocast service does not exist or if an error occurs while checking
 // it (the reason will be set in the error string). "Two or more services share this name" is one
 // such error: the probe below reads at most one entry, so a name collision reads as absence rather
@@ -382,7 +388,7 @@ void ServiceBridgeItem::update_configuration(const BridgeMsgServicePayload & pay
 // Stays in R2A, or takes arrow (6) back to PENDING.
 void ServiceBridgeItem::check_and_update_r2a(const ServiceBridgeDeps & deps)
 {
-  if (agno_service_exists() && ros2_client_exists(deps)) {
+  if (agno_service_exists() && (ros2_client_exists(deps) || r2a_forced())) {
     return;
   }
 
@@ -412,7 +418,7 @@ void ServiceBridgeItem::check_and_update_a2r(const ServiceBridgeDeps & deps)
 {
   if (may_start_r2a_bridge_ && agno_service_exists()) {
     set_error_string("An Agnocast service now owns this name");
-  } else if (ros2_service_exists(deps)) {
+  } else if (ros2_service_exists(deps) && agno_client_exists()) {
     return;
   }
 
@@ -450,7 +456,7 @@ void ServiceBridgeItem::check_and_update_pending(const ServiceBridgeDeps & deps)
     }
 
     // Arrow (5).
-    if (ros2_client_exists(deps) && start_r2a_bridge(deps) != 0) {
+    if ((ros2_client_exists(deps) || r2a_forced()) && start_r2a_bridge(deps) != 0) {
       RCLCPP_WARN(
         deps.logger, "Failed to start R2A service bridge for '%s': %s", service_name_.c_str(),
         get_error_string());
@@ -462,7 +468,7 @@ void ServiceBridgeItem::check_and_update_pending(const ServiceBridgeDeps & deps)
   release_shadow_node();
 
   // Arrow (3).
-  if (may_start_a2r_bridge_ && ros2_service_exists(deps)) {
+  if (may_start_a2r_bridge_ && ros2_service_exists(deps) && agno_client_exists()) {
     if (start_a2r_bridge(deps) != 0) {
       RCLCPP_WARN(
         deps.logger, "Failed to start A2R service bridge for '%s': %s", service_name_.c_str(),
@@ -471,8 +477,9 @@ void ServiceBridgeItem::check_and_update_pending(const ServiceBridgeDeps & deps)
     return;
   }
 
-  // Arrow (2).
-  if (!agno_client_exists()) {
+  // Arrow (2). A forced item survives with no local Agnocast client: the daemon vouches for a
+  // remote one.
+  if (!agno_client_exists() && !r2a_forced()) {
     RCLCPP_DEBUG(
       deps.logger, "Removing service bridge state-machine for '%s': %s", service_name_.c_str(),
       get_error_string());
@@ -505,6 +512,22 @@ void ServiceBridgeItem::check_and_update(const ServiceBridgeDeps & deps)
 void ServiceBridgeItem::handle_request(const BridgeMsgServicePayload & payload)
 {
   update_configuration(payload);
+
+  if (state_ == ServiceBridgeState::NONE) {
+    state_ = ServiceBridgeState::PENDING;
+  }
+}
+
+void ServiceBridgeItem::handle_daemon_request(const BridgeMsgDaemonServicePayload & payload)
+{
+  if (service_name_.empty()) {
+    service_name_ = static_cast<const char *>(payload.service_name);
+  }
+
+  // Latch the permission the local Agnocast service's own request would have set: only the daemon
+  // can see the remote Agnocast client that makes R2A legitimate.
+  may_start_r2a_bridge_ = true;
+  r2a_forced_until_ = daemon_force_deadline(std::chrono::steady_clock::now());
 
   if (state_ == ServiceBridgeState::NONE) {
     state_ = ServiceBridgeState::PENDING;
