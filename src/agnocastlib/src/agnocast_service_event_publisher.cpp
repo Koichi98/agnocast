@@ -1,5 +1,7 @@
 #include "agnocast/agnocast_service_event_publisher.hpp"
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+
 #include "builtin_interfaces/msg/time.hpp"
 #include "rclcpp/serialization.hpp"
 #include "rclcpp/serialized_message.hpp"
@@ -135,3 +137,5 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
 }
 
 }  // namespace agnocast
+
+#endif  // AGNOCAST_HAS_SERVICE_INTROSPECTION

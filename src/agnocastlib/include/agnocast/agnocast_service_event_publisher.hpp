@@ -1,5 +1,13 @@
 #pragma once
 
+#include <rclcpp/version.h>
+
+// Service introspection needs the event typesupport hooks in rosidl_service_type_support_t and the
+// service_msgs package, neither of which exists before Iron (rclcpp 21).
+#define AGNOCAST_HAS_SERVICE_INTROSPECTION (RCLCPP_VERSION_MAJOR >= 21)
+
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+
 #include "agnocast/agnocast_publisher.hpp"
 #include "agnocast/internal/service_typesupport.hpp"
 
@@ -59,3 +67,5 @@ public:
 };
 
 }  // namespace agnocast
+
+#endif  // AGNOCAST_HAS_SERVICE_INTROSPECTION

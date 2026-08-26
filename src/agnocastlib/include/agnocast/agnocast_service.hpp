@@ -11,7 +11,9 @@
 #include "agnocast/internal/service_wire_type.hpp"
 #include "rclcpp/rclcpp.hpp"
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
 #include <service_msgs/msg/service_event_info.hpp>
+#endif
 
 #include <memory>
 #include <string>
@@ -76,7 +78,9 @@ private:
   std::mutex publishers_mtx_;
   std::unordered_map<std::string, typename ServiceResponsePublisher::SharedPtr> publishers_;
   typename ServiceRequestSubscriber::SharedPtr subscriber_;
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
   std::shared_ptr<ServiceEventPublisher> event_publisher_;
+#endif
 
   rclcpp::Logger get_logger() const
   {
@@ -106,6 +110,7 @@ private:
     return pub;
   }
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
   void publish_request_received_event(const ipc_shared_ptr<RequestT> & request)
   {
     const void * payload = request.get();
@@ -141,12 +146,15 @@ private:
         node_);
     }
   }
+#endif
 
   template <typename Func>
   auto wrap_basic_service_callback_for_subscriber(Func && callback)
   {
     return [this, callback = std::forward<Func>(callback)](ipc_shared_ptr<RequestT> && request) {
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
       publish_request_received_event(request);
+#endif
 
       // The name comes from the request, so a bad one is the caller's fault.
       typename ServiceResponsePublisher::SharedPtr publisher;
@@ -175,7 +183,9 @@ private:
       // Publish the response sent event.
       // XXX: Although it's very unlikely, the response may be destroyed even before
       // publish_response_sent_event() ends in an extreme case (really?).
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
       publish_response_sent_event(request, response_payload);
+#endif
 
       // Safety regarding response_double
       //   When `response` is published, all references that share its control block are
@@ -189,7 +199,9 @@ private:
   auto wrap_deferred_service_callback_for_subscriber(Func && callback)
   {
     return [this, callback = std::forward<Func>(callback)](ipc_shared_ptr<RequestT> && request) {
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
       publish_request_received_event(request);
+#endif
 
       callback(this->shared_from_this(), std::move(request));
     };
@@ -224,8 +236,10 @@ private:
         subscriber_role);
     }
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
     event_publisher_ = std::make_shared<ServiceEventPublisher>(
       node_, service_name_, rosidl_generator_traits::name<ServiceT>(), qos_, node->get_clock());
+#endif
 
     if (role_ == ServiceRole::Default) {
       std::optional<std::pair<std::string, std::string>> shadow_node_identity{std::nullopt};
@@ -286,7 +300,9 @@ public:
     const void * response_payload = internal_response.get();
     publisher->publish(std::move(internal_response));
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
     publish_response_sent_event(internal_request, response_payload);
+#endif
   }
 
   /**
@@ -311,6 +327,7 @@ public:
     return ipc_shared_ptr<typename ServiceT::Response>(std::move(response));
   }
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
   /**
    * @brief Configure service introspection.
    * @param clock The clock to use to generate introspection timestamps.
@@ -324,6 +341,7 @@ public:
   {
     // TODO
   }
+#endif
 
   const char * get_service_name() const { return service_name_.c_str(); }
 };
