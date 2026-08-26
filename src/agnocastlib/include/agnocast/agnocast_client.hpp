@@ -26,6 +26,7 @@
 #include <unordered_map>
 #include <utility>
 #include <variant>
+#include <vector>
 
 namespace agnocast
 {
@@ -70,6 +71,9 @@ struct ResponseCallInfo
   std::promise<ipc_shared_ptr<Response>> promise;
   std::optional<SharedFuture> shared_future;
   std::optional<std::function<void(SharedFuture)>> callback;
+  // Send time, for prune_requests_older_than(). system_clock rather than steady_clock so the
+  // signature stays interchangeable with rclcpp::Client::prune_requests_older_than().
+  std::chrono::time_point<std::chrono::system_clock> sent_at{std::chrono::system_clock::now()};
 
   ResponseCallInfo() = default;
 
@@ -78,6 +82,45 @@ struct ResponseCallInfo
     shared_future = promise.get_future().share();
   }
 };
+
+// Pending-response bookkeeping. Client<ServiceT> and GenericClient each own their own map because
+// the response type differs, so only these algorithms are shared.
+
+template <typename Map>
+bool erase_pending_response(std::mutex & mtx, Map & map, const int64_t request_id)
+{
+  const std::lock_guard<std::mutex> lock(mtx);
+  return map.erase(request_id) != 0;
+}
+
+template <typename Map>
+size_t erase_all_pending_responses(std::mutex & mtx, Map & map)
+{
+  const std::lock_guard<std::mutex> lock(mtx);
+  const size_t erased = map.size();
+  map.clear();
+  return erased;
+}
+
+template <typename Map>
+size_t erase_pending_responses_older_than(
+  std::mutex & mtx, Map & map, const std::chrono::time_point<std::chrono::system_clock> time_point,
+  std::vector<int64_t> * const erased_request_ids)
+{
+  const std::lock_guard<std::mutex> lock(mtx);
+  const size_t size_before = map.size();
+  for (auto it = map.begin(); it != map.end();) {
+    if (it->second.sent_at < time_point) {
+      if (erased_request_ids != nullptr) {
+        erased_request_ids->push_back(it->first);
+      }
+      it = map.erase(it);
+    } else {
+      ++it;
+    }
+  }
+  return size_before - map.size();
+}
 
 }  // namespace detail
 
@@ -229,10 +272,15 @@ private:
       std::unique_lock<std::mutex> lock(seqno2_response_call_info_mtx_);
       /* --- critical section begin --- */
       // Get the corresponding ResponseCallInfo and remove it from the map
-      auto it = seqno2_response_call_info_.find(response->ResponseMeta::seqno);
+      const int64_t response_seqno = response->ResponseMeta::seqno;
+      auto it = seqno2_response_call_info_.find(response_seqno);
       if (it == seqno2_response_call_info_.end()) {
         lock.unlock();
-        RCLCPP_ERROR(get_logger(), "Agnocast internal implementation error: bad entry id");
+        // A caller that gave up via remove_pending_request() or prune_*() leaves no entry for
+        // the response to complete.
+        RCLCPP_DEBUG(
+          get_logger(), "Dropping the response for request id %ld: no pending request",
+          response_seqno);
         return;
       }
       ResponseCallInfo info = std::move(it->second);
@@ -326,6 +374,66 @@ public:
       [&](ResponseCallInfo & info) { future = info.promise.get_future(); });
     return FutureAndRequestId(std::move(future), seqno);
   }
+
+  /** @brief Stop waiting for a request's response and release the entry holding it.
+   *
+   * Only an incoming response completes a pending request. A request the service never answers --
+   * it died, or a service bridge could not forward it -- keeps its entry, and the promise its
+   * future waits on, for as long as this client lives. A caller that gives up must say so here.
+   *
+   *  @param request_id `.request_id` from async_send_request().
+   *  @return True if a pending request was removed, false if there was none (e.g. the response
+   * arrived first). */
+  AGNOCAST_PUBLIC
+  bool remove_pending_request(const int64_t request_id)
+  {
+    return detail::erase_pending_response(
+      seqno2_response_call_info_mtx_, seqno2_response_call_info_, request_id);
+  }
+
+  /** @brief Overload taking the return value of async_send_request().
+   *  @param future Return value of async_send_request().
+   *  @return Same as remove_pending_request(int64_t). */
+  AGNOCAST_PUBLIC
+  bool remove_pending_request(const FutureAndRequestId & future)
+  {
+    return remove_pending_request(future.request_id);
+  }
+
+  /** @brief Overload taking the return value of async_send_request().
+   *  @param future Return value of async_send_request().
+   *  @return Same as remove_pending_request(int64_t). */
+  AGNOCAST_PUBLIC
+  bool remove_pending_request(const SharedFutureAndRequestId & future)
+  {
+    return remove_pending_request(future.request_id);
+  }
+
+  /** @brief Stop waiting for every pending request.
+   *  @return Number of pending requests removed. */
+  AGNOCAST_PUBLIC
+  size_t prune_pending_requests()
+  {
+    return detail::erase_all_pending_responses(
+      seqno2_response_call_info_mtx_, seqno2_response_call_info_);
+  }
+
+  /** @brief Stop waiting for every request sent before `time_point`.
+   *
+   * The callback overload of async_send_request() hands back no future to time out on, so a
+   * periodic call here is the only way such a caller can bound what it accumulates.
+   *
+   *  @param time_point Requests sent before this point are removed.
+   *  @param pruned_requests If not null, the removed request IDs are appended to it.
+   *  @return Number of pending requests removed. */
+  AGNOCAST_PUBLIC
+  size_t prune_requests_older_than(
+    const std::chrono::time_point<std::chrono::system_clock> time_point,
+    std::vector<int64_t> * const pruned_requests = nullptr)
+  {
+    return detail::erase_pending_responses_older_than(
+      seqno2_response_call_info_mtx_, seqno2_response_call_info_, time_point, pruned_requests);
+  }
 };
 
 /**
@@ -397,7 +505,11 @@ private:
       auto it = seqno2_response_call_info_.find(response_seqno);
       if (it == seqno2_response_call_info_.end()) {
         lock.unlock();
-        RCLCPP_ERROR(get_logger(), "Agnocast internal implementation error: bad entry id");
+        // A caller that gave up via remove_pending_request() or prune_*() leaves no entry for
+        // the response to complete.
+        RCLCPP_DEBUG(
+          get_logger(), "Dropping the response for request id %ld: no pending request",
+          response_seqno);
         return;
       }
       ResponseCallInfo info = std::move(it->second);
@@ -465,6 +577,41 @@ public:
   /// @brief Cancel a request that was not sent via async_send_request().
   /// @param request Request from borrow_loaned_request(). Must be moved in.
   void cancel_request(ipc_shared_ptr<void> && request);
+
+  /// @brief Stop waiting for a request's response and release the entry holding it.
+  ///
+  /// Only an incoming response completes a pending request. A request the service never answers --
+  /// it died, or a service bridge could not forward it -- keeps its entry, and the promise its
+  /// future waits on, for as long as this client lives. A caller that gives up must say so here.
+  /// @param request_id `.request_id` from async_send_request().
+  /// @return True if a pending request was removed, false if there was none (e.g. the response
+  /// arrived first).
+  bool remove_pending_request(int64_t request_id);
+
+  /// @brief Overload taking the return value of async_send_request().
+  /// @param future Return value of async_send_request().
+  /// @return Same as remove_pending_request(int64_t).
+  bool remove_pending_request(const FutureAndRequestId & future);
+
+  /// @brief Overload taking the return value of async_send_request().
+  /// @param future Return value of async_send_request().
+  /// @return Same as remove_pending_request(int64_t).
+  bool remove_pending_request(const SharedFutureAndRequestId & future);
+
+  /// @brief Stop waiting for every pending request.
+  /// @return Number of pending requests removed.
+  size_t prune_pending_requests();
+
+  /// @brief Stop waiting for every request sent before `time_point`.
+  ///
+  /// The callback overload of async_send_request() hands back no future to time out on, so a
+  /// periodic call here is the only way such a caller can bound what it accumulates.
+  /// @param time_point Requests sent before this point are removed.
+  /// @param pruned_requests If not null, the removed request IDs are appended to it.
+  /// @return Number of pending requests removed.
+  size_t prune_requests_older_than(
+    std::chrono::time_point<std::chrono::system_clock> time_point,
+    std::vector<int64_t> * pruned_requests = nullptr);
 };
 
 }  // namespace agnocast

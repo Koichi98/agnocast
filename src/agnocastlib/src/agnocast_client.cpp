@@ -6,6 +6,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <vector>
 
 using namespace std::chrono;
 using namespace std::chrono_literals;
@@ -153,6 +154,36 @@ void GenericClient::cancel_request(ipc_shared_ptr<void> && request)
   publisher_->cancel_message(std::move(request), [this](void * p) {
     GenericRequestWrapper::free(p, this->service_ts_bundle_.request_members);
   });
+}
+
+bool GenericClient::remove_pending_request(const int64_t request_id)
+{
+  return detail::erase_pending_response(
+    seqno2_response_call_info_mtx_, seqno2_response_call_info_, request_id);
+}
+
+bool GenericClient::remove_pending_request(const FutureAndRequestId & future)
+{
+  return remove_pending_request(future.request_id);
+}
+
+bool GenericClient::remove_pending_request(const SharedFutureAndRequestId & future)
+{
+  return remove_pending_request(future.request_id);
+}
+
+size_t GenericClient::prune_pending_requests()
+{
+  return detail::erase_all_pending_responses(
+    seqno2_response_call_info_mtx_, seqno2_response_call_info_);
+}
+
+size_t GenericClient::prune_requests_older_than(
+  const std::chrono::time_point<std::chrono::system_clock> time_point,
+  std::vector<int64_t> * const pruned_requests)
+{
+  return detail::erase_pending_responses_older_than(
+    seqno2_response_call_info_mtx_, seqno2_response_call_info_, time_point, pruned_requests);
 }
 
 }  // namespace agnocast
