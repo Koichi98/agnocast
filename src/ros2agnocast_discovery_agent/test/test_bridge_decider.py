@@ -11,6 +11,7 @@ import struct
 from ros2agnocast_discovery_agent.bridge_decider import (
     BridgeRequest,
     decide_bridges,
+    decide_domain_rule_bridges,
     DIRECTION_AGNOCAST_TO_ROS2,
     DIRECTION_ROS2_TO_AGNOCAST,
     dispatch_requests,
@@ -173,6 +174,55 @@ def test_decide_collapses_duplicates_across_remotes():
     assert reqs[0].direction == DIRECTION_AGNOCAST_TO_ROS2
 
 
+def test_domain_rule_forces_a2r_on_the_from_side():
+    local = _state(topics=[_topic('/x', pubs=[_endpoint('/lp')], domain=1)])
+    reqs = decide_domain_rule_bridges(local, [('/x', '/x', 1, 2)])
+    assert len(reqs) == 1
+    assert reqs[0].topic_name == '/x'
+    assert reqs[0].direction == DIRECTION_AGNOCAST_TO_ROS2
+    assert reqs[0].domain_id == 1
+
+
+def test_domain_rule_leaves_the_to_side_to_the_on_demand_path():
+    local = _state(topics=[_topic('/x', subs=[_endpoint('/ls')], domain=2)])
+    assert decide_domain_rule_bridges(local, [('/x', '/x', 1, 2)]) == []
+
+
+def test_domain_rule_uses_the_from_side_name_when_renamed():
+    local = _state(topics=[_topic('/x', pubs=[_endpoint('/lp')], domain=1)])
+    reqs = decide_domain_rule_bridges(local, [('/x', '/y', 1, 2)])
+    assert len(reqs) == 1
+    assert reqs[0].topic_name == '/x'
+
+
+def test_domain_rule_skips_when_no_local_publisher():
+    local = _state(topics=[_topic('/x', subs=[_endpoint('/ls')], domain=1)])
+    assert decide_domain_rule_bridges(local, [('/x', '/x', 1, 2)]) == []
+
+
+def test_domain_rule_skips_bridge_only_publisher():
+    local = _state(topics=[_topic('/x', pubs=[_endpoint('/lp', is_bridge=True)], domain=1)])
+    assert decide_domain_rule_bridges(local, [('/x', '/x', 1, 2)]) == []
+
+
+def test_domain_rule_skips_when_type_unknown():
+    local = _state(topics=[_topic('/x', type_name='', pubs=[_endpoint('/lp')], domain=1)])
+    assert decide_domain_rule_bridges(local, [('/x', '/x', 1, 2)]) == []
+
+
+def test_domain_rule_skips_rule_that_does_not_cross_domains():
+    local = _state(topics=[_topic('/x', pubs=[_endpoint('/lp')], domain=1)])
+    assert decide_domain_rule_bridges(local, [('/x', '/x', 1, 1)]) == []
+
+
+def test_domain_rule_carries_publisher_qos():
+    local = _state(topics=[
+        _topic('/x', pubs=[_endpoint('/lp', depth=3, transient=True, reliable=False)], domain=1)])
+    reqs = decide_domain_rule_bridges(local, [('/x', '/x', 1, 2)])
+    assert (reqs[0].qos_depth, reqs[0].qos_is_transient_local, reqs[0].qos_is_reliable) == \
+        (3, True, False)
+
+
 def test_serialize_matches_cpp_struct_size():
     req = BridgeRequest('/x', 'std_msgs/msg/Int32', DIRECTION_AGNOCAST_TO_ROS2,
                         10, False, True)
@@ -206,6 +256,17 @@ def test_dispatch_targets_per_namespace_uds(monkeypatch):
 
     req = BridgeRequest('/x', 'T', DIRECTION_AGNOCAST_TO_ROS2, 1, False, True)
     dispatch_requests([req], ipc_ns_inode=12345)
+
+    assert sent == ['\x00agnocast_bridge_manager_12345']
+
+
+def test_dispatch_sends_one_datagram_per_distinct_request(monkeypatch):
+    from ros2agnocast_discovery_agent import bridge_decider as bd
+    sent = []
+    monkeypatch.setattr(bd, 'send_request', lambda addr, payload: sent.append(addr) or None)
+
+    req = BridgeRequest('/x', 'T', DIRECTION_AGNOCAST_TO_ROS2, 1, False, True)
+    dispatch_requests([req, req], ipc_ns_inode=12345)
 
     assert sent == ['\x00agnocast_bridge_manager_12345']
 

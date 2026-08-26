@@ -8,6 +8,8 @@ so the two reach each other through ROS 2 (DDS):
   * local publisher  + remote subscriber -> A2R bridge (publish to DDS)
   * local subscriber + remote publisher  -> R2A bridge (reinject from DDS)
 
+The domain bridge rule config is a second, gossip-independent source of requests.
+
 The request is sent as a ``BridgeMsg`` (type=DaemonPubSub) to the per-namespace
 bridge_manager over an abstract-namespace UNIX domain socket
 (``\\0agnocast_bridge_manager_<ipc_ns_inode>[_d<domain>]``).
@@ -158,6 +160,46 @@ def decide_bridges(local_state, remote_states) -> list:
     return list(requests.values())
 
 
+def decide_domain_rule_bridges(local_state, rules) -> list:
+    """Return the A2R requests implied by the registered domain bridge rules.
+
+    Only the ``from`` side is forced: there domain_bridge waits for a DDS
+    publisher while the A2R bridge waits for a DDS subscriber, so neither starts.
+    The ``to`` side is left to the ordinary on-demand check.
+
+    Forcing is unconditional: gossip never crosses domains, so there is no
+    evidence here of a subscriber in ``to_domain``.
+    """
+    requests = {}
+    local_by_topic = {(t.topic_name, t.domain_id): t for t in local_state.topics}
+
+    for from_topic, _to_topic, from_domain, to_domain in rules:
+        if from_domain == to_domain:
+            continue
+
+        local_topic = local_by_topic.get((from_topic, from_domain))
+        if local_topic is None or not local_topic.type_name:
+            continue
+
+        local_pubs = [p for p in local_topic.publishers if not p.is_bridge]
+        if not local_pubs:
+            continue
+
+        pub = local_pubs[0]
+        key = (from_topic, from_domain, DIRECTION_AGNOCAST_TO_ROS2)
+        requests.setdefault(key, BridgeRequest(
+            topic_name=from_topic,
+            type_name=local_topic.type_name,
+            direction=DIRECTION_AGNOCAST_TO_ROS2,
+            qos_depth=pub.qos_depth,
+            qos_is_transient_local=pub.qos_is_transient_local,
+            qos_is_reliable=pub.qos_is_reliable,
+            domain_id=from_domain,
+        ))
+
+    return list(requests.values())
+
+
 def _bridge_uds_addr(ipc_ns_inode: int, domain_id: int) -> str:
     name = '\x00' + _BRIDGE_UDS_BASE + '_' + str(ipc_ns_inode)
     if domain_id:
@@ -201,7 +243,8 @@ def dispatch_requests(
     ``send_request`` swallows ECONNREFUSED/ENOENT so a missing peer never
     stalls the daemon, and the request is re-issued idempotently next tick.
     """
-    for req in requests:
+    # decide_bridges and decide_domain_rule_bridges can both ask for the same bridge.
+    for req in dict.fromkeys(requests):
         err = send_request(
             _bridge_uds_addr(ipc_ns_inode, req.domain_id), serialize_request(req))
         if err is not None and logger is not None:

@@ -10,8 +10,9 @@ never registers rules).
 `domain_bridge` YAML and registers each rule:
 
 ```bash
-ros2 run ros2agnocast_discovery_agent register_domain_bridge --config /etc/agnocast/domain_bridge.yaml
-# or set AGNOCAST_DOMAIN_BRIDGE_CONFIG and run it with no arguments
+ros2 run ros2agnocast_discovery_agent register_domain_bridge
+# reads /etc/agnocast/domain_bridge.yaml; override with --config or
+# AGNOCAST_DOMAIN_BRIDGE_CONFIG
 ```
 
 Run it once, ordered so that it:
