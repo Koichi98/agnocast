@@ -11,6 +11,8 @@
 #include "agnocast/agnocast_publisher.hpp"
 #include "agnocast/internal/service_typesupport.hpp"
 
+#include <rcl/service_introspection.h>
+
 #include <memory>
 #include <mutex>
 #include <string>
@@ -19,15 +21,6 @@
 
 namespace agnocast
 {
-
-enum class ServiceIntrospectionState : uint8_t {
-  // Introspection disabled.
-  Off,
-  // Publish metadata only.
-  Metadata,
-  // Publish metadata and request/response payloads.
-  Contents,
-};
 
 class ServiceEventPublisher
 {
@@ -39,11 +32,11 @@ class ServiceEventPublisher
   const ServiceTsBundle ts_bundle_;
 
   mutable std::mutex mtx_;
-  ServiceIntrospectionState state_ = ServiceIntrospectionState::Off;
+  rcl_service_introspection_state_t state_ = RCL_SERVICE_INTROSPECTION_OFF;
   GenericPublisher::SharedPtr publisher_ = nullptr;
 
-  std::pair<ServiceIntrospectionState, GenericPublisher::SharedPtr> snapshot() const;
-  void commit(ServiceIntrospectionState state, GenericPublisher::SharedPtr publisher);
+  std::pair<rcl_service_introspection_state_t, GenericPublisher::SharedPtr> snapshot() const;
+  void commit(rcl_service_introspection_state_t state, GenericPublisher::SharedPtr publisher);
 
 public:
   explicit ServiceEventPublisher(
@@ -53,7 +46,7 @@ public:
 
   /// @brief Changes the state of the service event publisher (thread-safe).
   /// @param new_state The new state to set.
-  void change_state(ServiceIntrospectionState new_state);
+  void change_state(rcl_service_introspection_state_t new_state);
 
   /// @brief Publishes a service event message (thread-safe).
   /// @param event_type The event type.

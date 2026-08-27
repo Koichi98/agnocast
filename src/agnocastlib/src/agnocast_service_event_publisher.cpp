@@ -17,15 +17,15 @@ using service_msgs::msg::ServiceEventInfo;
 namespace agnocast
 {
 
-std::pair<ServiceIntrospectionState, GenericPublisher::SharedPtr> ServiceEventPublisher::snapshot()
-  const
+std::pair<rcl_service_introspection_state_t, GenericPublisher::SharedPtr>
+ServiceEventPublisher::snapshot() const
 {
   std::lock_guard<std::mutex> lock(mtx_);
   return std::make_pair(state_, publisher_);
 }
 
 void ServiceEventPublisher::commit(
-  ServiceIntrospectionState state, GenericPublisher::SharedPtr publisher)
+  rcl_service_introspection_state_t state, GenericPublisher::SharedPtr publisher)
 {
   std::lock_guard<std::mutex> lock(mtx_);
   state_ = state;
@@ -44,7 +44,7 @@ ServiceEventPublisher::ServiceEventPublisher(
 {
 }
 
-void ServiceEventPublisher::change_state(ServiceIntrospectionState new_state)
+void ServiceEventPublisher::change_state(rcl_service_introspection_state_t new_state)
 {
   auto [state, publisher] = snapshot();
 
@@ -56,9 +56,9 @@ void ServiceEventPublisher::change_state(ServiceIntrospectionState new_state)
   // existing publisher. If the current state is Off, it's changing to either Metadata or Contents,
   // so create a new publisher. The remaining state transitions are between Metadata and Contents,
   // which require no action.
-  if (new_state == ServiceIntrospectionState::Off) {
+  if (new_state == RCL_SERVICE_INTROSPECTION_OFF) {
     commit(new_state, nullptr);
-  } else if (state == ServiceIntrospectionState::Off) {
+  } else if (state == RCL_SERVICE_INTROSPECTION_OFF) {
     std::visit(
       [this, new_state](auto * n) {
         auto new_publisher = std::make_shared<GenericPublisher>(
@@ -78,7 +78,7 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
 {
   auto [state, publisher] = snapshot();
 
-  if (state == ServiceIntrospectionState::Off) {
+  if (state == RCL_SERVICE_INTROSPECTION_OFF) {
     return std::make_pair(true, "");
   }
 
@@ -99,7 +99,7 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
 
   // Construct the event message.
   void * event_msg;
-  if (state == ServiceIntrospectionState::Metadata) {
+  if (state == RCL_SERVICE_INTROSPECTION_METADATA) {
     payload = nullptr;
   }
   switch (event_type) {
