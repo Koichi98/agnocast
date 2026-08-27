@@ -35,6 +35,12 @@ void ServiceEventPublisher::commit(const Snapshot & next)
   ts_bundle_ = next.ts_bundle;
 }
 
+rcl_service_introspection_state_t ServiceEventPublisher::introspection_state() const
+{
+  std::lock_guard<std::mutex> lock(mtx_);
+  return state_;
+}
+
 ServiceEventPublisher::ServiceEventPublisher(
   std::variant<rclcpp::Node *, agnocast::Node *> node, const std::string & service_name,
   const std::string & service_type)

@@ -67,6 +67,9 @@ public:
     const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
     rcl_service_introspection_state_t state);
 
+  /// @brief Returns the state last committed by configure() (thread-safe).
+  rcl_service_introspection_state_t introspection_state() const;
+
   /// @brief Publishes a service event message (thread-safe).
   /// @param event_type The event type.
   /// @param payload A pointer to the request/response payload.
