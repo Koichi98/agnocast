@@ -519,17 +519,17 @@ def test_service_decide_skips_cross_domain_match():
     assert decide_service_bridges(local, {('OTHER', 222): remote}) == []
 
 
-def test_service_decide_emits_one_lease_when_both_roles_local():
-    """Holding a client of the name too changes nothing: the service side still drives it."""
-    local = _state(topics=[_srv_topic('/add', pubs=[_endpoint('/cli')],
-                                      subs=[_endpoint('/svc')])])
-    remote = _state(host_uuid='OTHER', ipc_ns=222,
-                    topics=[_srv_topic('/add', pubs=[_endpoint('/rcli')],
-                                       subs=[_endpoint('/rsvc')])])
+def test_service_decide_collapses_clients_in_several_remotes():
+    """One bridge serves every remote client, so the request is emitted once."""
+    local = _state(topics=[_srv_topic('/add', subs=[_endpoint('/svc')])])
+    remotes = {
+        ('OTHER', 222): _state(host_uuid='OTHER', ipc_ns=222,
+                               topics=[_srv_topic('/add', pubs=[_endpoint('/cli_a')])]),
+        ('OTHER', 333): _state(host_uuid='OTHER', ipc_ns=333,
+                               topics=[_srv_topic('/add', pubs=[_endpoint('/cli_b')])]),
+    }
 
-    reqs = decide_service_bridges(local, {('OTHER', 222): remote})
-
-    assert [r.service_name for r in reqs] == ['/add']
+    assert [r.service_name for r in decide_service_bridges(local, remotes)] == ['/add']
 
 
 @pytest.mark.parametrize('prefix', [SRV_REQUEST_PREFIX, SRV_RESPONSE_PREFIX])
