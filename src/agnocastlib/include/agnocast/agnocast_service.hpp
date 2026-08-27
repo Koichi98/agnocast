@@ -225,7 +225,7 @@ private:
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
     // Must precede the subscription: its callback is runnable as soon as it is registered.
     event_publisher_ = std::make_shared<ServiceEventPublisher>(
-      node_, service_name_, rosidl_generator_traits::name<ServiceT>(), qos_, node->get_clock());
+      node_, service_name_, rosidl_generator_traits::name<ServiceT>());
 #endif
 
     SubscriptionOptions options{group};
@@ -335,13 +335,16 @@ public:
    * @param clock The clock to use to generate introspection timestamps.
    * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
    * @param introspection_state The state to set introspection to.
+   * @throws std::invalid_argument if @p clock is null, including when disabling, as in rcl.
+   * @throws std::runtime_error if the typesupport libraries for the event message cannot be
+   * loaded. Only the first transition out of OFF loads them.
    */
   AGNOCAST_PUBLIC
   void configure_introspection(
     const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
     rcl_service_introspection_state_t introspection_state)
   {
-    // TODO
+    event_publisher_->configure(clock, qos_service_event_pub, introspection_state);
   }
 #endif
 

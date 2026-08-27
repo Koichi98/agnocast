@@ -28,18 +28,22 @@ class ServiceEventPublisher
   const std::string service_type_;
   const std::string event_topic_name_;
   const std::string event_topic_type_;
-  const rclcpp::QoS event_publisher_qos_;
-  const rclcpp::Clock::SharedPtr clock_;
+
+  // Held for a whole transition, so that the publish path, which takes mtx_ alone, never waits for
+  // one. Lock ordering: acquire transition_mtx_ before mtx_.
+  std::mutex transition_mtx_;
 
   mutable std::mutex mtx_;
   rcl_service_introspection_state_t state_ = RCL_SERVICE_INTROSPECTION_OFF;
   GenericPublisher::SharedPtr publisher_ = nullptr;
+  rclcpp::Clock::SharedPtr clock_;
   std::shared_ptr<const ServiceTsBundle> ts_bundle_;
 
   struct Snapshot
   {
     rcl_service_introspection_state_t state;
     GenericPublisher::SharedPtr publisher;
+    rclcpp::Clock::SharedPtr clock;
     std::shared_ptr<const ServiceTsBundle> ts_bundle;
   };
 
@@ -47,16 +51,21 @@ class ServiceEventPublisher
   void commit(const Snapshot & next);
 
 public:
-  explicit ServiceEventPublisher(
+  ServiceEventPublisher(
     std::variant<rclcpp::Node *, agnocast::Node *> node, const std::string & service_name,
-    const std::string & service_type, const rclcpp::QoS & qos,
-    const rclcpp::Clock::SharedPtr & clock);
+    const std::string & service_type);
 
-  /// @brief Changes the state of the service event publisher (thread-safe).
-  /// @param new_state The new state to set.
+  /// @brief Sets the introspection state, creating or destroying the event publisher as needed
+  /// (thread-safe).
+  /// @param clock The clock used to generate introspection timestamps.
+  /// @param qos_service_event_pub The QoS to use when creating the event publisher.
+  /// @param state The state to set introspection to.
+  /// @throws std::invalid_argument if @p clock is null, including when disabling, as in rcl.
   /// @throws std::runtime_error if the typesupport libraries cannot be loaded. Only the first
   /// transition out of OFF loads them.
-  void change_state(rcl_service_introspection_state_t new_state);
+  void configure(
+    const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
+    rcl_service_introspection_state_t state);
 
   /// @brief Publishes a service event message (thread-safe).
   /// @param event_type The event type.

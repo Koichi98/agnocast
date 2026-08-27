@@ -12,6 +12,7 @@
 
 #include <cstring>
 #include <memory>
+#include <stdexcept>
 
 using service_msgs::msg::ServiceEventInfo;
 
@@ -21,7 +22,7 @@ namespace agnocast
 ServiceEventPublisher::Snapshot ServiceEventPublisher::snapshot() const
 {
   std::lock_guard<std::mutex> lock(mtx_);
-  return Snapshot{state_, publisher_, ts_bundle_};
+  return Snapshot{state_, publisher_, clock_, ts_bundle_};
 }
 
 void ServiceEventPublisher::commit(const Snapshot & next)
@@ -29,53 +30,67 @@ void ServiceEventPublisher::commit(const Snapshot & next)
   std::lock_guard<std::mutex> lock(mtx_);
   state_ = next.state;
   publisher_ = next.publisher;
+  clock_ = next.clock;
   ts_bundle_ = next.ts_bundle;
 }
 
 ServiceEventPublisher::ServiceEventPublisher(
   std::variant<rclcpp::Node *, agnocast::Node *> node, const std::string & service_name,
-  const std::string & service_type, const rclcpp::QoS & qos, const rclcpp::Clock::SharedPtr & clock)
+  const std::string & service_type)
 : node_(std::move(node)),
   service_type_(service_type),
   event_topic_name_(service_name + "/_service_event"),
-  event_topic_type_(service_type + "_Event"),
-  event_publisher_qos_(qos),
-  clock_(clock)
+  event_topic_type_(service_type + "_Event")
 {
 }
 
-void ServiceEventPublisher::change_state(rcl_service_introspection_state_t new_state)
+void ServiceEventPublisher::configure(
+  const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
+  rcl_service_introspection_state_t state)
 {
+  if (clock == nullptr) {
+    throw std::invalid_argument("a clock is required to configure service introspection");
+  }
+
+  std::lock_guard<std::mutex> transition_lock(transition_mtx_);
+
   Snapshot current = snapshot();
 
-  if (current.state == new_state) {
+  if (current.state == state) {
     return;
   }
 
-  // If the new state is Off, the current state is either Metadata or Contents, so destroy the
-  // existing publisher. If the current state is Off, it's changing to either Metadata or Contents,
-  // so create a new publisher. The remaining state transitions are between Metadata and Contents,
-  // which require no action.
-  if (new_state == RCL_SERVICE_INTROSPECTION_OFF) {
+  if (state == RCL_SERVICE_INTROSPECTION_OFF) {
     // The bundle is carried over so that re-enabling does not load the libraries again.
-    commit(Snapshot{new_state, nullptr, current.ts_bundle});
-  } else if (current.state == RCL_SERVICE_INTROSPECTION_OFF) {
-    Snapshot next{new_state, nullptr, current.ts_bundle};
-    if (!next.ts_bundle) {
-      next.ts_bundle =
-        std::make_shared<const ServiceTsBundle>(load_service_typesupport(service_type_));
-    }
-    std::visit(
-      [this, &next](auto * n) {
-        next.publisher = std::make_shared<GenericPublisher>(
-          n, event_topic_name_, event_topic_type_, event_publisher_qos_);
-      },
-      node_);
-    commit(next);
+    commit(Snapshot{state, nullptr, nullptr, current.ts_bundle});
+    // The publisher is destroyed here rather than inside commit(), keeping mtx_ off the teardown
+    // path.
+    return;
   }
 
-  // NOTE: The publisher is destroyed when this function returns, not in the commit(), minimizing
-  // the lock window. This is because we've got the snapshot.
+  // The clock and the QoS only take effect when the publisher is created, matching
+  // rcl_service_configure_service_introspection: a later call that only moves between METADATA and
+  // CONTENTS keeps the publisher and leaves them alone.
+  if (current.publisher) {
+    commit(Snapshot{state, current.publisher, current.clock, current.ts_bundle});
+    return;
+  }
+
+  Snapshot next{state, nullptr, clock, current.ts_bundle};
+
+  if (!next.ts_bundle) {
+    next.ts_bundle =
+      std::make_shared<const ServiceTsBundle>(load_service_typesupport(service_type_));
+  }
+
+  std::visit(
+    [this, &next, &qos_service_event_pub](auto * n) {
+      next.publisher = std::make_shared<GenericPublisher>(
+        n, event_topic_name_, event_topic_type_, qos_service_event_pub);
+    },
+    node_);
+
+  commit(next);
 }
 
 std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_message(
@@ -89,7 +104,7 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
   }
 
   // Prepare the introspection info (metadata).
-  builtin_interfaces::msg::Time stamp = clock_->now();
+  builtin_interfaces::msg::Time stamp = active.clock->now();
 
   rosidl_service_introspection_info_t info = {};
   info.event_type = event_type;
