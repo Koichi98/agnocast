@@ -3,6 +3,7 @@
 #include "agnocast/agnocast_ioctl.hpp"
 #include "agnocast/agnocast_public_api.hpp"
 #include "agnocast/agnocast_publisher.hpp"
+#include "agnocast/agnocast_service_event_publisher.hpp"
 #include "agnocast/agnocast_smart_pointer.hpp"
 #include "agnocast/agnocast_subscription.hpp"
 #include "agnocast/agnocast_utils.hpp"
@@ -12,6 +13,10 @@
 #include "agnocast/node/agnocast_context.hpp"
 #include "rclcpp/node_interfaces/node_base_interface.hpp"
 #include "rclcpp/rclcpp.hpp"
+
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+#include <service_msgs/msg/service_event_info.hpp>
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -187,7 +192,22 @@ private:
   std::mutex seqno2_response_call_info_mtx_;
   std::unordered_map<int64_t, ResponseCallInfo> seqno2_response_call_info_;
   typename ServiceRequestPublisher::SharedPtr publisher_;
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+  std::unique_ptr<ServiceEventPublisher> event_publisher_;
+#endif
   typename ServiceResponseSubscriber::SharedPtr subscriber_;
+
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+  void publish_client_event(
+    const uint8_t event_type, const void * payload, const int64_t seqno, const char * what)
+  {
+    auto [ok, err_msg] =
+      event_publisher_->publish_service_event_message(event_type, payload, seqno, get_gid().data);
+    if (!ok) {
+      RCLCPP_ERROR(get_logger(), "Failed to publish %s event: %s", what, err_msg.c_str());
+    }
+  }
+#endif
 
   template <typename Func>
   int64_t send_request_impl(
@@ -202,6 +222,15 @@ private:
       take_future(
         seqno2_response_call_info_.try_emplace(seqno, std::move(call_info)).first->second);
     }
+
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+    // Must precede publish(): publishing hands the buffer to the kmod, after which a later
+    // publish on the same topic may evict and free it mid-read.
+    publish_client_event(
+      service_msgs::msg::ServiceEventInfo::REQUEST_SENT,
+      static_cast<const typename ServiceT::Request *>(internal_request.get()), seqno,
+      "request sent");
+#endif
 
     publisher_->publish(std::move(internal_request));
     return seqno;
@@ -225,6 +254,13 @@ private:
     response_topic_name_ =
       create_service_response_topic_name(service_name_, node_name_, publisher_->get_id());
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+    // Must precede the subscription: registering it makes the callback reachable by an executor
+    // that is already spinning, and the callback dereferences event_publisher_.
+    event_publisher_ = std::make_unique<ServiceEventPublisher>(
+      node_, service_name_, rosidl_generator_traits::name<ServiceT>());
+#endif
+
     auto subscriber_callback = [this](ipc_shared_ptr<ResponseT> && response) {
       std::unique_lock<std::mutex> lock(seqno2_response_call_info_mtx_);
       /* --- critical section begin --- */
@@ -239,6 +275,14 @@ private:
       seqno2_response_call_info_.erase(it);
       /* --- critical section end --- */
       lock.unlock();
+
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+      // Must precede the move into the promise: `response` is empty afterwards.
+      publish_client_event(
+        service_msgs::msg::ServiceEventInfo::RESPONSE_RECEIVED,
+        static_cast<const typename ServiceT::Response *>(response.get()),
+        response->ResponseMeta::seqno, "response received");
+#endif
 
       info.promise.set_value(ipc_shared_ptr<typename ServiceT::Response>(std::move(response)));
       if (info.callback.has_value()) {
@@ -294,6 +338,31 @@ public:
 
     return ipc_shared_ptr<typename ServiceT::Request>(std::move(request));
   }
+
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+  /**
+   * @brief Configure service introspection for this client.
+   * Enabling introspection creates an Agnocast publisher, which registers with the kernel
+   * module and requests an A2R bridge over the daemon socket. Unlike the rclcpp equivalent,
+   * which only creates a local rcl publisher, this can block while that request is retried.
+   *
+   * @param clock The clock to use to generate introspection timestamps.
+   * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
+   * @param introspection_state The state to set introspection to.
+   * @throws std::invalid_argument if @p clock is null, including when disabling, as in rcl, or if
+   * @p qos_service_event_pub cannot be used by Agnocast. The QoS is only checked when a publisher
+   * is about to be created, so disabling never rejects it.
+   * @throws std::runtime_error if the typesupport libraries for the event message cannot be
+   * loaded. Only the first transition out of OFF loads them.
+   */
+  AGNOCAST_PUBLIC
+  void configure_introspection(
+    const rclcpp::Clock::SharedPtr & clock, const rclcpp::QoS & qos_service_event_pub,
+    rcl_service_introspection_state_t introspection_state)
+  {
+    event_publisher_->configure(clock, qos_service_event_pub, introspection_state);
+  }
+#endif
 
   /** @brief Send a request asynchronously and invoke a callback when the response arrives.
    *  @param request Request from borrow_loaned_request(). Must be moved in.
