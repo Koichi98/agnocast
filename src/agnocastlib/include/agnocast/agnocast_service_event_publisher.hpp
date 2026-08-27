@@ -48,6 +48,9 @@ class ServiceEventPublisher
   };
 
   Snapshot snapshot() const;
+  // Takes const char *, not std::string: this runs from a noexcept context, and the failure it
+  // most often reports is std::bad_alloc.
+  void log_failure(const uint8_t event_type, const char * reason) const noexcept;
   void commit(const Snapshot & next);
 
 public:
@@ -72,15 +75,18 @@ public:
   /// @brief Returns the state last committed by configure() (thread-safe).
   rcl_service_introspection_state_t introspection_state() const;
 
-  /// @brief Publishes a service event message (thread-safe).
+  /// @brief Publishes a service event message (thread-safe). A no-op while introspection is off.
+  ///
+  /// Never reports failure to the caller: this runs on the request/response path, so a failed
+  /// diagnostic must not disturb the call. Failures are logged instead.
+  ///
   /// @param event_type The event type.
   /// @param payload A pointer to the request/response payload.
   /// @param sequence_number The sequence number of the (corresponding) request.
   /// @param client_gid The GID of the client that triggered the request.
-  /// @return A pair consisting of a success flag and an error message (if any).
-  std::pair<bool, std::string> publish_service_event_message(
+  void publish_service_event_message(
     const uint8_t event_type, const void * payload, int64_t sequence_number,
-    const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE]);
+    const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE]) noexcept;
 };
 
 }  // namespace agnocast

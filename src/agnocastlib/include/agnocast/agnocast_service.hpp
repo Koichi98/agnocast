@@ -116,38 +116,18 @@ private:
   void publish_request_received_event(const ipc_shared_ptr<RequestT> & request)
   {
     const auto * payload = static_cast<const typename ServiceT::Request *>(request.get());
-    const int64_t seqno = request->RequestMeta::seqno;
-    const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = request->RequestMeta::client_gid;
 
-    auto [ok, err_msg] = event_publisher_->publish_service_event_message(
-      service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, payload, seqno, client_gid);
-    if (!ok) {
-      std::visit(
-        [err_msg = std::move(err_msg)](auto * n) {
-          RCLCPP_ERROR(
-            n->get_logger(), "Failed to publish request received event: %s", err_msg.c_str());
-        },
-        node_);
-    }
+    event_publisher_->publish_service_event_message(
+      service_msgs::msg::ServiceEventInfo::REQUEST_RECEIVED, payload, request->RequestMeta::seqno,
+      request->RequestMeta::client_gid);
   }
 
   void publish_response_sent_event(
     const ipc_shared_ptr<RequestT> & request, const typename ServiceT::Response & response)
   {
-    const void * response_payload = &response;
-    const int64_t seqno = request->RequestMeta::seqno;
-    const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = request->RequestMeta::client_gid;
-
-    auto [ok, err_msg] = event_publisher_->publish_service_event_message(
-      service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, response_payload, seqno, client_gid);
-    if (!ok) {
-      std::visit(
-        [err_msg = std::move(err_msg)](auto * n) {
-          RCLCPP_ERROR(
-            n->get_logger(), "Failed to publish response sent event: %s", err_msg.c_str());
-        },
-        node_);
-    }
+    event_publisher_->publish_service_event_message(
+      service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, &response, request->RequestMeta::seqno,
+      request->RequestMeta::client_gid);
   }
 #endif
 

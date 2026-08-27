@@ -2,6 +2,7 @@
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
 
+#include "agnocast/node/agnocast_node.hpp"
 #include "builtin_interfaces/msg/time.hpp"
 #include "rclcpp/serialization.hpp"
 #include "rclcpp/serialized_message.hpp"
@@ -9,6 +10,8 @@
 #include "rosidl_runtime_c/service_type_support_struct.h"
 
 #include <service_msgs/msg/service_event_info.hpp>
+
+#include <unistd.h>
 
 #include <cstring>
 #include <memory>
@@ -19,6 +22,47 @@ using service_msgs::msg::ServiceEventInfo;
 
 namespace agnocast
 {
+
+namespace
+{
+
+const char * event_type_name(const uint8_t event_type)
+{
+  switch (event_type) {
+    case ServiceEventInfo::REQUEST_SENT:
+      return "request sent";
+    case ServiceEventInfo::REQUEST_RECEIVED:
+      return "request received";
+    case ServiceEventInfo::RESPONSE_SENT:
+      return "response sent";
+    case ServiceEventInfo::RESPONSE_RECEIVED:
+      return "response received";
+    default:
+      return "unknown";
+  }
+}
+
+}  // namespace
+
+void ServiceEventPublisher::log_failure(
+  const uint8_t event_type, const char * reason) const noexcept
+{
+  try {
+    std::visit(
+      [this, event_type, reason](auto * n) {
+        RCLCPP_ERROR(
+          n->get_logger(), "Failed to publish the %s event on '%s': %s",
+          event_type_name(event_type), event_topic_name_.c_str(), reason);
+      },
+      node_);
+  } catch (...) {
+    // RCLCPP_ERROR formats, so it allocates, and the failure being reported is most often
+    // std::bad_alloc. Escaping the noexcept above would take the process down.
+    constexpr char fallback[] = "[ERROR] [Agnocast] Failed to publish a service event\n";
+    const ssize_t written = write(STDERR_FILENO, fallback, sizeof(fallback) - 1);
+    static_cast<void>(written);
+  }
+}
 
 ServiceEventPublisher::Snapshot ServiceEventPublisher::snapshot() const
 {
@@ -109,14 +153,14 @@ void ServiceEventPublisher::configure(
   commit(next);
 }
 
-std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_message(
+void ServiceEventPublisher::publish_service_event_message(
   const uint8_t event_type, const void * payload, int64_t sequence_number,
-  const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE])
+  const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE]) noexcept
 {
   Snapshot active = snapshot();
 
   if (active.state == RCL_SERVICE_INTROSPECTION_OFF) {
-    return std::make_pair(true, "");
+    return;
   }
 
   try {
@@ -153,11 +197,12 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
           service_ts->event_message_create_handle_function(&info, &allocator, nullptr, payload);
         break;
       default:
-        return std::make_pair(false, "unsupported event type");
+        log_failure(event_type, "unsupported event type");
+        return;
     }
     if (event_msg == nullptr) {
-      return std::make_pair(
-        false, "event_message_create_handle_function() failed to create event message");
+      log_failure(event_type, "event_message_create_handle_function() returned null");
+      return;
     }
 
     auto destroy = [service_ts, &allocator](void * msg) {
@@ -171,12 +216,10 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
     serialization.serialize_message(event_msg, &serialized_msg);
     active.publisher->publish(serialized_msg);
   } catch (const std::exception & e) {
-    return std::make_pair(false, e.what());
+    log_failure(event_type, e.what());
   } catch (...) {
-    return std::make_pair(false, "unknown exception");
+    log_failure(event_type, "unknown exception");
   }
-
-  return std::make_pair(true, "");
 }
 
 }  // namespace agnocast
