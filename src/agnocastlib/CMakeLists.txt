@@ -168,7 +168,8 @@ if(BUILD_TESTING)
     test/unit/test_daemon_bridge_uds.cpp
     test/unit/test_agnocast_bridge_uds.cpp
     test/unit/test_discovery_agent_auto_fork.cpp
-    test/unit/test_bridge_node_name.cpp)
+    test/unit/test_bridge_node_name.cpp
+    test/unit/test_agnocast_service_event_publisher.cpp)
   target_include_directories(test_unit_${PROJECT_NAME} PRIVATE include src)
   target_link_libraries(test_unit_${PROJECT_NAME} agnocast)
   ament_target_dependencies(test_unit_${PROJECT_NAME} std_msgs diagnostic_msgs diagnostic_updater rosidl_typesupport_cpp)
@@ -370,6 +371,21 @@ if(BUILD_TESTING)
     TIMEOUT 60
     LABELS "requires_kernel_module;requires_heaphook"
   )
+
+  # Service introspection integration test (requires kernel module, no mock)
+  if(rclcpp_VERSION_MAJOR GREATER_EQUAL 21)
+    ament_add_gmock(test_integration_service_introspection_${PROJECT_NAME}
+      test/integration/test_agnocast_service_introspection.cpp)
+    target_include_directories(test_integration_service_introspection_${PROJECT_NAME} PRIVATE include)
+    target_link_libraries(test_integration_service_introspection_${PROJECT_NAME} agnocast)
+    ament_target_dependencies(test_integration_service_introspection_${PROJECT_NAME}
+      std_srvs ${AGNOCAST_SERVICE_INTROSPECTION_DEPS})
+    set_tests_properties(test_integration_service_introspection_${PROJECT_NAME} PROPERTIES
+      ENVIRONMENT "GTEST_DEATH_TEST_STYLE=threadsafe;LD_PRELOAD=${CMAKE_INSTALL_PREFIX}/lib/libagnocast_heaphook.so:$ENV{LD_PRELOAD}"
+      TIMEOUT 120
+      LABELS "requires_kernel_module;requires_heaphook"
+    )
+  endif()
 
   # Integration tests for agnocast_heaphook
   add_library(initialize_shutdown_mock SHARED test/integration/src/initialize_shutdown_mock.cpp)
