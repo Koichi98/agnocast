@@ -25,18 +25,26 @@ namespace agnocast
 class ServiceEventPublisher
 {
   const std::variant<rclcpp::Node *, agnocast::Node *> node_;
+  const std::string service_type_;
   const std::string event_topic_name_;
   const std::string event_topic_type_;
   const rclcpp::QoS event_publisher_qos_;
   const rclcpp::Clock::SharedPtr clock_;
-  const ServiceTsBundle ts_bundle_;
 
   mutable std::mutex mtx_;
   rcl_service_introspection_state_t state_ = RCL_SERVICE_INTROSPECTION_OFF;
   GenericPublisher::SharedPtr publisher_ = nullptr;
+  std::shared_ptr<const ServiceTsBundle> ts_bundle_;
 
-  std::pair<rcl_service_introspection_state_t, GenericPublisher::SharedPtr> snapshot() const;
-  void commit(rcl_service_introspection_state_t state, GenericPublisher::SharedPtr publisher);
+  struct Snapshot
+  {
+    rcl_service_introspection_state_t state;
+    GenericPublisher::SharedPtr publisher;
+    std::shared_ptr<const ServiceTsBundle> ts_bundle;
+  };
+
+  Snapshot snapshot() const;
+  void commit(const Snapshot & next);
 
 public:
   explicit ServiceEventPublisher(
@@ -46,6 +54,8 @@ public:
 
   /// @brief Changes the state of the service event publisher (thread-safe).
   /// @param new_state The new state to set.
+  /// @throws std::runtime_error if the typesupport libraries cannot be loaded. Only the first
+  /// transition out of OFF loads them.
   void change_state(rcl_service_introspection_state_t new_state);
 
   /// @brief Publishes a service event message (thread-safe).

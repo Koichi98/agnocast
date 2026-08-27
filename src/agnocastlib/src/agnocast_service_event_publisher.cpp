@@ -11,44 +11,44 @@
 #include <service_msgs/msg/service_event_info.hpp>
 
 #include <cstring>
+#include <memory>
 
 using service_msgs::msg::ServiceEventInfo;
 
 namespace agnocast
 {
 
-std::pair<rcl_service_introspection_state_t, GenericPublisher::SharedPtr>
-ServiceEventPublisher::snapshot() const
+ServiceEventPublisher::Snapshot ServiceEventPublisher::snapshot() const
 {
   std::lock_guard<std::mutex> lock(mtx_);
-  return std::make_pair(state_, publisher_);
+  return Snapshot{state_, publisher_, ts_bundle_};
 }
 
-void ServiceEventPublisher::commit(
-  rcl_service_introspection_state_t state, GenericPublisher::SharedPtr publisher)
+void ServiceEventPublisher::commit(const Snapshot & next)
 {
   std::lock_guard<std::mutex> lock(mtx_);
-  state_ = state;
-  publisher_ = publisher;
+  state_ = next.state;
+  publisher_ = next.publisher;
+  ts_bundle_ = next.ts_bundle;
 }
 
 ServiceEventPublisher::ServiceEventPublisher(
   std::variant<rclcpp::Node *, agnocast::Node *> node, const std::string & service_name,
   const std::string & service_type, const rclcpp::QoS & qos, const rclcpp::Clock::SharedPtr & clock)
 : node_(std::move(node)),
+  service_type_(service_type),
   event_topic_name_(service_name + "/_service_event"),
   event_topic_type_(service_type + "_Event"),
   event_publisher_qos_(qos),
-  clock_(clock),
-  ts_bundle_(load_service_typesupport(service_type))
+  clock_(clock)
 {
 }
 
 void ServiceEventPublisher::change_state(rcl_service_introspection_state_t new_state)
 {
-  auto [state, publisher] = snapshot();
+  Snapshot current = snapshot();
 
-  if (state == new_state) {
+  if (current.state == new_state) {
     return;
   }
 
@@ -57,15 +57,21 @@ void ServiceEventPublisher::change_state(rcl_service_introspection_state_t new_s
   // so create a new publisher. The remaining state transitions are between Metadata and Contents,
   // which require no action.
   if (new_state == RCL_SERVICE_INTROSPECTION_OFF) {
-    commit(new_state, nullptr);
-  } else if (state == RCL_SERVICE_INTROSPECTION_OFF) {
+    // The bundle is carried over so that re-enabling does not load the libraries again.
+    commit(Snapshot{new_state, nullptr, current.ts_bundle});
+  } else if (current.state == RCL_SERVICE_INTROSPECTION_OFF) {
+    Snapshot next{new_state, nullptr, current.ts_bundle};
+    if (!next.ts_bundle) {
+      next.ts_bundle =
+        std::make_shared<const ServiceTsBundle>(load_service_typesupport(service_type_));
+    }
     std::visit(
-      [this, new_state](auto * n) {
-        auto new_publisher = std::make_shared<GenericPublisher>(
+      [this, &next](auto * n) {
+        next.publisher = std::make_shared<GenericPublisher>(
           n, event_topic_name_, event_topic_type_, event_publisher_qos_);
-        commit(new_state, new_publisher);
       },
       node_);
+    commit(next);
   }
 
   // NOTE: The publisher is destroyed when this function returns, not in the commit(), minimizing
@@ -76,9 +82,9 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
   const uint8_t event_type, const void * payload, int64_t sequence_number,
   const uint8_t (&client_gid)[RMW_GID_STORAGE_SIZE])
 {
-  auto [state, publisher] = snapshot();
+  Snapshot active = snapshot();
 
-  if (state == RCL_SERVICE_INTROSPECTION_OFF) {
+  if (active.state == RCL_SERVICE_INTROSPECTION_OFF) {
     return std::make_pair(true, "");
   }
 
@@ -99,18 +105,18 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
 
   // Construct the event message.
   void * event_msg;
-  if (state == RCL_SERVICE_INTROSPECTION_METADATA) {
+  if (active.state == RCL_SERVICE_INTROSPECTION_METADATA) {
     payload = nullptr;
   }
   switch (event_type) {
     case ServiceEventInfo::REQUEST_RECEIVED:
     case ServiceEventInfo::REQUEST_SENT:
-      event_msg = ts_bundle_.service_ts->event_message_create_handle_function(
+      event_msg = active.ts_bundle->service_ts->event_message_create_handle_function(
         &info, &allocator, payload, nullptr);
       break;
     case ServiceEventInfo::RESPONSE_RECEIVED:
     case ServiceEventInfo::RESPONSE_SENT:
-      event_msg = ts_bundle_.service_ts->event_message_create_handle_function(
+      event_msg = active.ts_bundle->service_ts->event_message_create_handle_function(
         &info, &allocator, nullptr, payload);
       break;
     default:
@@ -123,16 +129,16 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
 
   // Serialize the event message and publish it.
   rclcpp::SerializedMessage serialized_msg;
-  rclcpp::SerializationBase serialization(ts_bundle_.service_ts->event_typesupport);
+  rclcpp::SerializationBase serialization(active.ts_bundle->service_ts->event_typesupport);
   try {
     serialization.serialize_message(event_msg, &serialized_msg);
   } catch (const std::exception & e) {
-    ts_bundle_.service_ts->event_message_destroy_handle_function(event_msg, &allocator);
+    active.ts_bundle->service_ts->event_message_destroy_handle_function(event_msg, &allocator);
     return std::make_pair(false, "serialize_message() failed to serialize event message");
   }
-  publisher->publish(serialized_msg);
+  active.publisher->publish(serialized_msg);
 
-  ts_bundle_.service_ts->event_message_destroy_handle_function(event_msg, &allocator);
+  active.ts_bundle->service_ts->event_message_destroy_handle_function(event_msg, &allocator);
   return std::make_pair(true, "");
 }
 
