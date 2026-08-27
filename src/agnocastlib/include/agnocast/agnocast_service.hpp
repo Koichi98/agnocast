@@ -123,20 +123,20 @@ private:
   }
 
   void publish_response_sent_event(
-    const ipc_shared_ptr<RequestT> & request, const typename ServiceT::Response & response)
+    const ipc_shared_ptr<RequestT> & request,
+    const std::optional<typename ServiceT::Response> & response)
   {
     event_publisher_->publish_service_event_message(
-      service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, &response, request->RequestMeta::seqno,
-      request->RequestMeta::client_gid);
+      service_msgs::msg::ServiceEventInfo::RESPONSE_SENT, response ? &*response : nullptr,
+      request->RequestMeta::seqno, request->RequestMeta::client_gid);
   }
-#endif
 
-#if AGNOCAST_HAS_SERVICE_INTROSPECTION
-  // Must be called before publish().
-  std::optional<typename ServiceT::Response> copy_response_if_introspected(
+  // Must be called before publish(). Only CONTENTS puts the payload in the event, so the other
+  // states pay nothing; raising to CONTENTS in between costs that one event its payload.
+  std::optional<typename ServiceT::Response> copy_response_if_contents(
     const ipc_shared_ptr<ResponseT> & response)
   {
-    if (event_publisher_->introspection_state() == RCL_SERVICE_INTROSPECTION_OFF) {
+    if (event_publisher_->introspection_state() != RCL_SERVICE_INTROSPECTION_CONTENTS) {
       return std::nullopt;
     }
     return static_cast<const typename ServiceT::Response &>(*response);
@@ -172,15 +172,13 @@ private:
       callback(std::move(request_double), std::move(response_double));
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-      auto sent_response = copy_response_if_introspected(response);
+      const auto sent_response = copy_response_if_contents(response);
 #endif
 
       publisher->publish(std::move(response));
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-      if (sent_response) {
-        publish_response_sent_event(request, *sent_response);
-      }
+      publish_response_sent_event(request, sent_response);
 #endif
 
       // Safety regarding response_double
@@ -295,15 +293,13 @@ public:
       get_or_create_publisher_for(internal_request->RequestMeta::response_topic_name);
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-    auto sent_response = copy_response_if_introspected(internal_response);
+    const auto sent_response = copy_response_if_contents(internal_response);
 #endif
 
     publisher->publish(std::move(internal_response));
 
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
-    if (sent_response) {
-      publish_response_sent_event(internal_request, *sent_response);
-    }
+    publish_response_sent_event(internal_request, sent_response);
 #endif
   }
 
