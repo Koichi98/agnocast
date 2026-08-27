@@ -77,10 +77,11 @@ private:
   const ServiceRole role_;
   std::mutex publishers_mtx_;
   std::unordered_map<std::string, typename ServiceResponsePublisher::SharedPtr> publishers_;
-  typename ServiceRequestSubscriber::SharedPtr subscriber_;
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
+  // Declared before subscriber_ so that it outlives the callback that uses it.
   std::shared_ptr<ServiceEventPublisher> event_publisher_;
 #endif
+  typename ServiceRequestSubscriber::SharedPtr subscriber_;
 
   rclcpp::Logger get_logger() const
   {
@@ -221,6 +222,12 @@ private:
 
     service_name_ = node->get_node_services_interface()->resolve_service_name(service_name);
 
+#if AGNOCAST_HAS_SERVICE_INTROSPECTION
+    // Must precede the subscription: its callback is runnable as soon as it is registered.
+    event_publisher_ = std::make_shared<ServiceEventPublisher>(
+      node_, service_name_, rosidl_generator_traits::name<ServiceT>(), qos_, node->get_clock());
+#endif
+
     SubscriptionOptions options{group};
     std::string topic_name = create_service_request_topic_name(service_name_);
     const SubscriptionRole subscriber_role = to_subscription_role(role_);
@@ -235,11 +242,6 @@ private:
         wrap_deferred_service_callback_for_subscriber(std::forward<Func>(callback)), options,
         subscriber_role);
     }
-
-#if AGNOCAST_HAS_SERVICE_INTROSPECTION
-    event_publisher_ = std::make_shared<ServiceEventPublisher>(
-      node_, service_name_, rosidl_generator_traits::name<ServiceT>(), qos_, node->get_clock());
-#endif
 
     if (role_ == ServiceRole::Default) {
       std::optional<std::pair<std::string, std::string>> shadow_node_identity{std::nullopt};
