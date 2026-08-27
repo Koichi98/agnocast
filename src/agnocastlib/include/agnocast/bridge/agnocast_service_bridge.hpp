@@ -51,8 +51,7 @@ struct ServiceBridgeDeps
 //       └───────┘                           └───────┘
 //
 // (1) an Agnocast service or client registered
-// (2) !agno_client_exists(), no daemon-forced R2A, (3) false, and !(may_start_r2a_bridge_ &&
-//     agno_service_exists())
+// (2) !agno_client_exists(), (3) false, and !(may_start_r2a_bridge_ && agno_service_exists())
 // (3) may_start_a2r_bridge_ && ros2_service_exists() && agno_client_exists()
 // (4) !(ros2_service_exists() && agno_client_exists()) || (may_start_r2a_bridge_ &&
 //     agno_service_exists())
@@ -86,10 +85,10 @@ struct ServiceBridgeDeps
 // BridgeInternal one never guards anything; and agno_service_exists() reads at most one entry, so
 // it reports false when two or more Agnocast services share the name.
 //
-// The daemon-forced lease in (2), (5) and (6) exists because two IPC namespaces sharing one
-// service deadlock without it: the service side's (5) wants a ROS 2 client that only the client
-// side's A2R creates, and the client side's (3) wants a ROS 2 service that only the service side's
-// R2A creates. Only the discovery agent sees both namespaces, so it grants the lease.
+// The daemon-forced lease in (5) and (6) exists because two IPC namespaces sharing one service
+// deadlock without it: the service side's (5) wants a ROS 2 client that only the client side's A2R
+// creates, and the client side's (3) wants a ROS 2 service that only the service side's R2A
+// creates. Only the discovery agent sees both namespaces, so it grants the lease.
 //
 // The lease covers R2A only, and that is enough to break the cycle: once (5) runs here, the ROS 2
 // service it publishes is the one term (3) was missing over on the client side. Leasing A2R too

@@ -303,7 +303,7 @@ void BridgeManager::register_daemon_service_request(const BridgeMsgDaemonService
 
   auto it = active_service_bridges_.find(service_name);
   if (it == active_service_bridges_.end()) {
-    it = active_service_bridges_.emplace(service_name, ServiceBridgeItem{}).first;
+    return;
   }
   it->second.handle_daemon_request(req);
 }

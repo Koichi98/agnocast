@@ -477,9 +477,8 @@ void ServiceBridgeItem::check_and_update_pending(const ServiceBridgeDeps & deps)
     return;
   }
 
-  // Arrow (2). A forced item survives with no local Agnocast client: the daemon vouches for a
-  // remote one.
-  if (!agno_client_exists() && !r2a_forced()) {
+  // Arrow (2).
+  if (!agno_client_exists()) {
     RCLCPP_DEBUG(
       deps.logger, "Removing service bridge state-machine for '%s': %s", service_name_.c_str(),
       get_error_string());
@@ -518,20 +517,9 @@ void ServiceBridgeItem::handle_request(const BridgeMsgServicePayload & payload)
   }
 }
 
-void ServiceBridgeItem::handle_daemon_request(const BridgeMsgDaemonServicePayload & payload)
+void ServiceBridgeItem::handle_daemon_request(const BridgeMsgDaemonServicePayload &)
 {
-  if (service_name_.empty()) {
-    service_name_ = static_cast<const char *>(payload.service_name);
-  }
-
-  // Latch the permission the local Agnocast service's own request would have set: only the daemon
-  // can see the remote Agnocast client that makes R2A legitimate.
-  may_start_r2a_bridge_ = true;
   r2a_forced_until_ = daemon_force_deadline(std::chrono::steady_clock::now());
-
-  if (state_ == ServiceBridgeState::NONE) {
-    state_ = ServiceBridgeState::PENDING;
-  }
 }
 
 }  // namespace agnocast
