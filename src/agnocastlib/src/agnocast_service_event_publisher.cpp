@@ -40,7 +40,7 @@ ServiceEventPublisher::ServiceEventPublisher(
   const std::string & service_type)
 : node_(std::move(node)),
   service_type_(service_type),
-  event_topic_name_(service_name + "/_service_event"),
+  event_topic_name_(service_name + RCL_SERVICE_INTROSPECTION_TOPIC_POSTFIX),
   event_topic_type_(service_type + "_Event")
 {
 }
