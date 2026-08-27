@@ -13,6 +13,7 @@
 #include <cstring>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 using service_msgs::msg::ServiceEventInfo;
 
@@ -103,57 +104,63 @@ std::pair<bool, std::string> ServiceEventPublisher::publish_service_event_messag
     return std::make_pair(true, "");
   }
 
-  // Prepare the introspection info (metadata).
-  builtin_interfaces::msg::Time stamp = active.clock->now();
-
-  rosidl_service_introspection_info_t info = {};
-  info.event_type = event_type;
-  info.stamp_sec = stamp.sec;
-  info.stamp_nanosec = stamp.nanosec;
-  info.sequence_number = sequence_number;
-
-  static_assert(sizeof(info.client_gid) == RMW_GID_STORAGE_SIZE);
-  std::memcpy(info.client_gid, static_cast<const void *>(client_gid), RMW_GID_STORAGE_SIZE);
-
-  // Prepare the default allocator.
-  rcutils_allocator_t allocator = rcutils_get_default_allocator();
-
-  // Construct the event message.
-  void * event_msg;
-  if (active.state == RCL_SERVICE_INTROSPECTION_METADATA) {
-    payload = nullptr;
-  }
-  switch (event_type) {
-    case ServiceEventInfo::REQUEST_RECEIVED:
-    case ServiceEventInfo::REQUEST_SENT:
-      event_msg = active.ts_bundle->service_ts->event_message_create_handle_function(
-        &info, &allocator, payload, nullptr);
-      break;
-    case ServiceEventInfo::RESPONSE_RECEIVED:
-    case ServiceEventInfo::RESPONSE_SENT:
-      event_msg = active.ts_bundle->service_ts->event_message_create_handle_function(
-        &info, &allocator, nullptr, payload);
-      break;
-    default:
-      return std::make_pair(false, "unsupported event type");
-  }
-  if (event_msg == nullptr) {
-    return std::make_pair(
-      false, "event_message_create_handle_function() failed to create event message");
-  }
-
-  // Serialize the event message and publish it.
-  rclcpp::SerializedMessage serialized_msg;
-  rclcpp::SerializationBase serialization(active.ts_bundle->service_ts->event_typesupport);
   try {
-    serialization.serialize_message(event_msg, &serialized_msg);
-  } catch (const std::exception & e) {
-    active.ts_bundle->service_ts->event_message_destroy_handle_function(event_msg, &allocator);
-    return std::make_pair(false, "serialize_message() failed to serialize event message");
-  }
-  active.publisher->publish(serialized_msg);
+    // Prepare the introspection info (metadata).
+    builtin_interfaces::msg::Time stamp = active.clock->now();
 
-  active.ts_bundle->service_ts->event_message_destroy_handle_function(event_msg, &allocator);
+    rosidl_service_introspection_info_t info = {};
+    info.event_type = event_type;
+    info.stamp_sec = stamp.sec;
+    info.stamp_nanosec = stamp.nanosec;
+    info.sequence_number = sequence_number;
+
+    static_assert(sizeof(info.client_gid) == RMW_GID_STORAGE_SIZE);
+    std::memcpy(info.client_gid, static_cast<const void *>(client_gid), RMW_GID_STORAGE_SIZE);
+
+    // Prepare the default allocator.
+    rcutils_allocator_t allocator = rcutils_get_default_allocator();
+
+    // Construct the event message.
+    if (active.state == RCL_SERVICE_INTROSPECTION_METADATA) {
+      payload = nullptr;
+    }
+    const auto * service_ts = active.ts_bundle->service_ts;
+    void * event_msg = nullptr;
+    switch (event_type) {
+      case ServiceEventInfo::REQUEST_RECEIVED:
+      case ServiceEventInfo::REQUEST_SENT:
+        event_msg =
+          service_ts->event_message_create_handle_function(&info, &allocator, payload, nullptr);
+        break;
+      case ServiceEventInfo::RESPONSE_RECEIVED:
+      case ServiceEventInfo::RESPONSE_SENT:
+        event_msg =
+          service_ts->event_message_create_handle_function(&info, &allocator, nullptr, payload);
+        break;
+      default:
+        return std::make_pair(false, "unsupported event type");
+    }
+    if (event_msg == nullptr) {
+      return std::make_pair(
+        false, "event_message_create_handle_function() failed to create event message");
+    }
+
+    auto destroy = [service_ts, &allocator](void * msg) {
+      service_ts->event_message_destroy_handle_function(msg, &allocator);
+    };
+    std::unique_ptr<void, decltype(destroy)> event_msg_owner(event_msg, std::move(destroy));
+
+    // Serialize the event message and publish it.
+    rclcpp::SerializedMessage serialized_msg;
+    rclcpp::SerializationBase serialization(service_ts->event_typesupport);
+    serialization.serialize_message(event_msg, &serialized_msg);
+    active.publisher->publish(serialized_msg);
+  } catch (const std::exception & e) {
+    return std::make_pair(false, e.what());
+  } catch (...) {
+    return std::make_pair(false, "unknown exception");
+  }
+
   return std::make_pair(true, "");
 }
 
