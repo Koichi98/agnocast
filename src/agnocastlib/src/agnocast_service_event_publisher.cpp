@@ -97,6 +97,8 @@ void ServiceEventPublisher::configure(
       std::make_shared<const ServiceTsBundle>(load_service_typesupport(service_type_));
   }
 
+  // Must stay Default, unlike the AgnocastOnly of to_publisher_role(): register_service_bridge()
+  // does not cover the event topic, so this publisher requests its own A2R bridge.
   std::visit(
     [this, &next, &qos_service_event_pub](auto * n) {
       next.publisher = std::make_shared<GenericPublisher>(
