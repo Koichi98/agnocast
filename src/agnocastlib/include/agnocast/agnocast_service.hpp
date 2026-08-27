@@ -355,7 +355,9 @@ public:
    * @param clock The clock to use to generate introspection timestamps.
    * @param qos_service_event_pub The QoS settings to use when creating the introspection publisher.
    * @param introspection_state The state to set introspection to.
-   * @throws std::invalid_argument if @p clock is null, including when disabling, as in rcl.
+   * @throws std::invalid_argument if @p clock is null, including when disabling, as in rcl, or if
+   * @p qos_service_event_pub cannot be used by Agnocast. The QoS is only checked when a publisher
+   * is about to be created, so disabling never rejects it.
    * @throws std::runtime_error if the typesupport libraries for the event message cannot be
    * loaded. Only the first transition out of OFF loads them.
    */

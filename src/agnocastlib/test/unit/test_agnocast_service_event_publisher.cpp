@@ -70,4 +70,16 @@ TEST_F(ServiceEventPublisherTest, ConfigureReportsAServiceTypeWhoseTypesupportCa
     std::runtime_error);
 }
 
+TEST_F(ServiceEventPublisherTest, ConfigureRejectsAQosAgnocastCannotUse)
+{
+  // Arrange
+  auto event_publisher = make_event_publisher("std_srvs/srv/SetBool");
+
+  // Act & Assert
+  EXPECT_THROW(
+    event_publisher->configure(
+      node_->get_clock(), rclcpp::QoS(rclcpp::KeepAll()), RCL_SERVICE_INTROSPECTION_METADATA),
+    std::invalid_argument);
+}
+
 #endif  // AGNOCAST_HAS_SERVICE_INTROSPECTION

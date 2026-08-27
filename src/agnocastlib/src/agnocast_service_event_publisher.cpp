@@ -83,6 +83,13 @@ void ServiceEventPublisher::configure(
     return;
   }
 
+  // Checked only here, where the QoS is about to be used: GenericPublisher would run the same
+  // check and call exit() on failure.
+  const char * const unsupported = detail::unsupported_qos_reason(qos_service_event_pub);
+  if (unsupported != nullptr) {
+    throw std::invalid_argument(unsupported);
+  }
+
   Snapshot next{state, nullptr, clock, current.ts_bundle};
 
   if (!next.ts_bundle) {
