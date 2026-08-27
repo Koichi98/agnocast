@@ -115,7 +115,7 @@ private:
 #if AGNOCAST_HAS_SERVICE_INTROSPECTION
   void publish_request_received_event(const ipc_shared_ptr<RequestT> & request)
   {
-    const void * payload = request.get();
+    const auto * payload = static_cast<const typename ServiceT::Request *>(request.get());
     const int64_t seqno = request->RequestMeta::seqno;
     const uint8_t(&client_gid)[RMW_GID_STORAGE_SIZE] = request->RequestMeta::client_gid;
 
