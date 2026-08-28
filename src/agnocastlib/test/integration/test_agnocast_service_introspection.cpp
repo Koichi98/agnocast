@@ -35,6 +35,14 @@ using Event = std_srvs::srv::SetBool_Event;
 constexpr const char * kServiceName = "test_introspected_service";
 constexpr const char * kEventTopicName = "/test_introspected_service/_service_event";
 
+const Event * find_event(const std::vector<Event> & events, const uint8_t event_type)
+{
+  const auto it = std::find_if(events.begin(), events.end(), [event_type](const Event & event) {
+    return event.info.event_type == event_type;
+  });
+  return it == events.end() ? nullptr : &*it;
+}
+
 class IntrospectionFixture : public ::testing::Test
 {
 protected:
@@ -92,6 +100,11 @@ protected:
   void set_introspection(rcl_service_introspection_state_t state)
   {
     service_->configure_introspection(node_->get_clock(), rclcpp::ServicesQoS(), state);
+  }
+
+  void set_client_introspection(rcl_service_introspection_state_t state)
+  {
+    client_->configure_introspection(node_->get_clock(), rclcpp::ServicesQoS(), state);
   }
 
   [[nodiscard]] bool call_service(bool data)
@@ -195,22 +208,23 @@ TEST_F(ServiceIntrospectionTest, ContentsPublishesRequestReceivedAndResponseSent
   EXPECT_EQ(events[1].response[0].message, "ok");
 }
 
-TEST_F(ServiceIntrospectionTest, BothEventsOfOneCallCarryTheSameCallerAndSequenceNumber)
+TEST_F(ServiceIntrospectionTest, BothEventsOfACallCarryTheSequenceNumberOfThatCall)
 {
-  // Arrange
+  // Arrange: two calls, so a constant cannot pass for a real sequence number.
   set_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
+  ASSERT_TRUE(call_service(true));
+  const auto first = wait_for_events(2);
+  ASSERT_EQ(first.size(), 2u);
+  forget_events();
 
   // Act
   ASSERT_TRUE(call_service(true));
   const auto events = wait_for_events(2);
 
-  // Assert: a consumer pairs the two events by (client_gid, sequence_number).
+  // Assert: a consumer pairs the two events of a call by its sequence number.
   ASSERT_EQ(events.size(), 2u);
   EXPECT_EQ(events[0].info.sequence_number, events[1].info.sequence_number);
-  EXPECT_EQ(events[0].info.client_gid, events[1].info.client_gid);
-  const auto & gid = events[0].info.client_gid;
-  EXPECT_NE(std::count(gid.begin(), gid.end(), 0), static_cast<long>(gid.size()))
-    << "client_gid is all zeros, so the caller cannot be identified";
+  EXPECT_NE(events[0].info.sequence_number, first[0].info.sequence_number);
 }
 
 TEST_F(ServiceIntrospectionTest, MetadataPublishesEventsWithoutPayload)
@@ -266,14 +280,14 @@ TEST_F(ServiceIntrospectionTest, LoweringFromContentsToMetadataStopsIncludingThe
   EXPECT_TRUE(events[1].response.empty());
 }
 
-TEST_F(ServiceIntrospectionTest, ATransitionThatKeepsThePublisherKeepsTheClockItWasCreatedWith)
+TEST_F(ServiceIntrospectionTest, ChangingOnlyTheStateKeepsTheClockIntrospectionWasEnabledWith)
 {
   // Arrange: steady time runs from boot, so its stamps cannot be mistaken for system time.
   auto steady_clock = std::make_shared<rclcpp::Clock>(RCL_STEADY_TIME);
   service_->configure_introspection(
     steady_clock, rclcpp::ServicesQoS(), RCL_SERVICE_INTROSPECTION_METADATA);
 
-  // Act: this transition keeps the publisher, so this clock must be ignored.
+  // Act: this call only changes the state, so this clock must be ignored.
   service_->configure_introspection(
     std::make_shared<rclcpp::Clock>(RCL_SYSTEM_TIME), rclcpp::ServicesQoS(),
     RCL_SERVICE_INTROSPECTION_CONTENTS);
@@ -337,6 +351,63 @@ TEST_F(DeferredServiceIntrospectionTest, ADeferredResponsePublishesBothEvents)
   EXPECT_EQ(events[1].info.event_type, ServiceEventInfo::RESPONSE_SENT);
   ASSERT_EQ(events[1].response.size(), 1u);
   EXPECT_TRUE(events[1].response[0].success);
+}
+
+TEST_F(ServiceIntrospectionTest, ContentsPublishesRequestSentAndResponseReceivedWithPayload)
+{
+  // Arrange
+  set_client_introspection(RCL_SERVICE_INTROSPECTION_CONTENTS);
+
+  // Act
+  ASSERT_TRUE(call_service(true));
+  const auto events = wait_for_events(2);
+
+  // Assert: the two events are published from different threads, so look them up by type.
+  ASSERT_EQ(events.size(), 2u);
+  const auto * sent = find_event(events, ServiceEventInfo::REQUEST_SENT);
+  const auto * received = find_event(events, ServiceEventInfo::RESPONSE_RECEIVED);
+  ASSERT_NE(sent, nullptr);
+  ASSERT_NE(received, nullptr);
+
+  ASSERT_EQ(sent->request.size(), 1u);
+  EXPECT_TRUE(sent->request[0].data);
+  ASSERT_EQ(received->response.size(), 1u);
+  EXPECT_TRUE(received->response[0].success);
+  EXPECT_EQ(received->response[0].message, "ok");
+}
+
+TEST_F(ServiceIntrospectionTest, BothSidesTogetherCoverTheWholeExchange)
+{
+  // Arrange: two calls, so a constant cannot pass for a real sequence number.
+  set_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
+  set_client_introspection(RCL_SERVICE_INTROSPECTION_METADATA);
+  ASSERT_TRUE(call_service(true));
+  const auto first = wait_for_events(4);
+  ASSERT_EQ(first.size(), 4u);
+  forget_events();
+
+  // Act
+  ASSERT_TRUE(call_service(true));
+  const auto events = wait_for_events(4);
+
+  // Assert: one call, so the four events share the correlation key a consumer pairs them by.
+  ASSERT_EQ(events.size(), 4u);
+  for (const auto & event : events) {
+    EXPECT_EQ(event.info.sequence_number, events[0].info.sequence_number);
+    EXPECT_EQ(event.info.client_gid, events[0].info.client_gid);
+  }
+  EXPECT_NE(events[0].info.sequence_number, first[0].info.sequence_number);
+
+  std::vector<uint8_t> types;
+  types.reserve(events.size());
+  for (const auto & event : events) {
+    types.push_back(event.info.event_type);
+  }
+  std::sort(types.begin(), types.end());
+  EXPECT_EQ(
+    types, (std::vector<uint8_t>{
+             ServiceEventInfo::REQUEST_SENT, ServiceEventInfo::REQUEST_RECEIVED,
+             ServiceEventInfo::RESPONSE_SENT, ServiceEventInfo::RESPONSE_RECEIVED}));
 }
 
 #endif  // AGNOCAST_HAS_SERVICE_INTROSPECTION
