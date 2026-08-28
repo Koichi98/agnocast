@@ -833,8 +833,8 @@ int agnocast_ioctl_add_process(
     return -EINVAL;
   }
 
-  // Keeps the unlink daemon the only holder of AGNOCAST_DOMAIN_ID_NONE, which the domain-scoped
-  // counters rely on. The daemon's own domain_id is assigned below regardless of what it sends.
+  // AGNOCAST_DOMAIN_ID_NONE marks the daemon as belonging to no domain, so no other process may
+  // hold it. The daemon's own domain_id is assigned below regardless of what it sends.
   if (role != PROCESS_ROLE_UNLINK_DAEMON && domain_id == AGNOCAST_DOMAIN_ID_NONE) {
     dev_warn(
       agnocast_device, "Process (pid=%d) cannot use the reserved domain_id (%u). (%s)\n", pid,
@@ -2852,7 +2852,8 @@ static int get_process_num_in_domain_except_unlink_daemon(
 // Like get_process_num_in_domain_except_unlink_daemon() but also excludes processes that have
 // exited and are still pending cleanup. The discovery agent tracks live endpoints, so an exited
 // entry that lingers until the unlink daemon drains it must not gate the agent's spawn or
-// self-exit.
+// self-exit. Its domain_id reaches this unvalidated from user space, so the daemon has to be
+// excluded by role: a caller passing AGNOCAST_DOMAIN_ID_NONE would otherwise match it.
 static int get_alive_process_num_in_domain_except_unlink_daemon(
   const struct ipc_namespace * ipc_ns, const uint32_t domain_id)
 {
