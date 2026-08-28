@@ -802,7 +802,9 @@ static bool has_alive_bridge_manager(const struct ipc_namespace * ipc_ns, const 
   return false;
 }
 
-// Namespace-scoped, unlike the bridge manager.
+// Namespace-scoped, unlike the bridge manager. Liveness lags the exit worker: a daemon killed
+// abruptly still reads as alive until the worker drains its pid, so a process registering in that
+// window is not told to spawn a replacement.
 static bool has_alive_unlink_daemon(const struct ipc_namespace * ipc_ns)
 {
   struct process_info * proc_info;
