@@ -240,6 +240,44 @@ void test_case_add_process_unlink_daemon_removed_on_death(struct kunit * test)
   KUNIT_EXPECT_EQ(test, agnocast_ioctl_get_exit_process(current->nsproxy->ipc_ns, &exit_args), -1);
 }
 
+// poll_for_unlink()'s drain loop discards the flag from a commit that returned a pid, so
+// deregistering there would leave the daemon polling on as an unregistered ghost.
+void test_case_add_process_unlink_daemon_stays_registered_while_draining(struct kunit * test)
+{
+  // Arrange
+  KUNIT_ASSERT_EQ(test, agnocast_get_alive_proc_num(), 0);
+  const pid_t app_pid = pid++;
+  union ioctl_add_process_args app_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_process(
+      app_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &app_args),
+    0);
+  const pid_t daemon_pid = pid++;
+  union ioctl_add_process_args daemon_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_process(
+      daemon_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_UNLINK_DAEMON, 0, &daemon_args),
+    0);
+  agnocast_process_exit_cleanup(app_pid);
+
+  // Act
+  bool daemon_should_exit = false;
+  agnocast_commit_exit_process(current->nsproxy->ipc_ns, app_pid, daemon_pid, &daemon_should_exit);
+
+  // Assert
+  KUNIT_EXPECT_TRUE(test, daemon_should_exit);
+  KUNIT_EXPECT_EQ(test, agnocast_get_alive_proc_num(), 1);
+  union ioctl_add_process_args next_args;
+  KUNIT_EXPECT_EQ(
+    test,
+    agnocast_ioctl_add_process(
+      pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &next_args),
+    0);
+  KUNIT_EXPECT_TRUE(test, next_args.ret_unlink_daemon_exist);
+}
+
 // A process starting between the exit decision and the daemon's death spawns a replacement.
 void test_case_add_process_unlink_daemon_deregisters_when_told_to_exit(struct kunit * test)
 {
