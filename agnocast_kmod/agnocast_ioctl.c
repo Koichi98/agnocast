@@ -811,9 +811,7 @@ static bool has_alive_unlink_daemon(const struct ipc_namespace * ipc_ns)
   int bkt;
   hash_for_each(proc_info_htable, bkt, proc_info, node)
   {
-    if (
-      ipc_eq(ipc_ns, proc_info->ipc_ns) && proc_info->role == PROCESS_ROLE_UNLINK_DAEMON &&
-      !proc_info->exited) {
+    if (ipc_eq(ipc_ns, proc_info->ipc_ns) && proc_info->role == PROCESS_ROLE_UNLINK_DAEMON) {
       return true;
     }
   }
