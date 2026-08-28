@@ -61,6 +61,9 @@ union ioctl_get_node_names_args {
 };
 #pragma GCC diagnostic pop
 
+// Mirrors AGNOCAST_DOMAIN_ID_NONE in the kernel module.
+#define AGNOCAST_DOMAIN_ID_NONE UINT32_MAX
+
 // Mirrors enum process_role in the kernel module.
 enum process_role {
   PROCESS_ROLE_APPLICATION = 0,

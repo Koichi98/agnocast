@@ -827,12 +827,18 @@ int agnocast_ioctl_add_process(
   if (
     role != PROCESS_ROLE_APPLICATION && role != PROCESS_ROLE_BRIDGE_MANAGER &&
     role != PROCESS_ROLE_UNLINK_DAEMON) {
+    dev_warn(
+      agnocast_device, "Process (pid=%d) has an unknown role (%u). (%s)\n", pid, (uint32_t)role,
+      __func__);
     return -EINVAL;
   }
 
   // Keeps the unlink daemon the only holder of AGNOCAST_DOMAIN_ID_NONE, which the domain-scoped
   // counters rely on. The daemon's own domain_id is assigned below regardless of what it sends.
   if (role != PROCESS_ROLE_UNLINK_DAEMON && domain_id == AGNOCAST_DOMAIN_ID_NONE) {
+    dev_warn(
+      agnocast_device, "Process (pid=%d) cannot use the reserved domain_id (%u). (%s)\n", pid,
+      domain_id, __func__);
     return -EINVAL;
   }
 

@@ -554,6 +554,11 @@ struct initialize_agnocast_result initialize_agnocast(
 
   // add_process_args is a union, so ADD_PROCESS overwrites domain_id with its ret_* fields.
   const uint32_t domain_id = get_ros_domain_id();
+  if (domain_id == AGNOCAST_DOMAIN_ID_NONE) {
+    RCLCPP_ERROR(logger, "ROS_DOMAIN_ID=%u is reserved by Agnocast", domain_id);
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
+  }
 
   union ioctl_add_process_args add_process_args = {};
   add_process_args.role = PROCESS_ROLE_APPLICATION;
