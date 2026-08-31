@@ -1138,25 +1138,6 @@ unlock_only_global:
   return ret;
 }
 
-// Find the first entry with entry_id >= target_entry_id
-static struct rb_node * find_first_entry_ge(struct rb_root * root, const int64_t target_entry_id)
-{
-  struct rb_node ** curr = &(root->rb_node);
-  struct rb_node * candidate = NULL;
-
-  while (*curr) {
-    const struct entry_node * en = container_of(*curr, struct entry_node, node);
-    if (en->entry_id >= target_entry_id) {
-      candidate = *curr;
-      curr = &((*curr)->rb_left);
-    } else {
-      curr = &((*curr)->rb_right);
-    }
-  }
-
-  return candidate;
-}
-
 // Whether `sub_info` may be handed an entry published by `pub_info`.
 static bool is_entry_deliverable(
   const struct topic_wrapper * wrapper, const struct subscriber_info * sub_info,
@@ -1192,10 +1173,10 @@ static int receive_msg_core(
     return 0;
   }
 
-  // start_entry_id is the qos_depth-th newest entry the subscriber can be handed, or its oldest
-  // unreceived entry when fewer than qos_depth of them are deliverable.
+  // node ends up on the qos_depth-th newest entry the subscriber can be handed, on its oldest
+  // unreceived deliverable entry when fewer than qos_depth of them are, and NULL when none are.
   const int64_t oldest_wanted_entry_id = sub_info->latest_received_entry_id + 1;
-  int64_t start_entry_id = oldest_wanted_entry_id;
+  struct rb_node * node = NULL;
   uint32_t deliverable_num = 0;
   for (struct rb_node * back = newest_node; back; back = rb_prev(back)) {
     const struct entry_node * en = container_of(back, struct entry_node, node);
@@ -1206,13 +1187,11 @@ static int receive_msg_core(
     if (!pub_info || !is_entry_deliverable(wrapper, sub_info, pub_info)) {
       continue;
     }
-    start_entry_id = en->entry_id;
+    node = back;
     if (++deliverable_num >= sub_info->qos_depth) {
       break;
     }
   }
-
-  struct rb_node * node = find_first_entry_ge(&wrapper->topic->entries, start_entry_id);
 
   for (; node; node = rb_next(node)) {
     struct entry_node * en = container_of(node, struct entry_node, node);
