@@ -1157,6 +1157,25 @@ static struct rb_node * find_first_entry_ge(struct rb_root * root, const int64_t
   return candidate;
 }
 
+// Whether `sub_info` may be handed an entry published by `pub_info`.
+static bool is_entry_deliverable(
+  const struct topic_wrapper * wrapper, const struct subscriber_info * sub_info,
+  const struct publisher_info * pub_info)
+{
+  const struct process_info * proc_info = agnocast_find_process_info(pub_info->pid);
+  if (!proc_info || proc_info->exited) {
+    return false;
+  }
+
+  if (sub_info->ignore_local_publications && (sub_info->pid == pub_info->pid)) {
+    return false;
+  }
+
+  return domain_delivery_allowed(
+    wrapper->topic, pub_info->domain_id, pub_info->is_bridge, sub_info->domain_id,
+    sub_info->is_bridge);
+}
+
 static int receive_msg_core(
   struct topic_wrapper * wrapper, struct subscriber_info * sub_info,
   const topic_local_id_t subscriber_id, union ioctl_receive_msg_args * ioctl_ret)
@@ -1169,14 +1188,25 @@ static int receive_msg_core(
     return 0;
   }
 
-  const struct entry_node * newest_en = container_of(newest_node, struct entry_node, node);
-  const int64_t newest_entry_id = newest_en->entry_id;
-
-  // Calculate start_entry_id = max(newest - qos_depth + 1, latest_received_entry_id + 1)
-  const int64_t latest_received_entry_id = sub_info->latest_received_entry_id;
-  const int64_t qos_start = newest_entry_id - (int64_t)sub_info->qos_depth + 1;
-  const int64_t start_entry_id =
-    (qos_start > latest_received_entry_id) ? qos_start : (latest_received_entry_id + 1);
+  // start_entry_id is the qos_depth-th newest entry the subscriber can be handed, or its oldest
+  // unreceived entry when fewer than qos_depth of them are deliverable.
+  const int64_t oldest_wanted_entry_id = sub_info->latest_received_entry_id + 1;
+  int64_t start_entry_id = oldest_wanted_entry_id;
+  uint32_t deliverable_num = 0;
+  for (struct rb_node * back = newest_node; back; back = rb_prev(back)) {
+    const struct entry_node * en = container_of(back, struct entry_node, node);
+    if (en->entry_id < oldest_wanted_entry_id) {
+      break;
+    }
+    const struct publisher_info * pub_info = find_publisher_info(wrapper, en->publisher_id);
+    if (!pub_info || !is_entry_deliverable(wrapper, sub_info, pub_info)) {
+      continue;
+    }
+    start_entry_id = en->entry_id;
+    if (++deliverable_num >= sub_info->qos_depth) {
+      break;
+    }
+  }
 
   struct rb_node * node = find_first_entry_ge(&wrapper->topic->entries, start_entry_id);
 
@@ -1198,18 +1228,7 @@ static int receive_msg_core(
       return -ENODATA;
     }
 
-    const struct process_info * proc_info = agnocast_find_process_info(pub_info->pid);
-    if (!proc_info || proc_info->exited) {
-      continue;
-    }
-
-    if (sub_info->ignore_local_publications && (sub_info->pid == pub_info->pid)) {
-      continue;
-    }
-
-    if (!domain_delivery_allowed(
-          wrapper->topic, pub_info->domain_id, pub_info->is_bridge, sub_info->domain_id,
-          sub_info->is_bridge)) {
+    if (!is_entry_deliverable(wrapper, sub_info, pub_info)) {
       continue;
     }
 

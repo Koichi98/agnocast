@@ -662,6 +662,63 @@ void test_case_receive_msg_transient_publish_num_smaller_than_sub_qos_smaller_th
 // ================================================
 // Tests for set_publisher_shm_info
 
+// qos_depth counts messages the subscriber can be handed: an entry it has to discard (here its
+// own, under ignore_local_publications) does not use up a slot, even as the newest on the topic.
+void test_case_receive_msg_discarded_message_does_not_consume_qos_depth(struct kunit * test)
+{
+  // Arrange
+  const bool is_transient_local = true;
+  const uint32_t qos_depth = 1;
+  const pid_t subscriber_pid = 2000;
+
+  topic_local_id_t remote_publisher_id;
+  uint64_t remote_ret_addr;
+  setup_one_publisher(
+    test, 1000, qos_depth, is_transient_local, &remote_publisher_id, &remote_ret_addr);
+  union ioctl_publish_msg_args remote_publish_ret;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_publish_msg(
+      TOPIC_NAME, current->nsproxy->ipc_ns, remote_publisher_id, remote_ret_addr,
+      &remote_publish_ret),
+    0);
+
+  // Published after the remote one, from the subscriber's own process, so it is the newest entry
+  // and the one the subscriber has to skip.
+  topic_local_id_t local_publisher_id;
+  uint64_t local_ret_addr;
+  setup_one_publisher(
+    test, subscriber_pid, qos_depth, is_transient_local, &local_publisher_id, &local_ret_addr);
+  union ioctl_publish_msg_args local_publish_ret;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_publish_msg(
+      TOPIC_NAME, current->nsproxy->ipc_ns, local_publisher_id, local_ret_addr, &local_publish_ret),
+    0);
+
+  union ioctl_add_subscriber_args add_subscriber_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_subscriber(
+      TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
+      is_transient_local, IS_RELIABLE, IS_TAKE_SUB, true /* ignore_local_publications */, IS_BRIDGE,
+      -1, &add_subscriber_args),
+    0);
+
+  union ioctl_receive_msg_args ioctl_receive_msg_ret;
+  struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
+
+  // Act
+  int ret = agnocast_ioctl_receive_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, add_subscriber_args.ret_id, pub_shm_infos,
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_receive_msg_ret);
+
+  // Assert
+  KUNIT_EXPECT_EQ(test, ret, 0);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_num, 1);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_ids[0], remote_publish_ret.ret_entry_id);
+}
+
 void test_case_receive_msg_one_new_pub(struct kunit * test)
 {
   // Arrange
