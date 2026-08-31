@@ -1188,6 +1188,10 @@ static int receive_msg_core(
     return 0;
   }
 
+  if (sub_info->qos_depth == 0) {
+    return 0;
+  }
+
   // start_entry_id is the qos_depth-th newest entry the subscriber can be handed, or its oldest
   // unreceived entry when fewer than qos_depth of them are deliverable.
   const int64_t oldest_wanted_entry_id = sub_info->latest_received_entry_id + 1;
