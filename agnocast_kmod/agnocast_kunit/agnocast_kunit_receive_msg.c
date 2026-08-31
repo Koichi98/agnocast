@@ -830,9 +830,6 @@ void test_case_receive_msg_no_call_again_when_only_undeliverable_entries_remain(
     remote_newest_entry_id);
 }
 
-// ================================================
-// Tests for set_publisher_shm_info
-
 // qos_depth counts messages the subscriber can be handed: an entry it has to discard (here its
 // own, under ignore_local_publications) does not use up a slot, even as the newest on the topic.
 void test_case_receive_msg_discarded_message_does_not_consume_qos_depth(struct kunit * test)
@@ -867,13 +864,14 @@ void test_case_receive_msg_discarded_message_does_not_consume_qos_depth(struct k
       TOPIC_NAME, current->nsproxy->ipc_ns, local_publisher_id, local_ret_addr, &local_publish_ret),
     0);
 
+  const bool ignore_local_publications = true;
   union ioctl_add_subscriber_args add_subscriber_args;
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_subscriber(
       TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
-      is_transient_local, IS_RELIABLE, IS_TAKE_SUB, true /* ignore_local_publications */, IS_BRIDGE,
-      -1, &add_subscriber_args),
+      is_transient_local, IS_RELIABLE, IS_TAKE_SUB, ignore_local_publications, IS_BRIDGE, -1,
+      &add_subscriber_args),
     0);
 
   union ioctl_receive_msg_args ioctl_receive_msg_ret;
@@ -888,7 +886,15 @@ void test_case_receive_msg_discarded_message_does_not_consume_qos_depth(struct k
   KUNIT_EXPECT_EQ(test, ret, 0);
   KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_num, 1);
   KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_ids[0], remote_publish_ret.ret_entry_id);
+  KUNIT_EXPECT_EQ(
+    test,
+    agnocast_get_latest_received_entry_id(
+      TOPIC_NAME, current->nsproxy->ipc_ns, add_subscriber_args.ret_id),
+    remote_publish_ret.ret_entry_id);
 }
+
+// ================================================
+// Tests for set_publisher_shm_info
 
 void test_case_receive_msg_one_new_pub(struct kunit * test)
 {
