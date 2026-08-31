@@ -1377,29 +1377,12 @@ int agnocast_ioctl_take_msg(
       break;  // Never take any messages that are older than the most recently received
     }
 
-    const struct publisher_info * pub_info = find_publisher_info(wrapper, en->publisher_id);
-    if (!pub_info) {
-      dev_warn(
-        agnocast_device,
-        "Unreachable: corresponding publisher(id=%d) not found for entry(id=%lld) in "
-        "topic(topic_name=%s). (%s)\n",
-        en->publisher_id, en->entry_id, topic_name, __func__);
-      ret = -ENODATA;
+    const int deliverable = is_entry_deliverable(wrapper, sub_info, en);
+    if (deliverable < 0) {
+      ret = deliverable;
       goto unlock_all;
     }
-
-    const struct process_info * proc_info = agnocast_find_process_info(pub_info->pid);
-    if (!proc_info || proc_info->exited) {
-      continue;
-    }
-
-    if (sub_info->ignore_local_publications && (sub_info->pid == pub_info->pid)) {
-      continue;
-    }
-
-    if (!domain_delivery_allowed(
-          wrapper->topic, pub_info->domain_id, pub_info->is_bridge, sub_info->domain_id,
-          sub_info->is_bridge)) {
+    if (deliverable == 0) {
       continue;
     }
 
