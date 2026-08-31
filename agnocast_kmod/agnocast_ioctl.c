@@ -1138,18 +1138,29 @@ unlock_only_global:
   return ret;
 }
 
-// Whether `sub_info` may be handed an entry published by `pub_info`.
-static bool is_entry_deliverable(
+// Whether `sub_info` may be handed `en`: 1 when it may, 0 when the entry has to be skipped,
+// -ENODATA when the entry's publisher is no longer in the topic.
+static int is_entry_deliverable(
   const struct topic_wrapper * wrapper, const struct subscriber_info * sub_info,
-  const struct publisher_info * pub_info)
+  const struct entry_node * en)
 {
+  const struct publisher_info * pub_info = find_publisher_info(wrapper, en->publisher_id);
+  if (!pub_info) {
+    dev_warn(
+      agnocast_device,
+      "Unreachable: corresponding publisher(id=%d) not found for entry(id=%lld) in "
+      "topic(topic_name=%s). (%s)\n",
+      en->publisher_id, en->entry_id, wrapper->key, __func__);
+    return -ENODATA;
+  }
+
   const struct process_info * proc_info = agnocast_find_process_info(pub_info->pid);
   if (!proc_info || proc_info->exited) {
-    return false;
+    return 0;
   }
 
   if (sub_info->ignore_local_publications && (sub_info->pid == pub_info->pid)) {
-    return false;
+    return 0;
   }
 
   return domain_delivery_allowed(
@@ -1183,10 +1194,14 @@ static int receive_msg_core(
     if (en->entry_id < oldest_wanted_entry_id) {
       break;
     }
-    const struct publisher_info * pub_info = find_publisher_info(wrapper, en->publisher_id);
-    if (!pub_info || !is_entry_deliverable(wrapper, sub_info, pub_info)) {
+    int ret = is_entry_deliverable(wrapper, sub_info, en);
+    if (ret < 0) {
+      return ret;
+    }
+    if (ret == 0) {
       continue;
     }
+
     node = back;
     if (++deliverable_num >= sub_info->qos_depth) {
       break;
@@ -1201,21 +1216,15 @@ static int receive_msg_core(
       break;
     }
 
-    const struct publisher_info * pub_info = find_publisher_info(wrapper, en->publisher_id);
-    if (!pub_info) {
-      dev_warn(
-        agnocast_device,
-        "Unreachable: corresponding publisher(id=%d) not found for entry(id=%lld) in "
-        "topic(topic_name=%s). (%s)\n",
-        en->publisher_id, en->entry_id, wrapper->key, __func__);
-      return -ENODATA;
+    int ret = is_entry_deliverable(wrapper, sub_info, en);
+    if (ret < 0) {
+      return ret;
     }
-
-    if (!is_entry_deliverable(wrapper, sub_info, pub_info)) {
+    if (ret == 0) {
       continue;
     }
 
-    int ret = add_subscriber_reference(en, subscriber_id, false);
+    ret = add_subscriber_reference(en, subscriber_id, false);
     if (ret < 0) {
       return ret;
     }
