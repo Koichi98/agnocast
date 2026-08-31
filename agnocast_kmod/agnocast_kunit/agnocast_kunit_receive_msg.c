@@ -659,6 +659,71 @@ void test_case_receive_msg_transient_publish_num_smaller_than_sub_qos_smaller_th
   KUNIT_EXPECT_EQ(test, pub_shm_infos[0].shm_addr, ret_addr);
 }
 
+// qos_depth counts the messages the topic holds, not a span of entry_ids. entry_id is topic-wide
+// while release_msgs_to_meet_depth() drops one publisher's oldest entries and leaves the others
+// alone, so the ids a topic holds have gaps in them, and a depth of 3 still reaches 3 messages
+// across those gaps.
+void test_case_receive_msg_qos_depth_counts_entries_not_entry_ids(struct kunit * test)
+{
+  // Arrange
+  const bool is_transient_local = true;
+
+  topic_local_id_t publisher_id1;
+  uint64_t ret_addr1;
+  const uint32_t publisher1_qos_depth = 1;
+  setup_one_publisher(
+    test, 1000, publisher1_qos_depth, is_transient_local, &publisher_id1, &ret_addr1);
+  union ioctl_publish_msg_args publish_msg_ret;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_publish_msg(
+      TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id1, ret_addr1, &publish_msg_ret),
+    0);
+  const int64_t publisher1_entry_id = publish_msg_ret.ret_entry_id;
+
+  // Publishes once more than its depth, so its oldest entry is released and that id is left as a
+  // hole above the entry the other publisher holds.
+  topic_local_id_t publisher_id2;
+  uint64_t ret_addr2;
+  const uint32_t publisher2_qos_depth = 2;
+  setup_one_publisher(
+    test, 1001, publisher2_qos_depth, is_transient_local, &publisher_id2, &ret_addr2);
+  int64_t publisher2_older_entry_id = -1;
+  int64_t publisher2_newer_entry_id = -1;
+  for (uint32_t i = 0; i < publisher2_qos_depth + 1; i++) {
+    KUNIT_ASSERT_EQ(
+      test,
+      agnocast_ioctl_publish_msg(
+        TOPIC_NAME, current->nsproxy->ipc_ns, publisher_id2, ret_addr2 + i, &publish_msg_ret),
+      0);
+    publisher2_older_entry_id = publisher2_newer_entry_id;
+    publisher2_newer_entry_id = publish_msg_ret.ret_entry_id;
+  }
+
+  topic_local_id_t subscriber_id;
+  const uint32_t subscriber_qos_depth = 3;
+  setup_one_subscriber(test, 2000, subscriber_qos_depth, is_transient_local, &subscriber_id);
+
+  union ioctl_receive_msg_args ioctl_receive_msg_ret;
+  struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
+
+  // Act
+  int ret = agnocast_ioctl_receive_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id, pub_shm_infos, KUNIT_PUB_SHM_BUF_SIZE,
+    &ioctl_receive_msg_ret);
+
+  // Assert
+  KUNIT_EXPECT_EQ(test, ret, 0);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_num, 3);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_ids[0], publisher1_entry_id);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_ids[1], publisher2_older_entry_id);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_ids[2], publisher2_newer_entry_id);
+  KUNIT_EXPECT_EQ(
+    test,
+    agnocast_get_latest_received_entry_id(TOPIC_NAME, current->nsproxy->ipc_ns, subscriber_id),
+    publisher2_newer_entry_id);
+}
+
 // ================================================
 // Tests for set_publisher_shm_info
 
