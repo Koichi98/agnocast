@@ -1140,6 +1140,8 @@ unlock_only_global:
 
 // Whether `sub_info` may be handed `en`: 1 when it may, 0 when the entry has to be skipped,
 // -ENODATA when the entry's publisher is no longer in the topic.
+// Caller holds global_htables_rwsem (read), which keeps pub_info and proc_info alive, and
+// wrapper->topic->rwsem (read), which keeps `en` alive.
 static int is_entry_deliverable(
   const struct topic_wrapper * wrapper, const struct subscriber_info * sub_info,
   const struct entry_node * en)
