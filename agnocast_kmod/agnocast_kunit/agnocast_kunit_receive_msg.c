@@ -766,6 +766,70 @@ void test_case_receive_msg_zero_qos_depth_receives_nothing(struct kunit * test)
   KUNIT_EXPECT_EQ(test, pub_shm_infos[0].shm_addr, ret_addr);
 }
 
+void test_case_receive_msg_no_call_again_when_only_undeliverable_entries_remain(struct kunit * test)
+{
+  // Arrange
+  const bool is_transient_local = true;
+  const uint32_t qos_depth = MAX_RECEIVE_NUM;
+  const pid_t subscriber_pid = 2000;
+
+  topic_local_id_t remote_publisher_id;
+  uint64_t remote_ret_addr;
+  setup_one_publisher(
+    test, 1000, qos_depth, is_transient_local, &remote_publisher_id, &remote_ret_addr);
+  union ioctl_publish_msg_args publish_msg_ret;
+  int64_t remote_newest_entry_id = -1;
+  for (uint32_t i = 0; i < qos_depth; i++) {
+    KUNIT_ASSERT_EQ(
+      test,
+      agnocast_ioctl_publish_msg(
+        TOPIC_NAME, current->nsproxy->ipc_ns, remote_publisher_id, remote_ret_addr + i,
+        &publish_msg_ret),
+      0);
+    remote_newest_entry_id = publish_msg_ret.ret_entry_id;
+  }
+
+  // The newest entry belongs to the subscriber's own process, so the walk that delivers the
+  // MAX_RECEIVE_NUM entries below it ends on one it has to skip.
+  topic_local_id_t local_publisher_id;
+  uint64_t local_ret_addr;
+  setup_one_publisher(
+    test, subscriber_pid, 1, is_transient_local, &local_publisher_id, &local_ret_addr);
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_publish_msg(
+      TOPIC_NAME, current->nsproxy->ipc_ns, local_publisher_id, local_ret_addr, &publish_msg_ret),
+    0);
+
+  const bool ignore_local_publications = true;
+  union ioctl_add_subscriber_args add_subscriber_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_subscriber(
+      TOPIC_NAME, current->nsproxy->ipc_ns, NODE_NAME, subscriber_pid, qos_depth,
+      is_transient_local, IS_RELIABLE, IS_TAKE_SUB, ignore_local_publications, IS_BRIDGE, -1,
+      &add_subscriber_args),
+    0);
+
+  union ioctl_receive_msg_args ioctl_receive_msg_ret;
+  struct publisher_shm_info pub_shm_infos[KUNIT_PUB_SHM_BUF_SIZE] = {0};
+
+  // Act
+  int ret = agnocast_ioctl_receive_msg(
+    TOPIC_NAME, current->nsproxy->ipc_ns, add_subscriber_args.ret_id, pub_shm_infos,
+    KUNIT_PUB_SHM_BUF_SIZE, &ioctl_receive_msg_ret);
+
+  // Assert
+  KUNIT_EXPECT_EQ(test, ret, 0);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_entry_num, MAX_RECEIVE_NUM);
+  KUNIT_EXPECT_EQ(test, ioctl_receive_msg_ret.ret_call_again, false);
+  KUNIT_EXPECT_EQ(
+    test,
+    agnocast_get_latest_received_entry_id(
+      TOPIC_NAME, current->nsproxy->ipc_ns, add_subscriber_args.ret_id),
+    remote_newest_entry_id);
+}
+
 // ================================================
 // Tests for set_publisher_shm_info
 

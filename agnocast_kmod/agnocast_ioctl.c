@@ -1197,7 +1197,7 @@ static int receive_msg_core(
     struct entry_node * en = container_of(node, struct entry_node, node);
 
     if (ioctl_ret->ret_entry_num == MAX_RECEIVE_NUM) {
-      ioctl_ret->ret_call_again = true;
+      ioctl_ret->ret_call_again = ioctl_ret->ret_entry_num < deliverable_num;
       break;
     }
 
