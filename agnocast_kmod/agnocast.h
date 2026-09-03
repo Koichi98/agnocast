@@ -55,19 +55,45 @@ enum process_role {
   PROCESS_ROLE_UNLINK_DAEMON = 2,
 };
 
+// The daemons a process may be granted the exclusive right to fork.
+enum agnocast_spawn_kind {
+  AGNOCAST_SPAWN_UNLINK_DAEMON = 0,
+  AGNOCAST_SPAWN_BRIDGE_MANAGER = 1,
+  AGNOCAST_SPAWN_DISCOVERY_AGENT = 2,
+  AGNOCAST_SPAWN_KIND_NUM,
+};
+
+#define AGNOCAST_SPAWN_MASK(kind) (1u << (kind))
+#define AGNOCAST_SPAWN_MASK_ALL (AGNOCAST_SPAWN_MASK(AGNOCAST_SPAWN_KIND_NUM) - 1u)
+
+// Defined in agnocast_internal.h; opaque to everyone else.
+struct spawn_grant;
+
+struct agnocast_spawn_grants
+{
+  uint32_t requested_mask;                                // in
+  struct spawn_grant * granted[AGNOCAST_SPAWN_KIND_NUM];  // out, NULL == not granted
+};
+
 union ioctl_add_process_args {
   struct
   {
     uint32_t role;       // enum process_role
     uint32_t domain_id;  // The process's ROS_DOMAIN_ID (0 if unset).
+    // The daemons this caller is willing to fork, so a granted right is never one it will not use.
+    uint32_t spawn_request_mask;
   };
   struct
   {
     uint64_t ret_addr;
     uint64_t ret_shm_size;
-    bool ret_unlink_daemon_exist;
-    bool ret_bridge_daemon_exist;
-    bool ret_discovery_agent_exist;
+    // The exclusive right to fork this daemon, or -1. The forked child inherits the fd, and the
+    // right comes back when its last holder closes it or dies.
+    int32_t ret_unlink_daemon_spawn_fd;
+    int32_t ret_bridge_daemon_spawn_fd;
+    int32_t ret_discovery_agent_spawn_fd;
+    // Daemon roles only: one is already registered, so stand down.
+    bool ret_role_already_taken;
   };
 };
 
@@ -463,9 +489,15 @@ int agnocast_ioctl_take_msg(
   struct publisher_shm_info * pub_shm_infos, uint32_t pub_shm_infos_size,
   union ioctl_take_msg_args * ioctl_ret);
 
+// Hands the right back and frees the grant. A no-op on a right the daemon already settled.
+void agnocast_spawn_grant_release(struct spawn_grant * grant);
+
+// The caller owns every right returned in spawn->granted until it wraps it in a file or releases
+// it. spawn may be NULL to request none.
 int agnocast_ioctl_add_process(
   const pid_t pid, const struct ipc_namespace * ipc_ns, const enum process_role role,
-  const uint32_t domain_id, union ioctl_add_process_args * ioctl_ret);
+  const uint32_t domain_id, struct agnocast_spawn_grants * spawn,
+  union ioctl_add_process_args * ioctl_ret);
 
 int agnocast_ioctl_get_subscriber_num(
   const char * topic_name, const struct ipc_namespace * ipc_ns, const pid_t pid,
@@ -574,6 +606,12 @@ int agnocast_increment_message_entry_rc(
   const int64_t entry_id);
 int agnocast_get_alive_proc_num(void);
 int agnocast_get_discovery_agent_num(void);
+bool agnocast_daemon_alive(
+  const enum agnocast_spawn_kind kind, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_id);
+bool agnocast_spawn_grant_outstanding(
+  const enum agnocast_spawn_kind kind, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_id);
 bool agnocast_is_proc_exited(const pid_t pid);
 int agnocast_get_topic_entries_num(const char * topic_name, const struct ipc_namespace * ipc_ns);
 int64_t agnocast_get_latest_received_entry_id(

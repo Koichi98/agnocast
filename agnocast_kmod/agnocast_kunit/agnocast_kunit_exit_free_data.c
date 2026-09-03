@@ -20,7 +20,7 @@ static void setup_one_process(struct kunit * test, const pid_t pid)
 {
   union ioctl_add_process_args add_process_args;
   int ret = agnocast_ioctl_add_process(
-    pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &add_process_args);
+    pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL, &add_process_args);
 
   KUNIT_ASSERT_EQ(test, ret, 0);
 }
@@ -61,4 +61,29 @@ void test_case_exit_free_data_releases_notify_context(struct kunit * test)
     KUNIT_EXPECT_EQ(test, slot->put_count, 1);
   }
   KUNIT_EXPECT_EQ(test, agnocast_kunit_eventfd_outstanding(), (int64_t)0);
+}
+
+// A grant is normally freed by its file's ->release, so unload is the one path that has to drain
+// the list itself. In the KUnit build it is also what keeps one test case from leaking a grant
+// into the next.
+void test_case_exit_free_data_drains_outstanding_spawn_grants(struct kunit * test)
+{
+  // Arrange
+  struct agnocast_spawn_grants spawn = {
+    .requested_mask = AGNOCAST_SPAWN_MASK(AGNOCAST_SPAWN_UNLINK_DAEMON)};
+  union ioctl_add_process_args add_process_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_process(
+      PID_BASE, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &spawn, &add_process_args),
+    0);
+  KUNIT_ASSERT_NOT_NULL(test, spawn.granted[AGNOCAST_SPAWN_UNLINK_DAEMON]);
+
+  // Act
+  agnocast_exit_free_data();
+
+  // Assert: the grant is freed, so it must not be dereferenced again from here.
+  KUNIT_EXPECT_FALSE(
+    test, agnocast_spawn_grant_outstanding(
+            AGNOCAST_SPAWN_UNLINK_DAEMON, current->nsproxy->ipc_ns, AGNOCAST_DOMAIN_ID_NONE));
 }

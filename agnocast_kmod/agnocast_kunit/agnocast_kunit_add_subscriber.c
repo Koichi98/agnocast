@@ -19,7 +19,7 @@ static void setup_process(struct kunit * test, const pid_t pid)
 {
   union ioctl_add_process_args add_process_args;
   int ret = agnocast_ioctl_add_process(
-    pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &add_process_args);
+    pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL, &add_process_args);
   KUNIT_ASSERT_EQ(test, ret, 0);
 }
 
@@ -27,7 +27,7 @@ static void setup_process_domain(struct kunit * test, const pid_t pid, const uin
 {
   union ioctl_add_process_args add_process_args;
   int ret = agnocast_ioctl_add_process(
-    pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id, &add_process_args);
+    pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id, NULL, &add_process_args);
   KUNIT_ASSERT_EQ(test, ret, 0);
 }
 

@@ -4,8 +4,10 @@
 #include "agnocast.h"
 #include "agnocast_memory_allocator.h"
 
+#include <linux/anon_inodes.h>
 #include <linux/device.h>
 #include <linux/eventfd.h>
+#include <linux/file.h>  // fput, fd_install, get_unused_fd_flags
 #include <linux/fs.h>
 #include <linux/hashtable.h>
 #include <linux/kernel.h>
@@ -32,9 +34,12 @@ extern struct device * agnocast_device;
 //   2. topic->rwsem           (per-topic, in struct topic_struct)
 //   3. mempool_lock           (agnocast_memory_allocator.c)
 //
-// Global rwsem for hashtables (topic_hashtable, proc_info_htable, bridge_htable)
+// Global rwsem for hashtables (topic_hashtable, proc_info_htable, bridge_htable) and
+// spawn_grant_list
 // - Read lock (down_read): when searching hashtables and operating within a topic
 // - Write lock (down_write): when adding/removing entries from hashtables
+// The spawn-right file's ->release takes it from __fput context and nothing else, so that path
+// cannot invert the order.
 extern struct rw_semaphore global_htables_rwsem;
 
 // =========================================
@@ -266,6 +271,22 @@ struct discovery_agent_info
 };
 
 extern DECLARE_HASHTABLE(discovery_agent_htable, DISCOVERY_AGENT_HASH_BITS);
+
+// The exclusive right to fork one daemon. Handed out as an anon_inode fd because fork() passes it
+// to the child and the file refcount returns it through ->release however the child dies, which is
+// the only way to notice a child that dies before registering: sched_process_exit filters on
+// is_agnocast_pid(). It therefore covers just the fork()-to-registration window, after which
+// proc_info_htable is authoritative and the grant is settled -- unlinked from spawn_grant_list,
+// which is a list because only a handful of entries are ever outstanding at once.
+struct spawn_grant
+{
+  enum agnocast_spawn_kind kind;
+  const struct ipc_namespace * ipc_ns;
+  uint32_t domain_id;  // AGNOCAST_DOMAIN_ID_NONE for the unlink daemon, which is namespace-scoped
+  struct list_head node;
+};
+
+extern struct list_head spawn_grant_list;
 
 // Both require global_htables_rwsem held (read for find, write for remove).
 struct discovery_agent_info * agnocast_find_discovery_agent(

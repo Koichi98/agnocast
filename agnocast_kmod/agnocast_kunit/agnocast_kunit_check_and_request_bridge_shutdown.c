@@ -15,7 +15,7 @@ void test_case_check_and_request_bridge_shutdown_when_alone(struct kunit * test)
   pid_t bridge_pid = pid_carbs++;
   union ioctl_add_process_args bridge_args = {};
   int ret = agnocast_ioctl_add_process(
-    bridge_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_BRIDGE_MANAGER, 0, &bridge_args);
+    bridge_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_BRIDGE_MANAGER, 0, NULL, &bridge_args);
   KUNIT_EXPECT_EQ(test, ret, 0);
 
   // Check shutdown - only bridge manager exists (process_num == 1)
@@ -29,9 +29,10 @@ void test_case_check_and_request_bridge_shutdown_when_alone(struct kunit * test)
   pid_t normal_pid = pid_carbs++;
   union ioctl_add_process_args normal_args = {};
   ret = agnocast_ioctl_add_process(
-    normal_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &normal_args);
+    normal_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL, &normal_args);
   KUNIT_EXPECT_EQ(test, ret, 0);
-  KUNIT_EXPECT_FALSE(test, normal_args.ret_bridge_daemon_exist);
+  KUNIT_EXPECT_FALSE(
+    test, agnocast_daemon_alive(AGNOCAST_SPAWN_BRIDGE_MANAGER, current->nsproxy->ipc_ns, 0));
 }
 
 // When other processes exist, check_and_request_bridge_shutdown
@@ -42,14 +43,14 @@ void test_case_check_and_request_bridge_shutdown_when_others_exist(struct kunit 
   pid_t bridge_pid = pid_carbs++;
   union ioctl_add_process_args bridge_args = {};
   int ret = agnocast_ioctl_add_process(
-    bridge_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_BRIDGE_MANAGER, 0, &bridge_args);
+    bridge_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_BRIDGE_MANAGER, 0, NULL, &bridge_args);
   KUNIT_EXPECT_EQ(test, ret, 0);
 
   // Register another process
   pid_t other_pid = pid_carbs++;
   union ioctl_add_process_args other_args = {};
   ret = agnocast_ioctl_add_process(
-    other_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &other_args);
+    other_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL, &other_args);
   KUNIT_EXPECT_EQ(test, ret, 0);
 
   // Check shutdown - other process exists (process_num > 1)
@@ -63,9 +64,10 @@ void test_case_check_and_request_bridge_shutdown_when_others_exist(struct kunit 
   pid_t new_pid = pid_carbs++;
   union ioctl_add_process_args new_args = {};
   ret = agnocast_ioctl_add_process(
-    new_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &new_args);
+    new_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL, &new_args);
   KUNIT_EXPECT_EQ(test, ret, 0);
-  KUNIT_EXPECT_TRUE(test, new_args.ret_bridge_daemon_exist);
+  KUNIT_EXPECT_TRUE(
+    test, agnocast_daemon_alive(AGNOCAST_SPAWN_BRIDGE_MANAGER, current->nsproxy->ipc_ns, 0));
 }
 
 // A per-(ipc_ns, domain) manager shuts down once its own domain is empty, even if
@@ -76,14 +78,14 @@ void test_case_check_and_request_bridge_shutdown_per_domain(struct kunit * test)
   pid_t mgr_d1 = pid_carbs++;
   union ioctl_add_process_args mgr_args = {};
   int ret = agnocast_ioctl_add_process(
-    mgr_d1, current->nsproxy->ipc_ns, PROCESS_ROLE_BRIDGE_MANAGER, 1, &mgr_args);
+    mgr_d1, current->nsproxy->ipc_ns, PROCESS_ROLE_BRIDGE_MANAGER, 1, NULL, &mgr_args);
   KUNIT_EXPECT_EQ(test, ret, 0);
 
   // A normal process keeps domain 2 busy.
   pid_t other_d2 = pid_carbs++;
   union ioctl_add_process_args other_args = {};
   ret = agnocast_ioctl_add_process(
-    other_d2, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 2, &other_args);
+    other_d2, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 2, NULL, &other_args);
   KUNIT_EXPECT_EQ(test, ret, 0);
 
   // Domain 1 holds only the manager, so it should shut down despite domain 2 being busy.

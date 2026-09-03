@@ -818,9 +818,100 @@ static bool has_alive_unlink_daemon(const struct ipc_namespace * ipc_ns)
   return false;
 }
 
+// The unlink daemon is one per namespace, so its grant ignores the caller's domain.
+static uint32_t spawn_grant_scope(const enum agnocast_spawn_kind kind, const uint32_t domain_id)
+{
+  return (kind == AGNOCAST_SPAWN_UNLINK_DAEMON) ? AGNOCAST_DOMAIN_ID_NONE : domain_id;
+}
+
+// Caller holds global_htables_rwsem.
+static struct spawn_grant * find_spawn_grant(
+  const enum agnocast_spawn_kind kind, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_id)
+{
+  struct spawn_grant * grant;
+  const uint32_t scope = spawn_grant_scope(kind, domain_id);
+  list_for_each_entry(grant, &spawn_grant_list, node)
+  {
+    if (grant->kind == kind && ipc_eq(grant->ipc_ns, ipc_ns) && grant->domain_id == scope) {
+      return grant;
+    }
+  }
+  return NULL;
+}
+
+// Caller holds global_htables_rwsem.
+static bool has_alive_daemon(
+  const enum agnocast_spawn_kind kind, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_id)
+{
+  if (kind == AGNOCAST_SPAWN_UNLINK_DAEMON) return has_alive_unlink_daemon(ipc_ns);
+  if (kind == AGNOCAST_SPAWN_BRIDGE_MANAGER) return has_alive_bridge_manager(ipc_ns, domain_id);
+  if (kind == AGNOCAST_SPAWN_DISCOVERY_AGENT) {
+    return agnocast_find_discovery_agent(ipc_ns, domain_id) != NULL;
+  }
+
+  return true;  // never hand out a right for a kind this module does not know
+}
+
+// Caller holds global_htables_rwsem (write).
+static struct spawn_grant * spawn_grant_acquire_locked(
+  const enum agnocast_spawn_kind kind, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_id)
+{
+  if (has_alive_daemon(kind, ipc_ns, domain_id)) return NULL;
+  if (find_spawn_grant(kind, ipc_ns, domain_id)) return NULL;
+
+  struct spawn_grant * grant = kmalloc(sizeof(struct spawn_grant), GFP_KERNEL);
+  if (!grant) return NULL;
+
+  grant->kind = kind;
+  grant->ipc_ns = ipc_ns;
+  grant->domain_id = spawn_grant_scope(kind, domain_id);
+  list_add(&grant->node, &spawn_grant_list);
+  return grant;
+}
+
+// Caller holds global_htables_rwsem (write). Settling here rather than when the holder dies is
+// what lets agnocast_commit_exit_process() deregister a still-running daemon and have the next
+// process spawn its replacement.
+static void spawn_grant_settle_locked(
+  const enum agnocast_spawn_kind kind, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_id)
+{
+  struct spawn_grant * grant = find_spawn_grant(kind, ipc_ns, domain_id);
+  if (grant) list_del_init(&grant->node);
+}
+
+void agnocast_spawn_grant_release(struct spawn_grant * grant)
+{
+  if (!grant) return;
+
+  down_write(&global_htables_rwsem);
+  list_del_init(&grant->node);  // already settled by the daemon's registration: no-op
+  up_write(&global_htables_rwsem);
+
+  kfree(grant);
+}
+
+// Runs from __fput(), which is sleepable in both its task-work and delayed_fput forms, and
+// unordered with respect to the exit worker draining the same pid.
+static int spawn_right_release(struct inode * inode, struct file * file)
+{
+  agnocast_spawn_grant_release(file->private_data);
+  return 0;
+}
+
+static const struct file_operations spawn_right_fops = {
+  .owner = THIS_MODULE,
+  .release = spawn_right_release,
+  .llseek = noop_llseek,
+};
+
 int agnocast_ioctl_add_process(
   const pid_t pid, const struct ipc_namespace * ipc_ns, const enum process_role role,
-  const uint32_t domain_id, union ioctl_add_process_args * ioctl_ret)
+  const uint32_t domain_id, struct agnocast_spawn_grants * spawn,
+  union ioctl_add_process_args * ioctl_ret)
 {
   int ret = 0;
 
@@ -849,16 +940,12 @@ int agnocast_ioctl_add_process(
     ret = -EINVAL;
     goto unlock;
   }
-  ioctl_ret->ret_unlink_daemon_exist = has_alive_unlink_daemon(ipc_ns);
-  ioctl_ret->ret_bridge_daemon_exist = has_alive_bridge_manager(ipc_ns, domain_id);
-  ioctl_ret->ret_discovery_agent_exist = (agnocast_find_discovery_agent(ipc_ns, domain_id) != NULL);
-
   // Deciding under the write lock add_process already holds is what stops two daemons starting
   // at once from both registering.
-  if (role == PROCESS_ROLE_BRIDGE_MANAGER && ioctl_ret->ret_bridge_daemon_exist) {
-    goto unlock;
-  }
-  if (role == PROCESS_ROLE_UNLINK_DAEMON && ioctl_ret->ret_unlink_daemon_exist) {
+  ioctl_ret->ret_role_already_taken =
+    (role == PROCESS_ROLE_BRIDGE_MANAGER && has_alive_bridge_manager(ipc_ns, domain_id)) ||
+    (role == PROCESS_ROLE_UNLINK_DAEMON && has_alive_unlink_daemon(ipc_ns));
+  if (ioctl_ret->ret_role_already_taken) {
     goto unlock;
   }
 
@@ -894,6 +981,19 @@ int agnocast_ioctl_add_process(
 
   ioctl_ret->ret_addr = new_proc_info->mempool_entry->addr;
   ioctl_ret->ret_shm_size = mempool_size_bytes;
+
+  if (role == PROCESS_ROLE_UNLINK_DAEMON) {
+    spawn_grant_settle_locked(AGNOCAST_SPAWN_UNLINK_DAEMON, ipc_ns, domain_id);
+  } else if (role == PROCESS_ROLE_BRIDGE_MANAGER) {
+    spawn_grant_settle_locked(AGNOCAST_SPAWN_BRIDGE_MANAGER, ipc_ns, domain_id);
+  }
+
+  if (spawn) {
+    for (enum agnocast_spawn_kind kind = 0; kind < AGNOCAST_SPAWN_KIND_NUM; kind++) {
+      if (!(spawn->requested_mask & AGNOCAST_SPAWN_MASK(kind))) continue;
+      spawn->granted[kind] = spawn_grant_acquire_locked(kind, ipc_ns, domain_id);
+    }
+  }
 
 unlock:
   up_write(&global_htables_rwsem);
@@ -2952,6 +3052,7 @@ int agnocast_ioctl_add_discovery_agent(
   INIT_HLIST_NODE(&agent->node);
   hash_add_rcu(discovery_agent_htable, &agent->node, hash_min(pid, DISCOVERY_AGENT_HASH_BITS));
   ioctl_ret->ret_owned_by_caller = true;
+  spawn_grant_settle_locked(AGNOCAST_SPAWN_DISCOVERY_AGENT, ipc_ns, domain_id);
 
 unlock:
   up_write(&global_htables_rwsem);
@@ -3001,21 +3102,127 @@ static long get_version_cmd(struct ioctl_get_version_args __user * arg)
   return ret;
 }
 
+struct spawn_right_files
+{
+  int fds[AGNOCAST_SPAWN_KIND_NUM];
+  struct file * files[AGNOCAST_SPAWN_KIND_NUM];
+};
+
+static void spawn_right_files_put(struct spawn_right_files * srf)
+{
+  for (enum agnocast_spawn_kind kind = 0; kind < AGNOCAST_SPAWN_KIND_NUM; kind++) {
+    if (srf->fds[kind] < 0) continue;
+    put_unused_fd(srf->fds[kind]);
+    srf->fds[kind] = -1;
+    fput(srf->files[kind]);
+    srf->files[kind] = NULL;
+  }
+}
+
+// Reserving before the decision leaves copy_to_user as the only thing after it that can fail. A
+// kind that cannot be reserved is withdrawn from the request rather than failing the call: the
+// caller still has to register, which none of this gates, and the right stays free for the next
+// process.
+static uint32_t spawn_right_files_reserve(
+  struct spawn_right_files * srf, const uint32_t requested_mask, const pid_t pid)
+{
+  uint32_t reserved_mask = requested_mask;
+
+  for (enum agnocast_spawn_kind kind = 0; kind < AGNOCAST_SPAWN_KIND_NUM; kind++) {
+    srf->fds[kind] = -1;
+    srf->files[kind] = NULL;
+  }
+
+  for (enum agnocast_spawn_kind kind = 0; kind < AGNOCAST_SPAWN_KIND_NUM; kind++) {
+    if (!(reserved_mask & AGNOCAST_SPAWN_MASK(kind))) continue;
+
+    int fd = get_unused_fd_flags(O_CLOEXEC);
+    // O_CLOEXEC is safe because fork() copies the descriptor regardless, and it stops an exec in
+    // the parent from leaking the right into an unrelated process.
+    struct file * file =
+      (fd < 0)
+        ? ERR_PTR(fd)
+        : anon_inode_getfile("[agnocast-spawn]", &spawn_right_fops, NULL, O_RDWR | O_CLOEXEC);
+    if (IS_ERR(file)) {
+      dev_warn(
+        agnocast_device, "Process (pid=%d) cannot be granted spawn kind %u: %ld. (%s)\n", pid,
+        (uint32_t)kind, PTR_ERR(file), __func__);
+      if (fd >= 0) put_unused_fd(fd);
+      reserved_mask &= ~AGNOCAST_SPAWN_MASK(kind);
+      continue;
+    }
+    srf->fds[kind] = fd;
+    srf->files[kind] = file;
+  }
+
+  return reserved_mask;
+}
+
+// Attaching the grant is what makes the file own the right, so from here its ->release returns it.
+static void spawn_right_files_attach(
+  struct spawn_right_files * srf, const struct agnocast_spawn_grants * spawn,
+  union ioctl_add_process_args * ioctl_ret)
+{
+  for (enum agnocast_spawn_kind kind = 0; kind < AGNOCAST_SPAWN_KIND_NUM; kind++) {
+    if (spawn->granted[kind]) srf->files[kind]->private_data = spawn->granted[kind];
+  }
+
+  ioctl_ret->ret_unlink_daemon_spawn_fd =
+    spawn->granted[AGNOCAST_SPAWN_UNLINK_DAEMON] ? srf->fds[AGNOCAST_SPAWN_UNLINK_DAEMON] : -1;
+  ioctl_ret->ret_bridge_daemon_spawn_fd =
+    spawn->granted[AGNOCAST_SPAWN_BRIDGE_MANAGER] ? srf->fds[AGNOCAST_SPAWN_BRIDGE_MANAGER] : -1;
+  ioctl_ret->ret_discovery_agent_spawn_fd =
+    spawn->granted[AGNOCAST_SPAWN_DISCOVERY_AGENT] ? srf->fds[AGNOCAST_SPAWN_DISCOVERY_AGENT] : -1;
+}
+
+// Only after copy_to_user: an installed fd whose number never reached userspace would hold its
+// right forever.
+static void spawn_right_files_install(
+  struct spawn_right_files * srf, const struct agnocast_spawn_grants * spawn)
+{
+  for (enum agnocast_spawn_kind kind = 0; kind < AGNOCAST_SPAWN_KIND_NUM; kind++) {
+    if (srf->fds[kind] < 0) continue;
+    if (spawn->granted[kind]) {
+      fd_install(srf->fds[kind], srf->files[kind]);
+    } else {
+      put_unused_fd(srf->fds[kind]);
+      fput(srf->files[kind]);
+    }
+  }
+}
+
 static long add_process_cmd(union ioctl_add_process_args __user * arg)
 {
-  int ret = 0;
   const pid_t pid = current->tgid;
   const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
 
   union ioctl_add_process_args add_process_args;
   if (copy_from_user(&add_process_args, arg, sizeof(add_process_args))) return -EFAULT;
-  enum process_role role = (enum process_role)add_process_args.role;
-  uint32_t domain_id = add_process_args.domain_id;
-  ret = agnocast_ioctl_add_process(pid, ipc_ns, role, domain_id, &add_process_args);
-  if (ret == 0) {
-    if (copy_to_user(arg, &add_process_args, sizeof(add_process_args))) return -EFAULT;
+  // spawn_request_mask overlaps ret_shm_size, so every request field is read out of the union
+  // before anything writes a ret_ one into it.
+  const enum process_role role = (enum process_role)add_process_args.role;
+  const uint32_t domain_id = add_process_args.domain_id;
+
+  struct spawn_right_files srf;
+  struct agnocast_spawn_grants spawn = {
+    .requested_mask = spawn_right_files_reserve(
+      &srf, add_process_args.spawn_request_mask & AGNOCAST_SPAWN_MASK_ALL, pid)};
+
+  int ret = agnocast_ioctl_add_process(pid, ipc_ns, role, domain_id, &spawn, &add_process_args);
+  if (ret != 0) {
+    spawn_right_files_put(&srf);
+    return ret;
   }
-  return ret;
+
+  spawn_right_files_attach(&srf, &spawn, &add_process_args);
+
+  if (copy_to_user(arg, &add_process_args, sizeof(add_process_args))) {
+    spawn_right_files_put(&srf);
+    return -EFAULT;
+  }
+
+  spawn_right_files_install(&srf, &spawn);
+  return 0;
 }
 
 static long add_subscriber_cmd(union ioctl_add_subscriber_args __user * arg)
@@ -3807,6 +4014,26 @@ int agnocast_get_discovery_agent_num(void)
   }
   up_read(&global_htables_rwsem);
   return count;
+}
+
+bool agnocast_daemon_alive(
+  const enum agnocast_spawn_kind kind, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_id)
+{
+  down_read(&global_htables_rwsem);
+  bool alive = has_alive_daemon(kind, ipc_ns, domain_id);
+  up_read(&global_htables_rwsem);
+  return alive;
+}
+
+bool agnocast_spawn_grant_outstanding(
+  const enum agnocast_spawn_kind kind, const struct ipc_namespace * ipc_ns,
+  const uint32_t domain_id)
+{
+  down_read(&global_htables_rwsem);
+  bool outstanding = find_spawn_grant(kind, ipc_ns, domain_id) != NULL;
+  up_read(&global_htables_rwsem);
+  return outstanding;
 }
 
 bool agnocast_is_proc_exited(const pid_t pid)

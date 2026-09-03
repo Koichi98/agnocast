@@ -2,6 +2,9 @@
 #pragma once
 #include <kunit/test.h>
 
-#define TEST_CASES_EXIT_FREE_DATA KUNIT_CASE(test_case_exit_free_data_releases_notify_context)
+#define TEST_CASES_EXIT_FREE_DATA                               \
+  KUNIT_CASE(test_case_exit_free_data_releases_notify_context), \
+    KUNIT_CASE(test_case_exit_free_data_drains_outstanding_spawn_grants)
 
 void test_case_exit_free_data_releases_notify_context(struct kunit * test);
+void test_case_exit_free_data_drains_outstanding_spawn_grants(struct kunit * test);

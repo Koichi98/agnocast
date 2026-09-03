@@ -13,6 +13,8 @@ DEFINE_HASHTABLE(topic_hashtable, TOPIC_HASH_BITS);
 DEFINE_HASHTABLE(bridge_htable, TOPIC_HASH_BITS);
 DEFINE_HASHTABLE(domain_rule_htable, TOPIC_HASH_BITS);
 
+LIST_HEAD(spawn_grant_list);
+
 DEFINE_SPINLOCK(pid_queue_lock);
 pid_t exit_pid_queue[EXIT_QUEUE_SIZE];
 uint32_t queue_head;

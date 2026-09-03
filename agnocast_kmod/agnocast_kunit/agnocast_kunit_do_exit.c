@@ -25,7 +25,7 @@ static void setup_processes(struct kunit * test, const int process_num)
   for (int i = 0; i < process_num; i++) {
     const pid_t pid = PID_BASE + i;
     int ret = agnocast_ioctl_add_process(
-      pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &ioctl_ret);
+      pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL, &ioctl_ret);
     KUNIT_ASSERT_EQ(test, ret, 0);
     KUNIT_ASSERT_FALSE(test, agnocast_is_proc_exited(pid));
   }
@@ -36,7 +36,7 @@ static uint64_t setup_one_process(struct kunit * test, const pid_t pid)
 {
   union ioctl_add_process_args ioctl_ret;
   int ret = agnocast_ioctl_add_process(
-    pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &ioctl_ret);
+    pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL, &ioctl_ret);
 
   KUNIT_ASSERT_EQ(test, ret, 0);
   KUNIT_ASSERT_FALSE(test, agnocast_is_proc_exited(pid));

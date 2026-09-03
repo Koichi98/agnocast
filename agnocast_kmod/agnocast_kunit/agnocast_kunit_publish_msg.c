@@ -48,7 +48,7 @@ static topic_local_id_t setup_one_subscriber_in_domain_with_eventfd(
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_process(
-      subscriber_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id,
+      subscriber_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id, NULL,
       &add_process_args),
     0);
   return add_subscriber_with_eventfd(
@@ -77,7 +77,7 @@ static void setup_publisher_in_domain(
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_process(
-      pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id, &add_process_args),
+      pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id, NULL, &add_process_args),
     0);
   *ret_addr = add_process_args.ret_addr;
 
@@ -444,7 +444,8 @@ void test_case_publish_msg_does_not_signal_take_sub(struct kunit * test)
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_process(
-      subscriber_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &add_process_args),
+      subscriber_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL,
+      &add_process_args),
     0);
 
   const int take_eventfd = 0;
@@ -485,7 +486,8 @@ void test_case_publish_msg_signals_large_fanout(struct kunit * test)
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_process(
-      subscriber_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &add_process_args),
+      subscriber_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL,
+      &add_process_args),
     0);
   for (int eventfd = 0; eventfd < subscriber_num; eventfd++) {
     add_subscriber_with_eventfd(test, subscriber_pid, eventfd, false, is_bridge);

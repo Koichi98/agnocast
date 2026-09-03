@@ -172,7 +172,9 @@ void initialize_bridge_allocator(void * mempool_ptr, size_t mempool_size)
   }
 }
 
-initialize_agnocast_result acquire_agnocast_resources_for_bridge()
+void daemonize_current_process();
+
+initialize_agnocast_result acquire_agnocast_resources_for_bridge(const int spawn_fd)
 {
   union ioctl_add_process_args add_process_args = {};
   add_process_args.role = PROCESS_ROLE_BRIDGE_MANAGER;
@@ -180,8 +182,10 @@ initialize_agnocast_result acquire_agnocast_resources_for_bridge()
   if (ioctl(agnocast_fd, AGNOCAST_ADD_PROCESS_CMD, &add_process_args) < 0) {
     throw std::runtime_error(std::string("AGNOCAST_ADD_PROCESS_CMD failed: ") + strerror(errno));
   }
+  // The kernel module is authoritative from here, so hand the right back.
+  close(spawn_fd);
 
-  if (add_process_args.ret_bridge_daemon_exist) {
+  if (add_process_args.ret_role_already_taken) {
     close(agnocast_fd);
     exit(EXIT_SUCCESS);
   }
@@ -199,10 +203,9 @@ initialize_agnocast_result acquire_agnocast_resources_for_bridge()
   };
 }
 
-void poll_for_unlink()
+void poll_for_unlink(const int spawn_fd)
 {
-  // Register so the kernel module can tell a live daemon from a dead one. No domain_id: the
-  // kernel module records this daemon as belonging to none.
+  // No domain_id: the kernel module records this daemon as belonging to none.
   union ioctl_add_process_args add_process_args = {};
   add_process_args.role = PROCESS_ROLE_UNLINK_DAEMON;
   if (ioctl(agnocast_fd, AGNOCAST_ADD_PROCESS_CMD, &add_process_args) < 0) {
@@ -210,12 +213,15 @@ void poll_for_unlink()
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   }
+  close(spawn_fd);
 
   // Another daemon won the race and registered first; this one has nothing to do.
-  if (add_process_args.ret_unlink_daemon_exist) {
+  if (add_process_args.ret_role_already_taken) {
     close(agnocast_fd);
     exit(EXIT_SUCCESS);
   }
+
+  daemonize_current_process();
 
   while (true) {
     sleep(1);
@@ -242,10 +248,11 @@ void poll_for_unlink()
   exit(0);
 }
 
-void poll_for_bridge_manager()
+void poll_for_bridge_manager(const int spawn_fd)
 {
   try {
-    const auto resources = acquire_agnocast_resources_for_bridge();
+    const auto resources = acquire_agnocast_resources_for_bridge(spawn_fd);
+    daemonize_current_process();
     initialize_bridge_allocator(resources.mempool_ptr, resources.mempool_size);
     BridgeManager manager;
     manager.run();
@@ -451,8 +458,7 @@ bool discovery_agent_auto_fork_disabled()
          (strcmp(v, "1") == 0 || strcasecmp(v, "true") == 0 || strcasecmp(v, "yes") == 0);
 }
 
-template <typename Func>
-pid_t spawn_daemon_process(Func && func)
+void daemonize_current_process()
 {
   auto fail = [](const char * err_fmt) {
     RCLCPP_ERROR(logger, err_fmt, strerror(errno));
@@ -460,60 +466,80 @@ pid_t spawn_daemon_process(Func && func)
     exit(EXIT_FAILURE);
   };
 
+  unsetenv("LD_PRELOAD");
+
+  // Redirect stdio to /dev/null when stdout or stderr is an inherited pipe or socket. In that
+  // case, a process may be reading from the pipe and waiting on it to close, which can cause
+  // the process to hang because the daemon never closes it. Redirecting to /dev/null works around
+  // this issue.
+  struct stat st_out = {};
+  struct stat st_err = {};
+  if (fstat(STDOUT_FILENO, &st_out) < 0) {
+    fail("fstat for stdout failed: %s");
+  }
+  if (fstat(STDERR_FILENO, &st_err) < 0) {
+    fail("fstat for stderr failed: %s");
+  }
+
+  if (
+    S_ISFIFO(st_out.st_mode) || S_ISFIFO(st_err.st_mode) || S_ISSOCK(st_out.st_mode) ||
+    S_ISSOCK(st_err.st_mode)) {
+    int devnull = open("/dev/null", O_RDWR);
+    if (devnull < 0) {
+      fail("Failed to open /dev/null: %s");
+    }
+
+    // Send the output to the terminal rather than discarding it. Must be opened before setsid(),
+    // which drops the controlling terminal /dev/tty resolves against. stdin stays on /dev/null
+    // because this is write-only, so reads see EOF rather than EBADF.
+    const int tty = open("/dev/tty", O_WRONLY);
+    const int out_fd = (tty >= 0) ? tty : devnull;
+
+    if (dup2(devnull, STDIN_FILENO) < 0) {
+      fail("dup2 for stdin failed: %s");
+    }
+    if (dup2(out_fd, STDOUT_FILENO) < 0) {
+      fail("dup2 for stdout failed: %s");
+    }
+    if (dup2(out_fd, STDERR_FILENO) < 0) {
+      fail("dup2 for stderr failed: %s");
+    }
+    if (out_fd != devnull) {
+      close(out_fd);
+    }
+    close(devnull);
+  }
+
+  if (setsid() == -1) {
+    fail("setsid failed: %s");
+  }
+}
+
+// fork() copies the whole descriptor table, so a daemon child inherits its siblings' rights as
+// well as its own. One left open in a daemon that runs for the lifetime of the namespace would
+// keep that right from ever coming back, so every child keeps only the kind it was forked for.
+void disown_other_spawn_fds(
+  const std::array<int, AGNOCAST_SPAWN_KIND_NUM> & spawn_fds, const enum agnocast_spawn_kind owned)
+{
+  for (int kind = 0; kind < AGNOCAST_SPAWN_KIND_NUM; kind++) {
+    if (kind != owned && spawn_fds[kind] >= 0) close(spawn_fds[kind]);
+  }
+}
+
+template <typename Func>
+pid_t spawn_daemon_process(
+  const std::array<int, AGNOCAST_SPAWN_KIND_NUM> & spawn_fds, const enum agnocast_spawn_kind owned,
+  Func && func)
+{
   pid_t pid = fork();
   if (pid < 0) {
-    fail("fork failed: %s");
+    RCLCPP_ERROR(logger, "fork failed: %s", strerror(errno));
+    close(agnocast_fd);
+    exit(EXIT_FAILURE);
   }
   if (pid == 0) {
     agnocast::is_bridge_process = true;
-    unsetenv("LD_PRELOAD");
-
-    // Redirect stdio to /dev/null when stdout or stderr is an inherited pipe or socket. In that
-    // case, a process may be reading from the pipe and waiting on it to close, which can cause
-    // the process to hang because the daemon never closes it. Redirecting to /dev/null works around
-    // this issue.
-    struct stat st_out = {};
-    struct stat st_err = {};
-    if (fstat(STDOUT_FILENO, &st_out) < 0) {
-      fail("fstat for stdout failed: %s");
-    }
-    if (fstat(STDERR_FILENO, &st_err) < 0) {
-      fail("fstat for stderr failed: %s");
-    }
-
-    if (
-      S_ISFIFO(st_out.st_mode) || S_ISFIFO(st_err.st_mode) || S_ISSOCK(st_out.st_mode) ||
-      S_ISSOCK(st_err.st_mode)) {
-      int devnull = open("/dev/null", O_RDWR);
-      if (devnull < 0) {
-        fail("Failed to open /dev/null: %s");
-      }
-
-      // Send the output to the terminal rather than discarding it. Must be opened before setsid(),
-      // which drops the controlling terminal /dev/tty resolves against. stdin stays on /dev/null
-      // because this is write-only, so reads see EOF rather than EBADF.
-      const int tty = open("/dev/tty", O_WRONLY);
-      const int out_fd = (tty >= 0) ? tty : devnull;
-
-      if (dup2(devnull, STDIN_FILENO) < 0) {
-        fail("dup2 for stdin failed: %s");
-      }
-      if (dup2(out_fd, STDOUT_FILENO) < 0) {
-        fail("dup2 for stdout failed: %s");
-      }
-      if (dup2(out_fd, STDERR_FILENO) < 0) {
-        fail("dup2 for stderr failed: %s");
-      }
-      if (out_fd != devnull) {
-        close(out_fd);
-      }
-      close(devnull);
-    }
-
-    if (setsid() == -1) {
-      fail("setsid failed: %s");
-    }
-
+    disown_other_spawn_fds(spawn_fds, owned);
     func();
     exit(0);
   }
@@ -552,7 +578,7 @@ struct initialize_agnocast_result initialize_agnocast(
     exit(EXIT_FAILURE);
   }
 
-  // add_process_args is a union, so ADD_PROCESS overwrites domain_id with its ret_* fields.
+  // add_process_args is a union, so ADD_PROCESS overwrites the request fields with its ret_ ones.
   const uint32_t domain_id = get_ros_domain_id();
   if (domain_id == AGNOCAST_DOMAIN_ID_NONE) {
     RCLCPP_ERROR(logger, "ROS_DOMAIN_ID=%u is reserved by Agnocast", domain_id);
@@ -560,50 +586,67 @@ struct initialize_agnocast_result initialize_agnocast(
     exit(EXIT_FAILURE);
   }
 
+  // Decided before ADD_PROCESS: whether this process can spawn each daemon is per-process
+  // configuration the kernel module cannot see, and it grants only what is requested here.
+  const bool wants_bridge = get_bridge_mode() == BridgeMode::On;
+  const bool wants_agent = !discovery_agent_auto_fork_disabled();
+  const std::string agent_path = wants_agent ? resolve_discovery_agent_path() : std::string();
+  if (wants_agent && agent_path.empty()) {
+    RCLCPP_WARN(
+      logger,
+      "The discovery agent executable was not found in AMENT_PREFIX_PATH, so it is not "
+      "auto-started. Source the workspace that installs ros2agnocast_discovery_agent to enable "
+      "Agnocast observability.");
+  }
+
   union ioctl_add_process_args add_process_args = {};
   add_process_args.role = PROCESS_ROLE_APPLICATION;
   add_process_args.domain_id = domain_id;
+  add_process_args.spawn_request_mask =
+    AGNOCAST_SPAWN_MASK(AGNOCAST_SPAWN_UNLINK_DAEMON) |
+    (wants_bridge ? AGNOCAST_SPAWN_MASK(AGNOCAST_SPAWN_BRIDGE_MANAGER) : 0u) |
+    (agent_path.empty() ? 0u : AGNOCAST_SPAWN_MASK(AGNOCAST_SPAWN_DISCOVERY_AGENT));
   if (ioctl(agnocast_fd, AGNOCAST_ADD_PROCESS_CMD, &add_process_args) < 0) {
     RCLCPP_ERROR(logger, "AGNOCAST_ADD_PROCESS_CMD failed: %s", strerror(errno));
     close(agnocast_fd);
     exit(EXIT_FAILURE);
   }
 
-  bool should_spawn_bridge = false;
-  auto bridge_mode = get_bridge_mode();
+  // The parent keeps its own copies until every fork is done, so that all children inherit the
+  // same set and none of them closes a descriptor number that has since been reused.
+  std::array<int, AGNOCAST_SPAWN_KIND_NUM> spawn_fds{};
+  spawn_fds[AGNOCAST_SPAWN_UNLINK_DAEMON] = add_process_args.ret_unlink_daemon_spawn_fd;
+  spawn_fds[AGNOCAST_SPAWN_BRIDGE_MANAGER] = add_process_args.ret_bridge_daemon_spawn_fd;
+  spawn_fds[AGNOCAST_SPAWN_DISCOVERY_AGENT] = add_process_args.ret_discovery_agent_spawn_fd;
 
-  // Create a shm_unlink daemon process if it doesn't exist in its ipc namespace.
-  // ret_unlink_daemon_exist is only an early-out hint: poll_for_unlink() makes the singleton
-  // decision when it registers.
-  if (!add_process_args.ret_unlink_daemon_exist) {
-    spawn_daemon_process([]() { poll_for_unlink(); });
-  }
-  if (bridge_mode == BridgeMode::On && !add_process_args.ret_bridge_daemon_exist) {
-    should_spawn_bridge = true;
+  const int unlink_spawn_fd = spawn_fds[AGNOCAST_SPAWN_UNLINK_DAEMON];
+  if (unlink_spawn_fd >= 0) {
+    spawn_daemon_process(spawn_fds, AGNOCAST_SPAWN_UNLINK_DAEMON, [unlink_spawn_fd]() {
+      poll_for_unlink(unlink_spawn_fd);
+    });
   }
 
-  if (should_spawn_bridge) {
-    spawn_daemon_process([]() { poll_for_bridge_manager(); });
+  const int bridge_spawn_fd = spawn_fds[AGNOCAST_SPAWN_BRIDGE_MANAGER];
+  if (bridge_spawn_fd >= 0) {
+    spawn_daemon_process(spawn_fds, AGNOCAST_SPAWN_BRIDGE_MANAGER, [bridge_spawn_fd]() {
+      poll_for_bridge_manager(bridge_spawn_fd);
+    });
   }
 
   // The forked agent inherits this process's IPC namespace and ROS_DOMAIN_ID, and self-exits when
   // the scope empties. A missing agent is not fatal because the data plane does not depend on
   // the observer; a fork() failure still is, as for the other daemons spawned here.
-  // ret_discovery_agent_exist is only an early-out hint.
-  if (!add_process_args.ret_discovery_agent_exist && !discovery_agent_auto_fork_disabled()) {
-    const std::string agent_path = resolve_discovery_agent_path();
-    if (agent_path.empty()) {
-      RCLCPP_WARN(
-        logger,
-        "The discovery agent executable was not found in AMENT_PREFIX_PATH, so it is not "
-        "auto-started. Source the workspace that installs ros2agnocast_discovery_agent to enable "
-        "Agnocast observability.");
-    } else {
-      spawn_daemon_process([domain_id, agent_path]() {
-        // Claiming here rather than in the agent keeps the launch O(1): N processes starting at
-        // once cost one fork each, not N Python interpreters.
-        switch (claim_discovery_agent(domain_id)) {
+  const int agent_spawn_fd = spawn_fds[AGNOCAST_SPAWN_DISCOVERY_AGENT];
+  if (agent_spawn_fd >= 0) {
+    spawn_daemon_process(
+      spawn_fds, AGNOCAST_SPAWN_DISCOVERY_AGENT, [domain_id, agent_path, agent_spawn_fd]() {
+        // Claiming here rather than in the agent keeps the losing case cheap: a fork that ends in
+        // _exit, not a Python interpreter that starts up only to find it lost.
+        const claim_result result = claim_discovery_agent(domain_id);
+        close(agent_spawn_fd);
+        switch (result) {
           case claim_result::won:
+            daemonize_current_process();
             exec_discovery_agent(agent_path.c_str());
           case claim_result::lost:
             _exit(EXIT_SUCCESS);
@@ -611,7 +654,10 @@ struct initialize_agnocast_result initialize_agnocast(
             _exit(EXIT_FAILURE);
         }
       });
-    }
+  }
+
+  for (const int fd : spawn_fds) {
+    if (fd >= 0) close(fd);
   }
 
   void * mempool_ptr =

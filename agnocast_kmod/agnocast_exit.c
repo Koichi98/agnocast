@@ -67,6 +67,19 @@ static void remove_all_domain_rules(void)
   }
 }
 
+// Only reachable in the KUnit build, which creates grants without files: a real outstanding grant
+// holds a file that pins the module. It is also what isolates one test case from the next.
+static void remove_all_spawn_grants(void)
+{
+  struct spawn_grant * grant;
+  struct spawn_grant * tmp;
+  list_for_each_entry_safe(grant, tmp, &spawn_grant_list, node)
+  {
+    list_del_init(&grant->node);
+    kfree(grant);
+  }
+}
+
 // Called during module unload. Not an ioctl function, so we manage locks here directly.
 void agnocast_exit_free_data(void)
 {
@@ -76,6 +89,7 @@ void agnocast_exit_free_data(void)
   remove_all_discovery_agents();
   remove_all_bridge_info();
   remove_all_domain_rules();
+  remove_all_spawn_grants();
   up_write(&global_htables_rwsem);
 }
 

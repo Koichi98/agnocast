@@ -71,6 +71,16 @@ enum process_role {
   PROCESS_ROLE_UNLINK_DAEMON = 2,
 };
 
+// Mirrors enum agnocast_spawn_kind in the kernel module.
+enum agnocast_spawn_kind {
+  AGNOCAST_SPAWN_UNLINK_DAEMON = 0,
+  AGNOCAST_SPAWN_BRIDGE_MANAGER = 1,
+  AGNOCAST_SPAWN_DISCOVERY_AGENT = 2,
+  AGNOCAST_SPAWN_KIND_NUM,
+};
+
+#define AGNOCAST_SPAWN_MASK(kind) (1u << (kind))
+
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpedantic"
 union ioctl_add_process_args {
@@ -78,14 +88,20 @@ union ioctl_add_process_args {
   {
     uint32_t role;       // enum process_role
     uint32_t domain_id;  // The process's ROS_DOMAIN_ID (0 if unset).
+    // The daemons this caller is willing to fork, so a granted right is never one it will not use.
+    uint32_t spawn_request_mask;
   };
   struct
   {
     uint64_t ret_addr;
     uint64_t ret_shm_size;
-    bool ret_unlink_daemon_exist;
-    bool ret_bridge_daemon_exist;
-    bool ret_discovery_agent_exist;
+    // The exclusive right to fork this daemon, or -1. The forked child inherits the fd, and the
+    // right comes back when its last holder closes it or dies.
+    int32_t ret_unlink_daemon_spawn_fd;
+    int32_t ret_bridge_daemon_spawn_fd;
+    int32_t ret_discovery_agent_spawn_fd;
+    // Daemon roles only: one is already registered, so stand down.
+    bool ret_role_already_taken;
   };
 };
 #pragma GCC diagnostic pop

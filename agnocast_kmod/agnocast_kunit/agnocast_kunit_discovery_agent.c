@@ -70,9 +70,10 @@ void test_case_discovery_agent_exist_reflects_registration(struct kunit * test)
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_process(
-      pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 12, &before),
+      pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 12, NULL, &before),
     0);
-  KUNIT_EXPECT_FALSE(test, before.ret_discovery_agent_exist);  // process alive, no agent yet
+  KUNIT_EXPECT_FALSE(
+    test, agnocast_daemon_alive(AGNOCAST_SPAWN_DISCOVERY_AGENT, current->nsproxy->ipc_ns, 12));
 
   struct ioctl_add_discovery_agent_args reg;
   KUNIT_ASSERT_EQ(
@@ -82,9 +83,10 @@ void test_case_discovery_agent_exist_reflects_registration(struct kunit * test)
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_process(
-      pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 12, &after),
+      pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 12, NULL, &after),
     0);
-  KUNIT_EXPECT_TRUE(test, after.ret_discovery_agent_exist);  // now an agent is registered
+  KUNIT_EXPECT_TRUE(
+    test, agnocast_daemon_alive(AGNOCAST_SPAWN_DISCOVERY_AGENT, current->nsproxy->ipc_ns, 12));
 }
 
 // commit on an empty domain deregisters the agent and tells it to exit.
@@ -121,7 +123,7 @@ void test_case_discovery_agent_commit_exit_vetoed_when_busy(struct kunit * test)
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_process(
-      pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 14, &proc),
+      pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 14, NULL, &proc),
     0);
 
   bool should_exit = true;
@@ -175,9 +177,12 @@ void test_case_discovery_agent_orphan_race(struct kunit * test)
   union ioctl_add_process_args p2;
   KUNIT_ASSERT_EQ(
     test,
-    agnocast_ioctl_add_process(pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 16, &p2),
+    agnocast_ioctl_add_process(
+      pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 16, NULL, &p2),
     0);
-  KUNIT_EXPECT_FALSE(test, p2.ret_discovery_agent_exist);  // A is gone -> P2 must spawn one
+  // A is gone, so P2 must spawn one
+  KUNIT_EXPECT_FALSE(
+    test, agnocast_daemon_alive(AGNOCAST_SPAWN_DISCOVERY_AGENT, current->nsproxy->ipc_ns, 16));
 
   const pid_t agent_b = pid++;
   struct ioctl_add_discovery_agent_args reg_b;
@@ -227,7 +232,7 @@ void test_case_discovery_agent_commit_ignores_exited_process(struct kunit * test
   KUNIT_ASSERT_EQ(
     test,
     agnocast_ioctl_add_process(
-      app_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 19, &app),
+      app_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 19, NULL, &app),
     0);
 
   agnocast_enqueue_exit_pid(app_pid);
@@ -242,4 +247,58 @@ void test_case_discovery_agent_commit_ignores_exited_process(struct kunit * test
     0);
   KUNIT_EXPECT_TRUE(test, should_exit);                          // exited process does not veto
   KUNIT_EXPECT_EQ(test, agnocast_get_discovery_agent_num(), 0);  // agent deregistered
+}
+
+// Takes the right to fork an agent for (ns, domain), the way an application process does.
+static struct spawn_grant * take_agent_spawn_right(struct kunit * test, const uint32_t domain_id)
+{
+  struct agnocast_spawn_grants spawn = {
+    .requested_mask = AGNOCAST_SPAWN_MASK(AGNOCAST_SPAWN_DISCOVERY_AGENT)};
+  union ioctl_add_process_args args = {};
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_process(
+      pid++, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id, &spawn, &args),
+    0);
+  return spawn.granted[AGNOCAST_SPAWN_DISCOVERY_AGENT];
+}
+
+// The agent claims through its own ioctl before exec, so that is where its right settles.
+void test_case_discovery_agent_claim_settles_the_spawn_right(struct kunit * test)
+{
+  // Arrange
+  struct spawn_grant * grant = take_agent_spawn_right(test, 7);
+  KUNIT_ASSERT_NOT_NULL(test, grant);
+
+  // Act
+  struct ioctl_add_discovery_agent_args claim = {};
+  int ret = agnocast_ioctl_add_discovery_agent(pid++, current->nsproxy->ipc_ns, 7, &claim);
+
+  // Assert
+  KUNIT_EXPECT_EQ(test, ret, 0);
+  KUNIT_EXPECT_TRUE(test, claim.ret_owned_by_caller);
+  KUNIT_EXPECT_FALSE(
+    test,
+    agnocast_spawn_grant_outstanding(AGNOCAST_SPAWN_DISCOVERY_AGENT, current->nsproxy->ipc_ns, 7));
+
+  agnocast_spawn_grant_release(grant);
+}
+
+void test_case_discovery_agent_spawn_right_regranted_after_exit(struct kunit * test)
+{
+  // Arrange
+  agnocast_spawn_grant_release(take_agent_spawn_right(test, 8));
+  const pid_t agent_pid = pid++;
+  struct ioctl_add_discovery_agent_args claim = {};
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_add_discovery_agent(agent_pid, current->nsproxy->ipc_ns, 8, &claim), 0);
+
+  // Act
+  agnocast_process_exit_cleanup(agent_pid);
+
+  // Assert
+  struct spawn_grant * next = take_agent_spawn_right(test, 8);
+  KUNIT_EXPECT_NOT_NULL(test, next);
+
+  agnocast_spawn_grant_release(next);
 }

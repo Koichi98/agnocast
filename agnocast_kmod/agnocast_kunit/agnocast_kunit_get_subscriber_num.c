@@ -20,7 +20,7 @@ static void setup_one_subscriber_impl(
 
   union ioctl_add_process_args add_process_args;
   int ret1 = agnocast_ioctl_add_process(
-    subscriber_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id,
+    subscriber_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id, NULL,
     &add_process_args);
 
   union ioctl_add_subscriber_args add_subscriber_args;
@@ -49,7 +49,7 @@ static void setup_one_publisher(struct kunit * test, char * topic_name)
 
   union ioctl_add_process_args add_process_args;
   int ret1 = agnocast_ioctl_add_process(
-    publisher_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &add_process_args);
+    publisher_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL, &add_process_args);
 
   union ioctl_add_publisher_args add_publisher_args;
   int ret2 = agnocast_ioctl_add_publisher(
@@ -66,7 +66,7 @@ static void setup_one_intra_subscriber(struct kunit * test, char * topic_name)
 
   union ioctl_add_process_args add_process_args;
   int ret1 = agnocast_ioctl_add_process(
-    intra_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &add_process_args);
+    intra_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, NULL, &add_process_args);
 
   union ioctl_add_subscriber_args add_subscriber_args;
   int ret2 = agnocast_ioctl_add_subscriber(
@@ -96,7 +96,7 @@ static void setup_current_publisher_in_domain(
 {
   union ioctl_add_process_args add_process_args;
   int ret1 = agnocast_ioctl_add_process(
-    current->tgid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id,
+    current->tgid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, domain_id, NULL,
     &add_process_args);
 
   union ioctl_add_publisher_args add_publisher_args;
