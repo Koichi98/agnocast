@@ -78,4 +78,26 @@ std::map<std::string, std::string> parse_lscpu_output(const std::string & output
   return hw_info;
 }
 
+std::optional<std::vector<std::string>> check_hardware_info(
+  const YAML::Node & hw_info, const std::map<std::string, std::string> & current)
+{
+  std::optional<std::vector<std::string>> mismatches;
+
+  for (const auto & [key, current_value] : current) {
+    if (!hw_info[key]) {
+      continue;
+    }
+
+    if (!mismatches) {
+      mismatches.emplace();
+    }
+    std::string yaml_value = hw_info[key].as<std::string>();
+    if (yaml_value != current_value) {
+      mismatches->push_back(key + ": expected '" + yaml_value + "', got '" + current_value + "'");
+    }
+  }
+
+  return mismatches;
+}
+
 }  // namespace agnocast_cie_thread_configurator

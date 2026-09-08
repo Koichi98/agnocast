@@ -61,3 +61,33 @@ TEST(ParseLscpuOutput, IgnoresMalformedAndUnknownLines)
   // "BIOS Model name" must not be picked up as "Model name".
   EXPECT_TRUE(acie::parse_lscpu_output("BIOS Model name: To Be Filled By O.E.M.\n").empty());
 }
+
+// ---------- check_hardware_info ----------
+
+TEST(CheckHardwareInfo, NothingComparedMeansSkippedNotPassed)
+{
+  EXPECT_FALSE(acie::check_hardware_info(YAML::Load("{}"), {{"model", "33"}}).has_value());
+  const auto unreported = YAML::Load("cpu_max_mhz: '9999'");
+  EXPECT_FALSE(acie::check_hardware_info(unreported, {{"model", "33"}}).has_value());
+}
+
+TEST(CheckHardwareInfo, MatchingValuesYieldNoMismatch)
+{
+  // Keys present on only one side (cpu_max_mhz, cpu_min_mhz) are not compared.
+  const auto yaml = YAML::Load("model: '33'\ncpu_family: '25'\ncpu_max_mhz: '9999'");
+  const auto result = acie::check_hardware_info(
+    yaml, {{"model", "33"}, {"cpu_family", "25"}, {"cpu_min_mhz", "2200"}});
+  ASSERT_TRUE(result.has_value());
+  EXPECT_TRUE(result->empty());
+}
+
+TEST(CheckHardwareInfo, ReportsEachMismatchWithExpectedAndActual)
+{
+  const auto yaml = YAML::Load("model: '33'\nthreads_per_core: '2'");
+  const auto result = acie::check_hardware_info(yaml, {{"model", "44"}, {"threads_per_core", "1"}});
+  ASSERT_TRUE(result.has_value());
+  // `current` is a std::map, so mismatches come back in key order.
+  const std::vector<std::string> expected = {
+    "model: expected '33', got '44'", "threads_per_core: expected '2', got '1'"};
+  EXPECT_EQ(*result, expected);
+}
