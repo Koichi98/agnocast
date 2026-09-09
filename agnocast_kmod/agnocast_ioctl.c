@@ -1858,8 +1858,8 @@ unlock:
 }
 
 int agnocast_ioctl_get_node_subscriber_topics(
-  const struct ipc_namespace * ipc_ns, const char * node_name,
-  union ioctl_node_info_args * node_info_args)
+  const struct ipc_namespace * ipc_ns, const char * node_name, char * topic_name_buf,
+  const uint32_t buf_topic_num, uint32_t * ret_topic_num)
 {
   int ret = 0;
   uint32_t topic_num = 0;
@@ -1891,28 +1891,20 @@ int agnocast_ioctl_get_node_subscriber_topics(
     up_read(&wrapper->topic->rwsem);
 
     if (found) {
-      if (topic_num >= MAX_TOPIC_NUM || topic_num >= node_info_args->topic_name_buffer_size) {
-        dev_warn(
-          agnocast_device,
-          "Topic count exceeds limit: MAX_TOPIC_NUM=%d, topic_name_buffer_size=%u\n", MAX_TOPIC_NUM,
-          node_info_args->topic_name_buffer_size);
+      if (topic_num >= buf_topic_num) {
         ret = -ENOBUFS;
         goto unlock;
       }
 
-      if (copy_to_user(
-            (char __user *)(node_info_args->topic_name_buffer_addr +
-                            topic_num * TOPIC_NAME_BUFFER_SIZE),
-            wrapper->key, strlen(wrapper->key) + 1)) {
-        ret = -EFAULT;
-        goto unlock;
-      }
+      strscpy_pad(
+        topic_name_buf + (size_t)topic_num * TOPIC_NAME_BUFFER_SIZE, wrapper->key,
+        TOPIC_NAME_BUFFER_SIZE);
 
       topic_num++;
     }
   }
 
-  node_info_args->ret_topic_num = topic_num;
+  *ret_topic_num = topic_num;
 
 unlock:
   up_read(&global_htables_rwsem);
@@ -1920,8 +1912,8 @@ unlock:
 }
 
 int agnocast_ioctl_get_node_publisher_topics(
-  const struct ipc_namespace * ipc_ns, const char * node_name,
-  union ioctl_node_info_args * node_info_args)
+  const struct ipc_namespace * ipc_ns, const char * node_name, char * topic_name_buf,
+  const uint32_t buf_topic_num, uint32_t * ret_topic_num)
 {
   int ret = 0;
   uint32_t topic_num = 0;
@@ -1953,28 +1945,20 @@ int agnocast_ioctl_get_node_publisher_topics(
     up_read(&wrapper->topic->rwsem);
 
     if (found) {
-      if (topic_num >= MAX_TOPIC_NUM || topic_num >= node_info_args->topic_name_buffer_size) {
-        dev_warn(
-          agnocast_device,
-          "Topic count exceeds limit: MAX_TOPIC_NUM=%d, topic_name_buffer_size=%u\n", MAX_TOPIC_NUM,
-          node_info_args->topic_name_buffer_size);
+      if (topic_num >= buf_topic_num) {
         ret = -ENOBUFS;
         goto unlock;
       }
 
-      if (copy_to_user(
-            (char __user *)(node_info_args->topic_name_buffer_addr +
-                            topic_num * TOPIC_NAME_BUFFER_SIZE),
-            wrapper->key, strlen(wrapper->key) + 1)) {
-        ret = -EFAULT;
-        goto unlock;
-      }
+      strscpy_pad(
+        topic_name_buf + (size_t)topic_num * TOPIC_NAME_BUFFER_SIZE, wrapper->key,
+        TOPIC_NAME_BUFFER_SIZE);
 
       topic_num++;
     }
   }
 
-  node_info_args->ret_topic_num = topic_num;
+  *ret_topic_num = topic_num;
 
 unlock:
   up_read(&global_htables_rwsem);
@@ -3355,39 +3339,91 @@ static long get_node_names_cmd(union ioctl_get_node_names_args __user * arg)
 
 static long get_node_subscriber_topics_cmd(union ioctl_node_info_args __user * arg)
 {
-  int ret = 0;
   const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
 
-  union ioctl_node_info_args node_info_sub_args;
-  if (copy_from_user(&node_info_sub_args, arg, sizeof(node_info_sub_args))) return -EFAULT;
+  union ioctl_node_info_args node_info_args;
+  if (copy_from_user(&node_info_args, arg, sizeof(node_info_args))) return -EFAULT;
 
   char node_name_buf[NODE_NAME_BUFFER_SIZE];
-  ret = copy_name_from_user(node_name_buf, sizeof(node_name_buf), &node_info_sub_args.node_name);
-  if (ret) return ret;
+  int name_ret =
+    copy_name_from_user(node_name_buf, sizeof(node_name_buf), &node_info_args.node_name);
+  if (name_ret) return name_ret;
 
-  ret = agnocast_ioctl_get_node_subscriber_topics(ipc_ns, node_name_buf, &node_info_sub_args);
-  if (ret == 0) {
-    if (copy_to_user(arg, &node_info_sub_args, sizeof(node_info_sub_args))) return -EFAULT;
+  // ret_topic_num shares the union with topic_name_buffer_size, so read the size out first.
+  const uint32_t buf_topic_num =
+    min_t(uint32_t, node_info_args.topic_name_buffer_size, MAX_TOPIC_NUM);
+  char __user * user_buf = (char __user *)u64_to_user_ptr(node_info_args.topic_name_buffer_addr);
+
+  char * buf = kvmalloc((size_t)buf_topic_num * TOPIC_NAME_BUFFER_SIZE, GFP_KERNEL);
+  if (!buf) return -ENOMEM;
+
+  uint32_t topic_num = 0;
+  long ret = agnocast_ioctl_get_node_subscriber_topics(
+    ipc_ns, node_name_buf, buf, buf_topic_num, &topic_num);
+  if (ret != 0) {
+    if (ret == -ENOBUFS) {
+      dev_warn(
+        agnocast_device, "Topic count exceeds limit: MAX_TOPIC_NUM=%d, topic_name_buffer_size=%u\n",
+        MAX_TOPIC_NUM, node_info_args.topic_name_buffer_size);
+    }
+    goto free;
   }
+
+  if (copy_to_user(user_buf, buf, (size_t)topic_num * TOPIC_NAME_BUFFER_SIZE)) {
+    ret = -EFAULT;
+    goto free;
+  }
+
+  node_info_args.ret_topic_num = topic_num;
+  if (copy_to_user(arg, &node_info_args, sizeof(node_info_args))) ret = -EFAULT;
+
+free:
+  kvfree(buf);
   return ret;
 }
 
 static long get_node_publisher_topics_cmd(union ioctl_node_info_args __user * arg)
 {
-  int ret = 0;
   const struct ipc_namespace * ipc_ns = current->nsproxy->ipc_ns;
 
-  union ioctl_node_info_args node_info_pub_args;
-  if (copy_from_user(&node_info_pub_args, arg, sizeof(node_info_pub_args))) return -EFAULT;
+  union ioctl_node_info_args node_info_args;
+  if (copy_from_user(&node_info_args, arg, sizeof(node_info_args))) return -EFAULT;
 
   char node_name_buf[NODE_NAME_BUFFER_SIZE];
-  ret = copy_name_from_user(node_name_buf, sizeof(node_name_buf), &node_info_pub_args.node_name);
-  if (ret) return ret;
+  int name_ret =
+    copy_name_from_user(node_name_buf, sizeof(node_name_buf), &node_info_args.node_name);
+  if (name_ret) return name_ret;
 
-  ret = agnocast_ioctl_get_node_publisher_topics(ipc_ns, node_name_buf, &node_info_pub_args);
-  if (ret == 0) {
-    if (copy_to_user(arg, &node_info_pub_args, sizeof(node_info_pub_args))) return -EFAULT;
+  // ret_topic_num shares the union with topic_name_buffer_size, so read the size out first.
+  const uint32_t buf_topic_num =
+    min_t(uint32_t, node_info_args.topic_name_buffer_size, MAX_TOPIC_NUM);
+  char __user * user_buf = (char __user *)u64_to_user_ptr(node_info_args.topic_name_buffer_addr);
+
+  char * buf = kvmalloc((size_t)buf_topic_num * TOPIC_NAME_BUFFER_SIZE, GFP_KERNEL);
+  if (!buf) return -ENOMEM;
+
+  uint32_t topic_num = 0;
+  long ret =
+    agnocast_ioctl_get_node_publisher_topics(ipc_ns, node_name_buf, buf, buf_topic_num, &topic_num);
+  if (ret != 0) {
+    if (ret == -ENOBUFS) {
+      dev_warn(
+        agnocast_device, "Topic count exceeds limit: MAX_TOPIC_NUM=%d, topic_name_buffer_size=%u\n",
+        MAX_TOPIC_NUM, node_info_args.topic_name_buffer_size);
+    }
+    goto free;
   }
+
+  if (copy_to_user(user_buf, buf, (size_t)topic_num * TOPIC_NAME_BUFFER_SIZE)) {
+    ret = -EFAULT;
+    goto free;
+  }
+
+  node_info_args.ret_topic_num = topic_num;
+  if (copy_to_user(arg, &node_info_args, sizeof(node_info_args))) ret = -EFAULT;
+
+free:
+  kvfree(buf);
   return ret;
 }
 
