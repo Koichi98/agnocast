@@ -61,25 +61,25 @@ void test_case_get_topic_list_no_topic(struct kunit * test)
   KUNIT_EXPECT_EQ(test, topic_num, 0);
 }
 
+// No room for a single topic, so a response topic that reached the buffer bound at all would fail
+// with -ENOBUFS, whichever one the walk happens to reach first.
 void test_case_get_topic_list_skips_service_response_topic(struct kunit * test)
 {
   char buf[1][TOPIC_NAME_BUFFER_SIZE];
   uint32_t domain_ids[1];
-  uint32_t topic_num = 0;
+  uint32_t topic_num = UINT_MAX;
 
   // Arrange
   setup_process(test, PID, DOMAIN_ID);
-  add_subscriber(test, TOPIC_NAME, PID);
   add_subscriber(test, SRV_RESPONSE_TOPIC_NAME, PID);
 
   // Act
-  int ret = agnocast_ioctl_get_topic_list(
-    current->nsproxy->ipc_ns, (char *)buf, domain_ids, ARRAY_SIZE(buf), &topic_num);
+  int ret =
+    agnocast_ioctl_get_topic_list(current->nsproxy->ipc_ns, (char *)buf, domain_ids, 0, &topic_num);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
-  KUNIT_EXPECT_EQ(test, topic_num, 1);
-  KUNIT_EXPECT_STREQ(test, buf[0], TOPIC_NAME);
+  KUNIT_EXPECT_EQ(test, topic_num, 0);
 }
 
 // A comparison shorter than the whole response prefix would skip this topic too.
