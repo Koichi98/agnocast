@@ -63,8 +63,8 @@ void test_case_get_topic_list_no_topic(struct kunit * test)
 
 void test_case_get_topic_list_skips_service_response_topic(struct kunit * test)
 {
-  char buf[2][TOPIC_NAME_BUFFER_SIZE];
-  uint32_t domain_ids[2];
+  char buf[1][TOPIC_NAME_BUFFER_SIZE];
+  uint32_t domain_ids[1];
   uint32_t topic_num = 0;
 
   // Arrange
@@ -138,7 +138,7 @@ void test_case_get_topic_list_fails_when_buffer_is_full(struct kunit * test)
 {
   char buf[1][TOPIC_NAME_BUFFER_SIZE];
   uint32_t domain_ids[1];
-  uint32_t topic_num = 0;
+  uint32_t topic_num = UINT_MAX;
 
   // Arrange
   setup_process(test, PID, DOMAIN_ID);
@@ -151,4 +151,5 @@ void test_case_get_topic_list_fails_when_buffer_is_full(struct kunit * test)
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -ENOBUFS);
+  KUNIT_EXPECT_EQ(test, topic_num, UINT_MAX);
 }
