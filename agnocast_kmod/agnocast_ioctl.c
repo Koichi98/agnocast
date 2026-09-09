@@ -205,7 +205,7 @@ static bool is_parameter_service_topic(const char * key)
 // the request topic's endpoints.
 static bool is_service_response_topic(const char * key)
 {
-  return strncmp(key, "/AGNOCAST_SRV_RESPONSE", sizeof("/AGNOCAST_SRV_RESPONSE") - 1) == 0;
+  return str_has_prefix(key, "/AGNOCAST_SRV_RESPONSE");
 }
 
 static struct subscriber_info * find_subscriber_info(
