@@ -49,11 +49,12 @@ static uint32_t index_of(const char * buf, const uint32_t num, const char * name
 void test_case_get_topic_list_no_topic(struct kunit * test)
 {
   char buf[1][TOPIC_NAME_BUFFER_SIZE];
+  uint32_t domain_ids[1];
   uint32_t topic_num = UINT_MAX;
 
   // Act
   int ret = agnocast_ioctl_get_topic_list(
-    current->nsproxy->ipc_ns, (char *)buf, NULL, ARRAY_SIZE(buf), &topic_num);
+    current->nsproxy->ipc_ns, (char *)buf, domain_ids, ARRAY_SIZE(buf), &topic_num);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -63,6 +64,7 @@ void test_case_get_topic_list_no_topic(struct kunit * test)
 void test_case_get_topic_list_skips_service_response_topic(struct kunit * test)
 {
   char buf[2][TOPIC_NAME_BUFFER_SIZE];
+  uint32_t domain_ids[2];
   uint32_t topic_num = 0;
 
   // Arrange
@@ -72,7 +74,7 @@ void test_case_get_topic_list_skips_service_response_topic(struct kunit * test)
 
   // Act
   int ret = agnocast_ioctl_get_topic_list(
-    current->nsproxy->ipc_ns, (char *)buf, NULL, ARRAY_SIZE(buf), &topic_num);
+    current->nsproxy->ipc_ns, (char *)buf, domain_ids, ARRAY_SIZE(buf), &topic_num);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -84,6 +86,7 @@ void test_case_get_topic_list_skips_service_response_topic(struct kunit * test)
 void test_case_get_topic_list_lists_service_request_topic(struct kunit * test)
 {
   char buf[1][TOPIC_NAME_BUFFER_SIZE];
+  uint32_t domain_ids[1];
   uint32_t topic_num = 0;
 
   // Arrange
@@ -92,7 +95,7 @@ void test_case_get_topic_list_lists_service_request_topic(struct kunit * test)
 
   // Act
   int ret = agnocast_ioctl_get_topic_list(
-    current->nsproxy->ipc_ns, (char *)buf, NULL, ARRAY_SIZE(buf), &topic_num);
+    current->nsproxy->ipc_ns, (char *)buf, domain_ids, ARRAY_SIZE(buf), &topic_num);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
@@ -134,6 +137,7 @@ void test_case_get_topic_list_pairs_each_topic_with_its_domain_id(struct kunit *
 void test_case_get_topic_list_fails_when_buffer_is_full(struct kunit * test)
 {
   char buf[1][TOPIC_NAME_BUFFER_SIZE];
+  uint32_t domain_ids[1];
   uint32_t topic_num = 0;
 
   // Arrange
@@ -143,7 +147,7 @@ void test_case_get_topic_list_fails_when_buffer_is_full(struct kunit * test)
 
   // Act
   int ret = agnocast_ioctl_get_topic_list(
-    current->nsproxy->ipc_ns, (char *)buf, NULL, ARRAY_SIZE(buf), &topic_num);
+    current->nsproxy->ipc_ns, (char *)buf, domain_ids, ARRAY_SIZE(buf), &topic_num);
 
   // Assert
   KUNIT_EXPECT_EQ(test, ret, -ENOBUFS);

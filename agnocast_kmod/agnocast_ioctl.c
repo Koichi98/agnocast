@@ -1708,13 +1708,10 @@ int agnocast_ioctl_get_topic_list(
       goto unlock;
     }
 
-    memcpy(
+    strscpy_pad(
       topic_name_buf + (size_t)topic_num * TOPIC_NAME_BUFFER_SIZE, wrapper->key,
-      strlen(wrapper->key) + 1);
-
-    if (domain_id_buf) {
-      domain_id_buf[topic_num] = wrapper->domain_id;
-    }
+      TOPIC_NAME_BUFFER_SIZE);
+    domain_id_buf[topic_num] = wrapper->domain_id;
 
     topic_num++;
   }
@@ -3280,17 +3277,14 @@ static long get_topic_list_cmd(union ioctl_topic_list_args __user * arg)
   uint32_t __user * user_domain_id_buf =
     (uint32_t __user *)u64_to_user_ptr(topic_list_args.domain_id_buffer_addr);
 
-  char * topic_name_buf = kvzalloc((size_t)buf_topic_num * TOPIC_NAME_BUFFER_SIZE, GFP_KERNEL);
+  // One allocation for both arrays: a name slot is TOPIC_NAME_BUFFER_SIZE bytes, so the domain ids
+  // that follow the names stay uint32_t-aligned. agnocast_ioctl_get_topic_list writes every byte
+  // that is copied out, so the scratch needs no zeroing.
+  const size_t names_bytes = (size_t)buf_topic_num * TOPIC_NAME_BUFFER_SIZE;
+  char * topic_name_buf =
+    kvmalloc(names_bytes + (size_t)buf_topic_num * sizeof(uint32_t), GFP_KERNEL);
   if (!topic_name_buf) return -ENOMEM;
-
-  uint32_t * domain_id_buf = NULL;
-  if (user_domain_id_buf) {
-    domain_id_buf = kvcalloc(buf_topic_num, sizeof(*domain_id_buf), GFP_KERNEL);
-    if (!domain_id_buf) {
-      kvfree(topic_name_buf);
-      return -ENOMEM;
-    }
-  }
+  uint32_t * domain_id_buf = (uint32_t *)(topic_name_buf + names_bytes);
 
   uint32_t topic_num = 0;
   long ret =
@@ -3311,7 +3305,7 @@ static long get_topic_list_cmd(union ioctl_topic_list_args __user * arg)
   }
 
   if (
-    domain_id_buf &&
+    user_domain_id_buf &&
     copy_to_user(user_domain_id_buf, domain_id_buf, (size_t)topic_num * sizeof(*domain_id_buf))) {
     ret = -EFAULT;
     goto free;
@@ -3321,7 +3315,6 @@ static long get_topic_list_cmd(union ioctl_topic_list_args __user * arg)
   if (copy_to_user(arg, &topic_list_args, sizeof(topic_list_args))) ret = -EFAULT;
 
 free:
-  kvfree(domain_id_buf);
   kvfree(topic_name_buf);
   return ret;
 }
