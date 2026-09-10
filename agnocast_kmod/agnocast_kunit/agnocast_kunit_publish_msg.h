@@ -28,7 +28,11 @@
     KUNIT_CASE(test_case_publish_msg_deeper_subscriber_keeps_entries),                        \
     KUNIT_CASE(test_case_publish_msg_releases_beyond_deepest_subscriber),                     \
     KUNIT_CASE(test_case_publish_msg_falls_back_to_publisher_depth_after_subscriber_leaves),  \
-    KUNIT_CASE(test_case_publish_msg_deepest_subscriber_sets_retention)
+    KUNIT_CASE(test_case_publish_msg_deepest_subscriber_sets_retention),                      \
+    KUNIT_CASE(test_case_publish_msg_ignores_depth_of_ignore_local_subscriber),               \
+    KUNIT_CASE(test_case_publish_msg_ignores_depth_of_other_domain_subscriber),               \
+    KUNIT_CASE(test_case_publish_msg_caught_up_deep_subscriber_keeps_no_entries),             \
+    KUNIT_CASE(test_case_publish_msg_lagging_deep_subscriber_keeps_entries)
 
 void test_case_publish_msg_no_topic(struct kunit * test);
 void test_case_publish_msg_no_publisher(struct kunit * test);
@@ -58,3 +62,7 @@ void test_case_publish_msg_releases_beyond_deepest_subscriber(struct kunit * tes
 void test_case_publish_msg_falls_back_to_publisher_depth_after_subscriber_leaves(
   struct kunit * test);
 void test_case_publish_msg_deepest_subscriber_sets_retention(struct kunit * test);
+void test_case_publish_msg_ignores_depth_of_ignore_local_subscriber(struct kunit * test);
+void test_case_publish_msg_ignores_depth_of_other_domain_subscriber(struct kunit * test);
+void test_case_publish_msg_caught_up_deep_subscriber_keeps_no_entries(struct kunit * test);
+void test_case_publish_msg_lagging_deep_subscriber_keeps_entries(struct kunit * test);
