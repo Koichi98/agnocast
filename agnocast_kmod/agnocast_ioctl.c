@@ -988,19 +988,41 @@ unlock:
   return ret;
 }
 
+// A subscriber has no cache of its own: its qos_depth is a window onto the publisher's entries, so
+// an entry released once the publisher's depth is met is gone for every subscriber that had not
+// read it yet.
+//
+// Caller holds global_htables_rwsem (read), which excludes subscriber join and leave, and
+// wrapper->topic->rwsem (write).
+static uint32_t retention_depth(
+  struct topic_wrapper * wrapper, const struct publisher_info * pub_info)
+{
+  uint32_t depth = pub_info->qos_depth;
+
+  struct subscriber_info * sub_info;
+  int bkt_sub_info;
+  hash_for_each(wrapper->topic->sub_info_htable, bkt_sub_info, sub_info, node)
+  {
+    if (sub_info->qos_depth > depth) depth = sub_info->qos_depth;
+  }
+
+  return depth;
+}
+
 static int release_msgs_to_meet_depth(
   struct topic_wrapper * wrapper, struct publisher_info * pub_info,
   union ioctl_publish_msg_args * ioctl_ret)
 {
   ioctl_ret->ret_released_num = 0;
 
-  if (pub_info->entries_num <= pub_info->qos_depth) {
+  const uint32_t depth = retention_depth(wrapper, pub_info);
+
+  if (pub_info->entries_num <= depth) {
     return 0;
   }
 
-  const uint32_t leak_warn_threshold = (pub_info->qos_depth <= 100)
-                                         ? 100 + pub_info->qos_depth
-                                         : pub_info->qos_depth * 2;  // This is rough value.
+  const uint32_t leak_warn_threshold =
+    (depth <= 100) ? 100 + depth : depth * 2;  // This is rough value.
   if (pub_info->entries_num > leak_warn_threshold) {
     dev_warn(
       agnocast_device,
@@ -1020,8 +1042,8 @@ static int release_msgs_to_meet_depth(
     return -ENODATA;
   }
 
-  // Number of entries exceeding qos_depth
-  uint32_t num_search_entries = pub_info->entries_num - pub_info->qos_depth;
+  // Number of entries exceeding the retention depth
+  uint32_t num_search_entries = pub_info->entries_num - depth;
 
   // NOTE:
   //   The searched message is either deleted or, if a reference count remains, is not deleted.
@@ -1030,10 +1052,8 @@ static int release_msgs_to_meet_depth(
   //
   // HACK:
   //   The current implementation only releases a maximum of MAX_RELEASE_NUM messages at a time, and
-  //   if there are more messages to release, qos_depth is temporarily not met.
-  //   However, it is rare for more than MAX_RELEASE_NUM messages that are out of qos_depth to be
-  //   unreferenced at a specific time. If this happens, as long as the publisher's qos_depth is
-  //   greater than the subscriber's qos_depth, this has little effect on system behavior.
+  //   if there are more messages to release, the retention depth is temporarily exceeded. That
+  //   costs memory only: what a subscriber is handed is bounded by its own window either way.
   while (num_search_entries > 0 && ioctl_ret->ret_released_num < MAX_RELEASE_NUM) {
     struct entry_node * en = container_of(node, struct entry_node, node);
     node = rb_next(node);
@@ -1064,8 +1084,8 @@ static int release_msgs_to_meet_depth(
     dev_dbg(
       agnocast_device,
       "Release oldest message in the publisher_info (id=$%d) of the topic "
-      "(topic_name=%s) with qos_depth=%d. (%s)\n",
-      pub_info->id, wrapper->key, pub_info->qos_depth, __func__);
+      "(topic_name=%s) with retention depth=%d. (%s)\n",
+      pub_info->id, wrapper->key, depth, __func__);
   }
 
   return 0;

@@ -69,6 +69,42 @@ static topic_local_id_t setup_one_subscriber_with_eventfd(
     test, 0, is_bridge, eventfd, ignore_local_publications);
 }
 
+static topic_local_id_t setup_one_subscriber_with_qos_depth(
+  struct kunit * test, const uint32_t sub_qos_depth)
+{
+  subscriber_pid++;
+
+  union ioctl_add_process_args add_process_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_process(
+      subscriber_pid, current->nsproxy->ipc_ns, PROCESS_ROLE_APPLICATION, 0, &add_process_args),
+    0);
+
+  union ioctl_add_subscriber_args add_subscriber_args;
+  KUNIT_ASSERT_EQ(
+    test,
+    agnocast_ioctl_add_subscriber(
+      topic_name, current->nsproxy->ipc_ns, node_name, subscriber_pid, sub_qos_depth,
+      qos_is_transient_local, qos_is_reliable, is_take_sub, false, is_bridge, -1,
+      &add_subscriber_args),
+    0);
+  return add_subscriber_args.ret_id;
+}
+
+static void publish_n(
+  struct kunit * test, const topic_local_id_t publisher_id, const uint64_t ret_addr, const int n)
+{
+  for (int i = 0; i < n; i++) {
+    union ioctl_publish_msg_args ioctl_publish_msg_ret;
+    KUNIT_ASSERT_EQ(
+      test,
+      agnocast_ioctl_publish_msg(
+        topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr + i, &ioctl_publish_msg_ret),
+      0);
+  }
+}
+
 static void setup_publisher_in_domain(
   struct kunit * test, const pid_t pid, const uint32_t domain_id, const bool pub_is_bridge,
   topic_local_id_t * publisher_id, uint64_t * ret_addr)
@@ -787,4 +823,93 @@ void test_case_publish_msg_bridge_subscriber_in_own_domain_notified(struct kunit
   // Assert
   KUNIT_EXPECT_EQ(test, ret, 0);
   KUNIT_EXPECT_EQ(test, signal_count_of(eventfd), 1);
+}
+
+void test_case_publish_msg_deeper_subscriber_keeps_entries(struct kunit * test)
+{
+  // Arrange: the publisher qos_depth is 1.
+  topic_local_id_t publisher_id;
+  uint64_t ret_addr;
+  setup_one_publisher(test, &publisher_id, &ret_addr);
+  setup_one_subscriber_with_qos_depth(test, 3);
+  publish_n(test, publisher_id, ret_addr, 2);
+
+  union ioctl_publish_msg_args ioctl_publish_msg_ret;
+
+  // Act
+  int ret = agnocast_ioctl_publish_msg(
+    topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr + 2, &ioctl_publish_msg_ret);
+
+  // Assert
+  KUNIT_EXPECT_EQ(test, ret, 0);
+  KUNIT_EXPECT_EQ(test, ioctl_publish_msg_ret.ret_released_num, 0);
+  KUNIT_EXPECT_EQ(test, agnocast_get_topic_entries_num(topic_name, current->nsproxy->ipc_ns), 3);
+}
+
+void test_case_publish_msg_releases_beyond_deepest_subscriber(struct kunit * test)
+{
+  // Arrange: the publisher qos_depth is 1.
+  topic_local_id_t publisher_id;
+  uint64_t ret_addr;
+  setup_one_publisher(test, &publisher_id, &ret_addr);
+  setup_one_subscriber_with_qos_depth(test, 3);
+  publish_n(test, publisher_id, ret_addr, 3);
+
+  union ioctl_publish_msg_args ioctl_publish_msg_ret;
+
+  // Act
+  int ret = agnocast_ioctl_publish_msg(
+    topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr + 3, &ioctl_publish_msg_ret);
+
+  // Assert
+  KUNIT_EXPECT_EQ(test, ret, 0);
+  KUNIT_EXPECT_EQ(test, ioctl_publish_msg_ret.ret_released_num, 1);
+  KUNIT_EXPECT_EQ(test, ioctl_publish_msg_ret.ret_released_addrs[0], ret_addr);
+  KUNIT_EXPECT_EQ(test, agnocast_get_topic_entries_num(topic_name, current->nsproxy->ipc_ns), 3);
+}
+
+void test_case_publish_msg_falls_back_to_publisher_depth_after_subscriber_leaves(
+  struct kunit * test)
+{
+  // Arrange: the publisher qos_depth is 1.
+  topic_local_id_t publisher_id;
+  uint64_t ret_addr;
+  setup_one_publisher(test, &publisher_id, &ret_addr);
+  const topic_local_id_t subscriber_id = setup_one_subscriber_with_qos_depth(test, 3);
+  publish_n(test, publisher_id, ret_addr, 3);
+  KUNIT_ASSERT_EQ(
+    test, agnocast_ioctl_remove_subscriber(topic_name, current->nsproxy->ipc_ns, subscriber_id), 0);
+
+  union ioctl_publish_msg_args ioctl_publish_msg_ret;
+
+  // Act
+  int ret = agnocast_ioctl_publish_msg(
+    topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr + 3, &ioctl_publish_msg_ret);
+
+  // Assert
+  KUNIT_EXPECT_EQ(test, ret, 0);
+  KUNIT_EXPECT_EQ(test, ioctl_publish_msg_ret.ret_released_num, 3);
+  KUNIT_EXPECT_EQ(test, agnocast_get_topic_entries_num(topic_name, current->nsproxy->ipc_ns), 1);
+}
+
+void test_case_publish_msg_deepest_subscriber_sets_retention(struct kunit * test)
+{
+  // Arrange: the publisher qos_depth is 1.
+  topic_local_id_t publisher_id;
+  uint64_t ret_addr;
+  setup_one_publisher(test, &publisher_id, &ret_addr);
+  setup_one_subscriber_with_qos_depth(test, 2);
+  setup_one_subscriber_with_qos_depth(test, 4);
+  publish_n(test, publisher_id, ret_addr, 3);
+
+  union ioctl_publish_msg_args ioctl_publish_msg_ret;
+
+  // Act
+  int ret = agnocast_ioctl_publish_msg(
+    topic_name, current->nsproxy->ipc_ns, publisher_id, ret_addr + 3, &ioctl_publish_msg_ret);
+
+  // Assert
+  KUNIT_EXPECT_EQ(test, ret, 0);
+  KUNIT_EXPECT_EQ(test, ioctl_publish_msg_ret.ret_released_num, 0);
+  KUNIT_EXPECT_EQ(test, agnocast_get_topic_entries_num(topic_name, current->nsproxy->ipc_ns), 4);
 }
