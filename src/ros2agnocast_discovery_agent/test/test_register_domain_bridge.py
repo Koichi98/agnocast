@@ -48,6 +48,17 @@ def test_default_config_path_is_used_when_env_unset(tmp_path, monkeypatch):
     assert fake.calls == [('/chatter', '/chatter', 1, 2)]
 
 
+def test_unsupported_notice_is_printed_even_when_the_config_is_missing(
+        tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(register_domain_bridge, '_load_add_rule_symbol', lambda: FakeAddRule())
+    monkeypatch.delenv(CONFIG_ENV, raising=False)
+    monkeypatch.setattr(
+        domain_bridge_config, 'DEFAULT_CONFIG_PATH', str(tmp_path / 'absent.yaml'))
+
+    assert register_domain_bridge.main([]) == 1
+    assert domain_bridge_config.UNSUPPORTED_NOTICE in capsys.readouterr().err
+
+
 def test_registers_every_rule(tmp_path, monkeypatch):
     fake = FakeAddRule()
     monkeypatch.setattr(register_domain_bridge, '_load_add_rule_symbol', lambda: fake)
