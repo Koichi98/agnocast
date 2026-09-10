@@ -526,28 +526,6 @@ def test_load_domain_rules_logs_what_it_loaded(monkeypatch, tmp_path):
     assert str(config) in logger.info.call_args[0][0]
 
 
-def test_load_domain_rules_warns_that_the_domain_bridge_is_unsupported(monkeypatch, tmp_path):
-    config = tmp_path / 'domain_bridge.yaml'
-    config.write_text('from_domain: 1\nto_domain: 2\ntopics:\n  /x:\n')
-    monkeypatch.setenv(CONFIG_ENV, str(config))
-    logger = MagicMock()
-
-    _load_domain_rules(logger)
-
-    logger.warn.assert_called_once_with(domain_bridge_config.UNSUPPORTED_NOTICE)
-
-
-def test_load_domain_rules_does_not_warn_when_the_config_has_no_rules(monkeypatch, tmp_path):
-    config = tmp_path / 'domain_bridge.yaml'
-    config.write_text('topics:\n')
-    monkeypatch.setenv(CONFIG_ENV, str(config))
-    logger = MagicMock()
-
-    _load_domain_rules(logger)
-
-    logger.warn.assert_not_called()
-
-
 def test_load_domain_rules_parses_the_configured_yaml(monkeypatch, tmp_path):
     config = tmp_path / 'domain_bridge.yaml'
     config.write_text(

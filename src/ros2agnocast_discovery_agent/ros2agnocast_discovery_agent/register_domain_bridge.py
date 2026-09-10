@@ -21,6 +21,12 @@ import yaml
 
 from . import domain_bridge_config
 
+# Only registration is unsupported -- the agent reads the same YAML to force the A2R bridge the
+# external domain_bridge node needs.
+UNSUPPORTED_NOTICE = (
+    'registering Agnocast domain bridge rules (kmod cross-domain zero-copy) is incomplete and '
+    'unsupported; use the external domain_bridge node instead')
+
 
 def _load_add_rule_symbol():
     """Load the ioctl wrapper and return the bound add_agnocast_domain_bridge_rule."""
@@ -35,7 +41,7 @@ def main(argv=None) -> int:
     """Register every rule in the config; return non-zero if any is rejected."""
     parser = argparse.ArgumentParser(
         description='Register Agnocast domain bridge rules with the kernel module. '
-                    f'Unsupported: {domain_bridge_config.UNSUPPORTED_NOTICE}.')
+                    f'Unsupported: {UNSUPPORTED_NOTICE}.')
     parser.add_argument(
         '--config',
         default=domain_bridge_config.resolve_config_path()[0],
@@ -45,7 +51,7 @@ def main(argv=None) -> int:
     args = parser.parse_args(argv)
 
     # Before the config is read, so an operator sees it even on a run that registers nothing.
-    print(f'warning: {domain_bridge_config.UNSUPPORTED_NOTICE}', file=sys.stderr)
+    print(f'warning: {UNSUPPORTED_NOTICE}', file=sys.stderr)
 
     try:
         rules, skipped = domain_bridge_config.load_domain_bridge_rules(args.config)

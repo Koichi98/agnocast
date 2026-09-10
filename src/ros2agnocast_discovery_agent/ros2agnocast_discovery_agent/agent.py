@@ -336,8 +336,6 @@ def _load_domain_rules(logger=None) -> list:
 
     if logger is not None:
         logger.info(f'{path}: {len(rules)} domain bridge rule(s) loaded')
-        if rules:
-            logger.warn(domain_bridge_config.UNSUPPORTED_NOTICE)
         if skipped:
             logger.warn(f'{path}: no from_domain/to_domain for {", ".join(skipped)}')
     return rules

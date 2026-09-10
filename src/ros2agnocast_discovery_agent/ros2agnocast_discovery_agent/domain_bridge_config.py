@@ -13,11 +13,6 @@ import yaml
 # Operators point the daemon at the config by setting this to the YAML path.
 CONFIG_ENV = 'AGNOCAST_DOMAIN_BRIDGE_CONFIG'
 
-# Lives here because both the registration tool and the agent surface it.
-UNSUPPORTED_NOTICE = (
-    'the Agnocast domain bridge (kmod cross-domain zero-copy) is incomplete and unsupported; '
-    'use the external domain_bridge node instead')
-
 # The agent is exec'd by an application process and inherits *its* environment, so
 # an env var set only where the registration tool runs never reaches the agent.
 DEFAULT_CONFIG_PATH = '/etc/agnocast/domain_bridge.yaml'
