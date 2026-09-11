@@ -627,6 +627,23 @@ TEST_F(TestNodeBase, construction_warns_once_when_use_intra_process_comms_is_set
   EXPECT_EQ(1, warn_count);
 }
 
+TEST_F(TestNodeBase, construction_does_not_warn_when_use_intra_process_comms_is_unset)
+{
+  // Arrange
+  auto options = node_options_without_parameter_services();
+
+  // Act
+  int warn_count = 0;
+  {
+    WarningCapture capture(kIntraProcessWarning, &warn_count);
+    auto node = std::make_shared<agnocast::Node>("my_node", "/my_ns", options);
+    node->get_node_base_interface()->get_use_intra_process_default();
+  }
+
+  // Assert
+  EXPECT_EQ(0, warn_count);
+}
+
 TEST_F(TestNodeBase, get_enable_topic_statistics_default_is_false_when_unset)
 {
   // Arrange
