@@ -119,6 +119,9 @@ public:
   /**
    * @brief Return the total subscriber count for this topic (Agnocast + ROS 2 via bridge),
    * including Agnocast subscribers in the publisher's own process.
+   *
+   * A same-process subscriber that set `ignore_local_publications` is counted even though it never
+   * receives, matching what rclcpp reports for such a subscription.
    * @return Total subscriber count.
    */
   AGNOCAST_PUBLIC
