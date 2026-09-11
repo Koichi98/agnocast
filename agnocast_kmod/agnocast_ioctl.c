@@ -2717,10 +2717,23 @@ static int add_prefix_domain_rule(
   return insert_domain_rule(prefix, prefix, from_domain, to_domain, true, ipc_ns);
 }
 
+// Registration is the whole gate -- domain_delivery_allowed refuses a cross-domain pair that no
+// rule covers -- so warning in the two entry points below also reaches a caller that skips the
+// ioctl wrapper. Once per module load; insert_domain_rule already records each rule added.
+static void warn_domain_bridge_unsupported(void)
+{
+  dev_warn_once(
+    agnocast_device,
+    "Registering domain bridge rules is incomplete and unsupported. Use the external "
+    "domain_bridge node instead.\n");
+}
+
 int agnocast_ioctl_add_domain_bridge(
   const char * topic_name_from, const char * topic_name_to, const uint32_t from_domain,
   const uint32_t to_domain, const struct ipc_namespace * ipc_ns)
 {
+  warn_domain_bridge_unsupported();
+
   if (from_domain == to_domain) return -EINVAL;
 
   down_write(&global_htables_rwsem);
@@ -2733,6 +2746,8 @@ int agnocast_ioctl_add_domain_bridge_prefix(
   const char * topic_name_prefix, const uint32_t from_domain, const uint32_t to_domain,
   const struct ipc_namespace * ipc_ns)
 {
+  warn_domain_bridge_unsupported();
+
   if (from_domain == to_domain) return -EINVAL;
   if (topic_name_prefix[0] != '/' || topic_name_prefix[1] == '\0') return -EINVAL;
 
