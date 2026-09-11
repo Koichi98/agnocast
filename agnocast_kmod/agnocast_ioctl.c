@@ -2724,8 +2724,8 @@ static void warn_domain_bridge_unsupported(void)
 {
   dev_warn_once(
     agnocast_device,
-    "Domain bridge rules are incomplete and unsupported. Use the external domain_bridge node "
-    "instead.\n");
+    "Registering domain bridge rules is incomplete and unsupported. Use the external "
+    "domain_bridge node instead.\n");
 }
 
 int agnocast_ioctl_add_domain_bridge(
