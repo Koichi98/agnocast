@@ -3,9 +3,9 @@
 > **Unsupported.** Registering rules with the kernel module — the kmod
 > cross-domain zero-copy path — is incomplete and not supported. Use the
 > external `domain_bridge` node to relay between ROS domains. The tool below
-> still works, but it and the kernel module both warn when a rule is registered.
-> The discovery agent's use of the same file, described below, is separate and
-> supported.
+> still works, but it warns on every run and the kernel module warns once per
+> module load. The discovery agent's use of the same file, described below, is
+> separate and supported.
 
 Agnocast domain bridge rules must be registered **before any publisher or
 subscriber for the bridged topics exists** — the kernel module rejects a rule
