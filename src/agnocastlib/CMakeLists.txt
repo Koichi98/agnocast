@@ -169,6 +169,7 @@ if(BUILD_TESTING)
     test/unit/test_agnocast_bridge_uds.cpp
     test/unit/test_discovery_agent_auto_fork.cpp
     test/unit/test_bridge_node_name.cpp
+    test/unit/test_bridge_ros2_client_discovery.cpp
     test/unit/test_agnocast_service_event_publisher.cpp)
   target_include_directories(test_unit_${PROJECT_NAME} PRIVATE include src)
   target_link_libraries(test_unit_${PROJECT_NAME} agnocast)

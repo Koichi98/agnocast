@@ -5,10 +5,13 @@
 
 #include <rclcpp/rclcpp.hpp>
 
+#include <rclcpp/version.h>
+
 #include <chrono>
 #include <cstring>
 #include <memory>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -66,6 +69,11 @@ bool update_ros2_subscriber_num(const rclcpp::Node * node, const std::string & t
 bool update_ros2_publisher_num(const rclcpp::Node * node, const std::string & topic_name);
 bool has_external_ros2_publisher(const rclcpp::Node * node, const std::string & topic_name);
 bool has_external_ros2_subscriber(const rclcpp::Node * node, const std::string & topic_name);
+#if RCLCPP_VERSION_MAJOR < 28
+// Every service that some node other than `node` holds a ROS 2 client for. Walks the graph once
+// per node, so callers needing the answer for many services take one snapshot and share it.
+std::set<std::string> collect_external_ros2_client_service_names(rclcpp::Node * node);
+#endif
 rclcpp::QoS get_service_qos(const std::string & service_name);
 bool is_agnocast_service_alive(const std::string & service_name, std::string & reason);
 std::pair<std::string, std::string> split_full_node_name(const std::string & fqn);

@@ -6,9 +6,12 @@
 
 #include <rclcpp/rclcpp.hpp>
 
+#include <rclcpp/version.h>
+
 #include <chrono>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <utility>
 
@@ -21,6 +24,11 @@ struct ServiceBridgeDeps
   std::shared_ptr<CallbackIsolatedAgnocastExecutor> executor;
   rclcpp::Logger logger;
   std::shared_ptr<BridgeLoader> bridge_loader;
+#if RCLCPP_VERSION_MAJOR < 28
+  // What ros2_client_exists() reads, filled once per maintenance tick because the pre-Jazzy query
+  // behind it walks the whole graph. Demand appearing mid-tick is therefore seen on the next one.
+  std::set<std::string> ros2_client_service_names{};
+#endif
 };
 
 // Lifecycle of one service's bridge. NONE is not a stored state: the manager destroys the item as
