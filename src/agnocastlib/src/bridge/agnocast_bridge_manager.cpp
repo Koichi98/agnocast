@@ -6,6 +6,7 @@
 #include "agnocast/agnocast_utils.hpp"
 #include "agnocast/bridge/agnocast_bridge_msg.hpp"
 #include "agnocast/bridge/agnocast_bridge_utils.hpp"
+#include "rclcpp/version.h"
 
 #include <sys/prctl.h>
 #include <unistd.h>
@@ -524,6 +525,10 @@ void BridgeManager::check_and_remove_pubsub_bridges()
 void BridgeManager::check_and_update_service_bridges()
 {
   ServiceBridgeDeps deps{container_node_, executor_, logger_, loader_};
+#if RCLCPP_VERSION_MAJOR < 28
+  deps.ros2_client_service_names =
+    collect_external_ros2_client_service_names(container_node_.get());
+#endif
 
   auto it = active_service_bridges_.begin();
   while (it != active_service_bridges_.end()) {

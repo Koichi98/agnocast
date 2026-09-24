@@ -4,10 +4,6 @@
 # the service and an A2R bridge beside the client -- and neither manager can observe the pairing
 # that makes its own half necessary. Bringing both up is the discovery agent's job.
 #
-# Only discriminating on Jazzy and newer. Pre-Jazzy rclcpp has no service-client count, so R2A is
-# ungated and its ROS 2 service alone satisfies the client side, without the agent ever being
-# involved. The test still passes there, it just proves less.
-#
 # No sudo: `unshare --user` supplies the capability `--ipc` wants. /dev/shm and the network stack
 # stay shared, since that is the DDS path the bridges are supposed to use.
 #

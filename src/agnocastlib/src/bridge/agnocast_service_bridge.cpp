@@ -210,17 +210,14 @@ bool ServiceBridgeItem::ros2_client_exists(const ServiceBridgeDeps & deps)
   try {
 #if RCLCPP_VERSION_MAJOR >= 28
     const bool exists = deps.container_node->count_clients(this->service_name_) > 0;
+#else
+    const bool exists = deps.ros2_client_service_names.count(this->service_name_) > 0;
+#endif
+
     if (!exists) {
       set_error_string("No external ROS 2 client found");
     }
     return exists;
-#else
-    // Pre-Jazzy rclcpp has no service-client count in the graph API, so demand cannot be observed.
-    // Claiming a client unconditionally leaves R2A bridges ungated on those distros -- each still
-    // costs a thread and an epoll -- but returning false would keep them from ever being built.
-    (void)deps;
-    return true;
-#endif
   } catch (const std::exception & e) {
     set_error_string(e.what());
     return false;

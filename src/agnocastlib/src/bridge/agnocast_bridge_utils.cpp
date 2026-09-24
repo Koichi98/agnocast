@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -235,6 +236,41 @@ bool has_external_ros2_subscriber(const rclcpp::Node * node, const std::string &
       return info.node_name() != self_name || info.node_namespace() != self_ns;
     });
 }
+
+#if RCLCPP_VERSION_MAJOR < 28
+std::set<std::string> collect_external_ros2_client_service_names(rclcpp::Node * node)
+{
+  std::set<std::string> service_names;
+  if (node == nullptr) {
+    return service_names;
+  }
+
+  const std::string self_name = node->get_name();
+  const std::string self_ns = node->get_namespace();
+  const auto graph = node->get_node_graph_interface();
+
+  for (const auto & full_name : node->get_node_names()) {
+    const auto [ns, name] = split_full_node_name(full_name);
+
+    // The container node holds the ROS 2 client of every A2R bridge, which is not demand for an
+    // R2A one.
+    if (name == self_name && ns == self_ns) {
+      continue;
+    }
+
+    // The node may have left the graph since get_node_names().
+    try {
+      for (const auto & entry : graph->get_client_names_and_types_by_node(name, ns)) {
+        service_names.insert(entry.first);
+      }
+    } catch (const std::exception &) {
+      continue;
+    }
+  }
+
+  return service_names;
+}
+#endif
 
 rclcpp::QoS get_service_qos(const std::string & service_name)
 {
